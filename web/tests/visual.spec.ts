@@ -178,13 +178,13 @@ test('desktop overview renders API data in dark mode', async ({ page }) => {
   await page.screenshot({ path: '../docs/assets/dashboard-en.png', fullPage: true })
 })
 
-test('mobile overview renders API data in light mode', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 })
-  await mockController(page, { theme: 'light', locale: 'zh-CN' })
+test('Chinese desktop overview uses the same data and dark theme', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await mockController(page, { theme: 'dark', locale: 'zh-CN' })
   await page.goto('/overview')
   await expect(page.getByText('允许受控生产规划')).toBeVisible()
   await expect(page.locator('.ops-host-name strong').filter({ hasText: 'staging-controller' })).toBeVisible()
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   await expectNoHorizontalOverflow(page)
   await page.screenshot({ path: '../docs/assets/dashboard-zh-CN.png', fullPage: true })
 })
