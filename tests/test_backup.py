@@ -342,6 +342,7 @@ def test_controlled_secret_file_rejects_non_printing_control_characters(
 ) -> None:
     secret_file = tmp_path / "aws-access-key-id"
     secret_file.write_bytes(b"access-key\x7fvalue\n")
+    secret_file.chmod(0o600)
 
     with pytest.raises(BackupError, match="invalid value"):
         read_controlled_secret_file(secret_file, label="AWS_ACCESS_KEY_ID")

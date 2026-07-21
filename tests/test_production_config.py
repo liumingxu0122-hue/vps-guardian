@@ -24,10 +24,12 @@ def production_values(tmp_path: Path) -> dict[str, object]:
             encryption_algorithm=serialization.NoEncryption(),
         )
     )
+    key_file.chmod(0o600)
     database_url_file = tmp_path / "database-url"
     database_url_file.write_text(
         "postgresql+psycopg://guardian@example/guardian\n", encoding="utf-8"
     )
+    database_url_file.chmod(0o600)
     return {
         "environment": "production",
         "database_url_file": database_url_file,
