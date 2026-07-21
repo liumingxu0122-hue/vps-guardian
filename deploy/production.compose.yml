@@ -1,0 +1,16 @@
+services:
+  recovery-volume-init:
+    image: ${VPS_GUARDIAN_CONTROLLER_IMAGE:?VPS_GUARDIAN_CONTROLLER_IMAGE must be an approved immutable reference}
+    build: !reset null
+
+  controller:
+    image: ${VPS_GUARDIAN_CONTROLLER_IMAGE:?VPS_GUARDIAN_CONTROLLER_IMAGE must be an approved immutable reference}
+    build: !reset null
+
+  backup:
+    image: ${VPS_GUARDIAN_BACKUP_IMAGE:?VPS_GUARDIAN_BACKUP_IMAGE must be an approved immutable reference}
+    build: !reset null
+
+  web:
+    image: ${VPS_GUARDIAN_WEB_IMAGE:?VPS_GUARDIAN_WEB_IMAGE must be an approved immutable reference}
+    build: !reset null

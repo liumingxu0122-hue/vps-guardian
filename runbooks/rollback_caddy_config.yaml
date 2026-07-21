@@ -1,0 +1,25 @@
+name: rollback_caddy_config
+version: 1
+risk_level: 2
+conditions:
+  - type: fault_type
+    value: post_deployment_regression
+  - type: verified_recovery_point
+    value: true
+  - type: changed_within
+    value: 10m
+  - type: service_level2_enabled
+    value: true
+prechecks: []
+actions:
+  - type: rollback_caddy_config
+    parameters:
+      target: "${config_path}"
+      snapshot: "${recovery_point}"
+postchecks:
+  - type: local_health_check
+    parameters:
+      target: "${health_url}"
+rollback_on_failure: true
+cooldown: 30m
+max_attempts: 1

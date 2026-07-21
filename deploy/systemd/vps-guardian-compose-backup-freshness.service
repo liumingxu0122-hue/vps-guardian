@@ -1,0 +1,7 @@
+[Unit]
+Description=Fail when the latest verified VPS Guardian Compose recovery point is stale
+After=vps-guardian-compose-backup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/vps-guardian-compose-backup check-freshness

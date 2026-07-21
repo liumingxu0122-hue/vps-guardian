@@ -1,0 +1,23 @@
+[Unit]
+Description=Fail when the latest verified VPS Guardian systemd recovery point is stale
+After=vps-guardian-backup.service
+
+[Service]
+Type=oneshot
+User=guardian-backup
+Group=guardian-backup
+WorkingDirectory=/opt/vps-guardian/current
+Environment=GUARDIAN_BACKUP_MAX_AGE_SECONDS=28800
+ExecStart=/bin/sh /opt/vps-guardian/current/scripts/run-systemd-backup.sh check-freshness
+UMask=0077
+StateDirectory=vps-guardian-backup
+StateDirectoryMode=0750
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+InaccessiblePaths=/etc/vps-guardian /etc/vps-guardian-backup-secrets
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=

@@ -1,0 +1,38 @@
+title = "VPS Guardian secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Local dependency, cache, and downloaded tool trees are not repository source"
+paths = [
+  '''(^|[\\/])\.venv([\\/]|$)''',
+  '''(^|[\\/])(?:\.mypy_cache|\.pytest_cache|\.ruff_cache|__pycache__)([\\/]|$)''',
+  '''(^|[\\/])build([\\/]|$)''',
+  '''(^|[\\/])tools([\\/]|$)''',
+  '''(^|[\\/])web[\\/](?:node_modules|dist|test-results|playwright-report)([\\/]|$)''',
+]
+
+[[allowlists]]
+description = "This scanner configuration contains exact synthetic-fixture patterns"
+paths = ['''(^|[\\/])\.gitleaks\.toml$''']
+
+[[rules]]
+id = "generic-api-key"
+
+  [[rules.allowlists]]
+  description = "Ed25519PrivateKey type annotations are not embedded key material"
+  condition = "AND"
+  regexTarget = "match"
+  paths = ['''^tests/test_trust_material\.py$''']
+  regexes = ['''(?:agent_ca_key|gateway_ca_key|signing_key): Ed25519PrivateKey''']
+
+[[rules]]
+id = "jwt"
+
+  [[rules.allowlists]]
+  description = "JWT-shaped redaction input is an exact synthetic fixture"
+  condition = "AND"
+  regexTarget = "line"
+  paths = ['''^tests/test_redaction\.py$''']
+  regexes = ['''\("eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.signature123", "eyJhbGci"\)''']

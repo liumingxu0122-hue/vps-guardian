@@ -1,0 +1,33 @@
+[Unit]
+Description=VPS Guardian outbound monitoring agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vps-guardian-agent
+Group=vps-guardian-agent
+SupplementaryGroups=docker systemd-journal
+ExecStart=/usr/local/sbin/vps-guardian-agent --config /etc/vps-guardian-agent/config.json
+Restart=always
+RestartSec=10s
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=no
+ProtectControlGroups=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/vps-guardian-agent
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

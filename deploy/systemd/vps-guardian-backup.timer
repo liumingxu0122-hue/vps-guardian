@@ -1,0 +1,11 @@
+[Unit]
+Description=Run VPS Guardian controller backup every six hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:17:00
+RandomizedDelaySec=20m
+Persistent=true
+Unit=vps-guardian-backup.service
+
+[Install]
+WantedBy=timers.target

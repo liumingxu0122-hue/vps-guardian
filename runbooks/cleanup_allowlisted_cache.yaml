@@ -1,0 +1,18 @@
+name: cleanup_allowlisted_cache
+version: 1
+risk_level: 1
+conditions:
+  - type: fault_type
+    value: storage_pressure
+prechecks: []
+actions:
+  - type: cleanup_cache
+    parameters:
+      target: "${cache_path}"
+postchecks:
+  - type: local_health_check
+    parameters:
+      target: "${health_url}"
+rollback_on_failure: false
+cooldown: 10m
+max_attempts: 1

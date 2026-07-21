@@ -1,0 +1,345 @@
+name: vps-guardian
+
+services:
+  database-volume-init:
+    image: ${VPS_GUARDIAN_DATABASE_IMAGE:-vps-guardian-postgres:0.1.0-alpha.1}
+    pull_policy: never
+    restart: "no"
+    user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -eu
+      - -c
+    command:
+      - |
+        postgres_uid="$$(id -u postgres)"
+        postgres_gid="$$(id -g postgres)"
+        current="$$(stat -c '%u:%g:%a' /var/lib/postgresql/data)"
+        case "$$current" in
+          "$$postgres_uid:$$postgres_gid:700") ;;
+          0:0:755|"$$postgres_uid:$$postgres_gid:1777")
+            if find /var/lib/postgresql/data -mindepth 1 -maxdepth 1 \
+                -print -quit | grep -q .; then
+              echo "unsafe non-empty PostgreSQL initialization volume: $$current" >&2
+              exit 77
+            fi
+            ;;
+          *) echo "unsafe PostgreSQL volume metadata: $$current" >&2; exit 77 ;;
+        esac
+        chown "$$postgres_uid:$$postgres_gid" /var/lib/postgresql/data
+        chmod 0700 /var/lib/postgresql/data
+        test "$$(stat -c '%u:%g:%a' /var/lib/postgresql/data)" = \
+          "$$postgres_uid:$$postgres_gid:700"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+
+  database:
+    image: ${VPS_GUARDIAN_DATABASE_IMAGE:-vps-guardian-postgres:0.1.0-alpha.1}
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: deploy/postgres.Dockerfile
+      args:
+        GUARDIAN_SOURCE_COMMIT: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+      labels:
+        org.vps-guardian.source-commit: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+    restart: unless-stopped
+    depends_on:
+      database-volume-init:
+        condition: service_completed_successfully
+    user: postgres:postgres
+    environment:
+      POSTGRES_DB: guardian
+      POSTGRES_USER: guardian
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/run/postgresql:size=16m,uid=70,gid=70,mode=3775
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U guardian -d guardian"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  recovery-volume-init:
+    image: ${VPS_GUARDIAN_CONTROLLER_IMAGE:-vps-guardian-controller:local}
+    pull_policy: never
+    restart: "no"
+    user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -eu
+      - -c
+    command:
+      - |
+        current="$$(stat -c '%u:%g:%a' /exchange)"
+        case "$$current" in
+          0:0:755|10002:10001:750) ;;
+          *) echo "unsafe recovery exchange metadata: $$current" >&2; exit 77 ;;
+        esac
+        chown 10002:10001 /exchange
+        chmod 0750 /exchange
+        test "$$(stat -c '%u:%g:%a' /exchange)" = '10002:10001:750'
+    volumes:
+      - recovery_exchange:/exchange
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+
+  controller:
+    image: ${VPS_GUARDIAN_CONTROLLER_IMAGE:-vps-guardian-controller:local}
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: deploy/controller.Dockerfile
+      args:
+        GUARDIAN_SOURCE_COMMIT: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+      labels:
+        org.vps-guardian.source-commit: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+      recovery-volume-init:
+        condition: service_completed_successfully
+    environment:
+      GUARDIAN_ENVIRONMENT: production
+      GUARDIAN_AUTO_CREATE_SCHEMA: "false"
+      GUARDIAN_SECURE_COOKIES: "true"
+      GUARDIAN_ALLOWED_ORIGINS: '["${GUARDIAN_BROWSER_ORIGIN:-https://${GUARDIAN_DOMAIN}}"]'
+      GUARDIAN_TRUSTED_HOSTS: '["${GUARDIAN_DOMAIN}","${GUARDIAN_AGENT_DOMAIN}","controller"]'
+      GUARDIAN_CONTROLLER_SIGNING_KEY_FILE: /run/secrets/controller_signing_key
+    secrets:
+      - database_url
+      - jwt_secret
+      - field_encryption_key
+      - enrollment_token
+      - proxy_auth
+      - controller_signing_key
+    volumes:
+      - controller_data:/var/lib/vps-guardian
+      - recovery_exchange:/var/lib/vps-guardian-recovery:ro
+    expose:
+      - "8090"
+    networks:
+      - backend
+      - agent_ingress
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; r=urllib.request.Request('http://127.0.0.1:8090/health', headers={'Host':'controller'}); urllib.request.urlopen(r, timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+  agent-gateway:
+    image: haproxy:3.4.2-alpine3.24@sha256:0878b11eb64c433be1b0f578a584b8aca12f6caaa64c8f239b8b556c0dd5eeeb
+    restart: unless-stopped
+    depends_on:
+      controller:
+        condition: service_healthy
+    secrets:
+      - proxy_auth
+      - agent_gateway_certificate
+      - agent_gateway_private_key
+    volumes:
+      - ./deploy/agent-gateway-entrypoint.sh:/usr/local/bin/guardian-agent-gateway-entrypoint:ro
+      - ./deploy/agent-gateway.haproxy.cfg:/etc/vps-guardian/agent-gateway.haproxy.cfg:ro
+      - ${GUARDIAN_GATEWAY_PKI_DIR:-./secrets/gateway-pki}:/etc/vps-guardian/gateway-pki:ro
+    entrypoint:
+      - /usr/local/bin/guardian-agent-gateway-entrypoint
+    command:
+      - haproxy
+      - -W
+      - -db
+      - -f
+      - /tmp/guardian-agent-gateway.cfg
+    ports:
+      - "${GUARDIAN_AGENT_BIND_ADDRESS:-0.0.0.0}:${GUARDIAN_AGENT_PORT:-8444}:8444"
+    expose:
+      - "8080"
+    networks:
+      - agent_edge
+      - agent_ingress
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    user: "haproxy:haproxy"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/guardian-agent-gateway-entrypoint", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+  backup:
+    image: ${VPS_GUARDIAN_BACKUP_IMAGE:-vps-guardian-backup:local}
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: deploy/controller.Dockerfile
+      args:
+        GUARDIAN_SOURCE_COMMIT: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+      labels:
+        org.vps-guardian.source-commit: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+    profiles:
+      - backup
+    depends_on:
+      database:
+        condition: service_healthy
+      recovery-volume-init:
+        condition: service_completed_successfully
+    environment:
+      GUARDIAN_DATABASE_URL_FILE: /run/secrets/database_url
+      GUARDIAN_SOURCE_COMMIT_FILE: /opt/guardian/SOURCE_COMMIT
+      GUARDIAN_CONTROLLED_BACKUP_CONFIG: "1"
+      GUARDIAN_BACKUP_MIN_FREE_BYTES: ${VPS_GUARDIAN_BACKUP_MIN_FREE_BYTES:-1073741824}
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY}
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+      RESTIC_LOCAL_REPOSITORY_ROOT: /var/lib/vps-guardian-backup/restic
+      RESTIC_BACKUP_TIMEOUT_SECONDS: ${VPS_GUARDIAN_BACKUP_TIMEOUT_SECONDS:-14400}
+      RESTIC_CACHE_DIR: /var/cache/vps-guardian-backup
+      TMPDIR: /var/lib/vps-guardian-backup/staging
+    secrets:
+      - database_url
+      - restic_password
+    volumes:
+      - backup_state:/var/lib/vps-guardian-backup
+      - backup_cache:/var/cache/vps-guardian-backup
+      - recovery_exchange:/var/lib/vps-guardian-backup/recovery
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    user: "guardian-backup:guardian-backup"
+    entrypoint: []
+    command:
+      - guardian-backup
+      - controller
+      - --host
+      - controller
+      - --service
+      - controller
+      - --source
+      - /opt/guardian/runbooks
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    image: ${VPS_GUARDIAN_WEB_IMAGE:-vps-guardian-web:local}
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: deploy/web.Dockerfile
+      labels:
+        org.vps-guardian.source-commit: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+    restart: unless-stopped
+    depends_on:
+      controller:
+        condition: service_healthy
+    environment:
+      GUARDIAN_DOMAIN: ${GUARDIAN_DOMAIN}
+      GUARDIAN_AGENT_DOMAIN: ${GUARDIAN_AGENT_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    user: "1000:1000"
+    cap_add:
+      - NET_BIND_SERVICE
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+networks:
+  backend:
+    internal: false
+  agent_edge:
+    internal: false
+  agent_ingress:
+    internal: true
+
+volumes:
+  postgres_data:
+  controller_data:
+  backup_state:
+  backup_cache:
+  recovery_exchange:
+  caddy_data:
+  caddy_config:
+
+secrets:
+  postgres_password:
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/postgres-password
+  database_url:
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/database-url
+  jwt_secret:
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/jwt-secret
+  field_encryption_key:
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/field-encryption-key
+  enrollment_token:
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/enrollment-token
+  proxy_auth:
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/proxy-auth
+  controller_signing_key:
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/controller-ed25519.pem
+  restic_password:
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/restic-password
+  agent_gateway_certificate:
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/server.crt
+  agent_gateway_private_key:
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/server.key

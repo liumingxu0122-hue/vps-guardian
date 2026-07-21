@@ -1,0 +1,11 @@
+[Unit]
+Description=Monitor VPS Guardian systemd backup freshness
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=vps-guardian-backup-freshness.service
+
+[Install]
+WantedBy=timers.target

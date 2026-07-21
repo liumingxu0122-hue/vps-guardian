@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the isolated VPS Guardian Compose backup
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/vps-guardian-compose-backup backup
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

@@ -1,0 +1,12 @@
+[Unit]
+Description=Schedule isolated VPS Guardian Compose backups
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=6h
+RandomizedDelaySec=10min
+Persistent=true
+Unit=vps-guardian-compose-backup.service
+
+[Install]
+WantedBy=timers.target

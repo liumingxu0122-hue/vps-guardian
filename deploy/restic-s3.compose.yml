@@ -1,0 +1,18 @@
+services:
+  backup:
+    environment:
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/aws_access_key_id
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/aws_secret_access_key
+      AWS_DEFAULT_REGION_FILE: /run/secrets/aws_default_region
+    secrets:
+      - aws_access_key_id
+      - aws_secret_access_key
+      - aws_default_region
+
+secrets:
+  aws_access_key_id:
+    file: ${GUARDIAN_S3_ACCESS_KEY_ID_FILE:?GUARDIAN_S3_ACCESS_KEY_ID_FILE is required}
+  aws_secret_access_key:
+    file: ${GUARDIAN_S3_SECRET_ACCESS_KEY_FILE:?GUARDIAN_S3_SECRET_ACCESS_KEY_FILE is required}
+  aws_default_region:
+    file: ${GUARDIAN_S3_REGION_FILE:?GUARDIAN_S3_REGION_FILE is required}

@@ -1,0 +1,40 @@
+[Unit]
+Description=VPS Guardian controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=guardian
+Group=guardian
+SupplementaryGroups=guardian-release guardian-database
+WorkingDirectory=/opt/vps-guardian/current
+EnvironmentFile=/etc/vps-guardian/controller.env
+Environment=GUARDIAN_DATABASE_URL_FILE=/etc/vps-guardian/database-url
+Environment=GUARDIAN_CONTROLLER_SIGNING_KEY_FILE=/etc/vps-guardian/controller-ed25519.pem
+UnsetEnvironment=GUARDIAN_DATABASE_URL
+ExecStart=/opt/vps-guardian/current/.venv/bin/uvicorn guardian.main:app --host 127.0.0.1 --port 8090 --no-server-header
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/vps-guardian /var/log/vps-guardian
+ReadOnlyPaths=/etc/vps-guardian/database-url /etc/vps-guardian/controller-ed25519.pem
+InaccessiblePaths=/etc/vps-guardian-backup-secrets /var/lib/vps-guardian-backup /var/cache/vps-guardian-backup
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

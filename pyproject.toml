@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vps-guardian"
+version = "0.1.0a1"
+description = "Security-first multi-VPS monitoring, diagnosis, repair and recovery controller"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.14,<2",
+  "argon2-cffi>=23.1,<26",
+  "cryptography>=48.0.1,<49",
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "jsonschema>=4.23,<5",
+  "pyjwt>=2.10,<3",
+  "pydantic-settings>=2.7,<3",
+  "pyotp>=2.9,<3",
+  "psycopg[binary]>=3.2,<4",
+  "pyyaml>=6.0,<7",
+  "sqlalchemy>=2.0,<3",
+  "starlette>=1.3.1,<2",
+  "typer>=0.15,<1",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx2>=2.5,<3",
+  "mypy>=1.14,<2",
+  "pip-audit>=2.8,<3",
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1.3,<2",
+  "pytest-cov>=6,<7",
+  "ruff>=0.9,<1",
+  "types-jsonschema>=4.26,<5",
+  "types-PyYAML>=6.0,<7",
+]
+
+[project.scripts]
+guardian-api = "guardian.main:run"
+guardian-admin = "guardian.bootstrap:app"
+guardian-backup = "guardian.backup_cli:app"
+guardian-recovery = "guardian.recovery_cli:app"
+guardian-trust-material = "guardian.trust_material_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "controller"}
+
+[tool.setuptools.packages.find]
+where = ["controller"]
+include = ["guardian*"]
+
+[tool.setuptools.package-data]
+guardian = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --disable-warnings"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.report]
+precision = 2
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = ["controller/migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "ASYNC"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["guardian"]
+exclude = ["controller/migrations"]
+plugins = ["pydantic.mypy"]

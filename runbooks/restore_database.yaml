@@ -1,0 +1,16 @@
+name: restore_database
+version: 1
+risk_level: 3
+conditions:
+  - type: verified_recovery_point
+    value: true
+prechecks: []
+actions:
+  - type: restore_database
+    parameters:
+      recovery_point: "${recovery_point}"
+      target: "${restore_target}"
+postchecks: []
+rollback_on_failure: false
+cooldown: 1h
+max_attempts: 1

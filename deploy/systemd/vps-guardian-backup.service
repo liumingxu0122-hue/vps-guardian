@@ -1,0 +1,38 @@
+[Unit]
+Description=Encrypted VPS Guardian controller backup
+After=vps-guardian-controller.service network-online.target
+
+[Service]
+Type=oneshot
+User=guardian-backup
+Group=guardian-backup
+SupplementaryGroups=guardian-release guardian-database
+WorkingDirectory=/opt/vps-guardian/current
+Environment=GUARDIAN_DATABASE_URL_FILE=/etc/vps-guardian/database-url
+Environment=GUARDIAN_SOURCE_COMMIT_FILE=/opt/vps-guardian/current/SOURCE_COMMIT
+Environment=RESTIC_REPOSITORY_FILE=/etc/vps-guardian-backup-secrets/restic-repository
+Environment=RESTIC_PASSWORD_FILE=/etc/vps-guardian-backup-secrets/restic-password
+Environment=AWS_ACCESS_KEY_ID_FILE=/etc/vps-guardian-backup-secrets/aws-access-key-id
+Environment=AWS_SECRET_ACCESS_KEY_FILE=/etc/vps-guardian-backup-secrets/aws-secret-access-key
+Environment=AWS_DEFAULT_REGION_FILE=/etc/vps-guardian-backup-secrets/aws-region
+Environment=GUARDIAN_CONTROLLED_BACKUP_CONFIG=1
+Environment=GUARDIAN_BACKUP_MIN_FREE_BYTES=1073741824
+Environment=RESTIC_LOCAL_REPOSITORY_ROOT=/var/lib/vps-guardian-backup/restic
+Environment=RESTIC_BACKUP_TIMEOUT_SECONDS=14400
+Environment=RESTIC_CACHE_DIR=/var/cache/vps-guardian-backup
+ExecStart=/bin/sh /opt/vps-guardian/current/scripts/run-systemd-backup.sh backup
+UMask=0077
+StateDirectory=vps-guardian-backup
+StateDirectoryMode=0750
+CacheDirectory=vps-guardian-backup
+CacheDirectoryMode=0750
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/vps-guardian-backup /var/cache/vps-guardian-backup
+ReadOnlyPaths=/etc/vps-guardian/database-url /etc/vps-guardian-backup-secrets
+InaccessiblePaths=/etc/vps-guardian/controller.env /etc/vps-guardian/controller-ed25519.pem
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=

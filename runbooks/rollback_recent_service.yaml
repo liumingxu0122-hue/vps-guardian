@@ -1,0 +1,27 @@
+name: rollback_recent_service
+version: 1
+risk_level: 2
+conditions:
+  - type: fault_type
+    value: post_deployment_regression
+  - type: verified_recovery_point
+    value: true
+  - type: changed_within
+    value: 10m
+  - type: service_level2_enabled
+    value: true
+prechecks:
+  - type: local_health_check
+    parameters:
+      target: "${health_url}"
+actions:
+  - type: restart_container
+    parameters:
+      target: "${container}"
+postchecks:
+  - type: local_health_check
+    parameters:
+      target: "${health_url}"
+rollback_on_failure: true
+cooldown: 30m
+max_attempts: 1
