@@ -99,6 +99,7 @@ def test_atomic_markers_are_private_and_freshness_reads_the_verified_marker(
     for name in ("last-upload-success.json", "last-verified-recovery.json"):
         marker = state_dir / name
         assert marker.stat().st_mode & 0o777 == 0o400
+        os.utime(marker, (NOW.timestamp(), NOW.timestamp()))
 
     age, snapshot = markers.check_freshness(
         state_dir,
