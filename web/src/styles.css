@@ -2739,3 +2739,31 @@ a:focus-visible {
     background: var(--surface);
   }
 }
+.language-select select {
+  min-height: 36px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 0 32px 0 10px;
+}
+
+.login-language {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 148px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

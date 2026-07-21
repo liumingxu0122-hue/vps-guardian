@@ -108,13 +108,15 @@ interface MockOptions {
   overviewStatus?: number
   delayMs?: number
   theme?: 'light' | 'dark'
+  locale?: 'en-US' | 'zh-CN'
 }
 
 async function mockController(page: Page, options: MockOptions = {}): Promise<void> {
-  await page.addInitScript(({ theme }) => {
+  await page.addInitScript(({ theme, locale }) => {
     sessionStorage.setItem('guardian_token', 'browser-test-session')
     localStorage.setItem('guardian_theme', theme)
-  }, { theme: options.theme ?? 'dark' })
+    if (locale) localStorage.setItem('guardian_locale', locale)
+  }, { theme: options.theme ?? 'dark', locale: options.locale })
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname
     if (path === '/api/v1/auth/me') {
@@ -126,7 +128,7 @@ async function mockController(page: Page, options: MockOptions = {}): Promise<vo
       await route.fulfill({
         status: options.overviewStatus ?? 200,
         contentType: 'application/json',
-        body: JSON.stringify(options.overviewStatus ? { detail: 'Controller 暂时不可用' } : options.payload ?? overview),
+        body: JSON.stringify(options.overviewStatus ? { code: 'controller_unavailable' } : options.payload ?? overview),
       })
       return
     }
@@ -147,30 +149,30 @@ test('desktop overview renders API data in dark mode', async ({ page }) => {
   await mockController(page, { theme: 'dark' })
   await page.goto('/overview')
   await expect(page.getByRole('heading', { name: 'Operations Overview' })).toBeVisible()
-  await expect(page.getByText('Production 未部署', { exact: true })).toBeVisible()
+  await expect(page.getByText('Production · Not deployed', { exact: true })).toBeVisible()
   await expect(page.getByText('a492e73f5698', { exact: true }).first()).toBeVisible()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   await expectNoHorizontalOverflow(page)
-  await page.screenshot({ path: 'test-results/overview-desktop-dark.png', fullPage: true })
+  await page.screenshot({ path: '../docs/assets/dashboard-en.png', fullPage: true })
 })
 
 test('mobile overview renders API data in light mode', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
-  await mockController(page, { theme: 'light' })
+  await mockController(page, { theme: 'light', locale: 'zh-CN' })
   await page.goto('/overview')
   await expect(page.getByText('允许受控生产规划')).toBeVisible()
   await expect(page.locator('.ops-host-name strong').filter({ hasText: 'staging-controller' })).toBeVisible()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
   await expectNoHorizontalOverflow(page)
-  await page.screenshot({ path: 'test-results/overview-mobile-light.png', fullPage: true })
+  await page.screenshot({ path: '../docs/assets/dashboard-zh-CN.png', fullPage: true })
 })
 
 test('theme control switches between light and dark', async ({ page }) => {
   await mockController(page, { theme: 'dark' })
   await page.goto('/overview')
-  await page.getByRole('button', { name: '切换到亮色模式' }).click()
+  await page.getByRole('button', { name: 'Switch to light mode' }).click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
-  await expect(page.getByRole('button', { name: '切换到暗色模式' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Switch to dark mode' })).toBeVisible()
 })
 
 test('loading and API failure states are explicit', async ({ page }) => {
@@ -179,14 +181,14 @@ test('loading and API failure states are explicit', async ({ page }) => {
     new URL(response.url()).pathname === '/api/v1/overview',
   )
   await page.goto('/overview')
-  await expect(page.getByLabel('正在加载运营总览')).toBeVisible()
+  await expect(page.getByLabel('Loading operations overview')).toBeVisible()
   await overviewResponse
   await expect(page.getByRole('heading', { name: 'Operations Overview' })).toBeVisible()
 
   await page.unroute('**/api/v1/**')
   await mockController(page, { overviewStatus: 503 })
   await page.reload()
-  await expect(page.getByRole('alert')).toContainText('Controller API 不可用')
+  await expect(page.getByRole('alert')).toContainText('Controller API is unavailable')
 })
 
 test('empty and restricted states do not expose actions', async ({ page }) => {
@@ -207,9 +209,28 @@ test('empty and restricted states do not expose actions', async ({ page }) => {
   }
   await mockController(page, { payload: restricted })
   await page.goto('/overview')
-  await expect(page.getByText('当前范围没有资源样本')).toBeVisible()
-  await expect(page.getByText('尚未登记 VPS')).toBeVisible()
-  await expect(page.getByText('详细恢复操作需要 Operator 权限')).toBeVisible()
-  await expect(page.getByText('安全详情需要 Admin 权限')).toBeVisible()
+  await expect(page.getByText('No resource samples in this scope')).toBeVisible()
+  await expect(page.getByText('No VPS hosts enrolled')).toBeVisible()
+  await expect(page.getByText('Detailed recovery operations require Operator access.')).toBeVisible()
+  await expect(page.getByText('Security details require Admin access.')).toBeVisible()
   await expect(page.getByRole('button', { name: /删除|forget|prune|恢复|重启|轮换/i })).toHaveCount(0)
+})
+
+test('language selection persists after reload', async ({ page }) => {
+  await mockController(page)
+  await page.goto('/overview')
+  const selector = page.getByRole('combobox', { name: 'Language' })
+  await selector.selectOption('zh-CN')
+  await expect(page.getByRole('heading', { name: '运营总览' })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('combobox', { name: '语言' })).toHaveValue('zh-CN')
+})
+
+test('Chinese browser locale is selected on first visit', async ({ browser }) => {
+  const context = await browser.newContext({ locale: 'zh-CN' })
+  const page = await context.newPage()
+  await mockController(page)
+  await page.goto('/overview')
+  await expect(page.getByRole('heading', { name: '运营总览' })).toBeVisible()
+  await context.close()
 })

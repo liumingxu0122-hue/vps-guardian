@@ -1,7 +1,9 @@
 import { createApp } from 'vue'
 
 import App from './App.vue'
+import { i18n, setLocale } from './i18n'
 import router from './router'
 import './styles.css'
 
-createApp(App).use(router).mount('#app')
+setLocale(i18n.global.locale.value)
+createApp(App).use(i18n).use(router).mount('#app')
