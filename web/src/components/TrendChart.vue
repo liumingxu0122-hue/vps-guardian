@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   label: string
@@ -42,9 +45,9 @@ function compact(value: number): string {
   <figure class="trend-chart" :class="`trend-${tone}`">
     <figcaption>
       <span>{{ label }}</span>
-      <strong>{{ latest === null ? '暂无' : `${compact(latest)}${unit === 'B/s' ? '/s' : ''}` }}</strong>
+      <strong>{{ latest === null ? t('common.none') : `${compact(latest)}${unit === 'B/s' ? '/s' : ''}` }}</strong>
     </figcaption>
-    <svg viewBox="0 0 320 92" role="img" :aria-label="`${label}趋势`">
+    <svg viewBox="0 0 320 92" role="img" :aria-label="t('chart.trend', { label })">
       <g class="trend-grid">
         <line x1="58" y1="12" x2="306" y2="12" />
         <line x1="58" y1="44" x2="306" y2="44" />
@@ -56,7 +59,7 @@ function compact(value: number): string {
         <text x="2" y="80">0</text>
       </g>
       <polyline v-if="present.length" class="trend-line" :points="points" />
-      <text v-else class="trend-empty" x="182" y="49" text-anchor="middle">没有采集数据</text>
+      <text v-else class="trend-empty" x="182" y="49" text-anchor="middle">{{ t('chart.noData') }}</text>
     </svg>
   </figure>
 </template>

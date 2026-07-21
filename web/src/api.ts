@@ -3,9 +3,9 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
-    message: string,
+    public readonly code: string,
   ) {
-    super(message)
+    super(code)
   }
 }
 
@@ -28,14 +28,15 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     credentials: 'include',
   })
   if (!response.ok) {
-    let message = `请求失败 (${response.status})`
+    let code = `http_${response.status}`
     try {
-      const payload = (await response.json()) as { detail?: string }
-      if (payload.detail) message = payload.detail
+      const payload = (await response.json()) as { code?: string; detail?: { code?: string } | string }
+      if (payload.code) code = payload.code
+      else if (typeof payload.detail === 'object' && payload.detail?.code) code = payload.detail.code
     } catch {
       // The status still carries enough information when the body is not JSON.
     }
-    throw new ApiError(response.status, message)
+    throw new ApiError(response.status, code)
   }
   if (response.status === 204) return undefined as T
   return (await response.json()) as T

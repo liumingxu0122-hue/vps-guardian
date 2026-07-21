@@ -35,25 +35,25 @@ onMounted(load)
 </script>
 
 <template>
-  <PageHeader title="备份恢复" description="Restic 快照、完整性校验与试恢复状态">
-    <template #actions><button class="icon-button bordered" type="button" title="刷新" aria-label="刷新恢复点" @click="load"><RefreshCw :size="17" /></button></template>
+  <PageHeader :title="$t('recovery.title')" :description="$t('recovery.description')">
+    <template #actions><button class="icon-button bordered" type="button" :title="$t('common.refresh')" :aria-label="$t('recovery.refresh')" @click="load"><RefreshCw :size="17" /></button></template>
   </PageHeader>
   <div class="recovery-summary">
-    <div><DatabaseBackup :size="19" /><span>恢复点</span><strong>{{ points.length }}</strong></div>
-    <div><CheckCircle2 :size="19" /><span>已验证</span><strong>{{ points.filter((point) => point.verified).length }}</strong></div>
-    <div><ShieldX :size="19" /><span>未验证</span><strong>{{ points.filter((point) => !point.verified).length }}</strong></div>
-    <label class="toggle-control"><input v-model="verifiedOnly" type="checkbox" /><span></span>只看已验证</label>
+    <div><DatabaseBackup :size="19" /><span>{{ $t('recovery.points') }}</span><strong>{{ points.length }}</strong></div>
+    <div><CheckCircle2 :size="19" /><span>{{ $t('recovery.verified') }}</span><strong>{{ points.filter((point) => point.verified).length }}</strong></div>
+    <div><ShieldX :size="19" /><span>{{ $t('recovery.unverified') }}</span><strong>{{ points.filter((point) => !point.verified).length }}</strong></div>
+    <label class="toggle-control"><input v-model="verifiedOnly" type="checkbox" /><span></span>{{ $t('recovery.verifiedOnly') }}</label>
   </div>
   <section v-if="filtered.length" class="recovery-list">
     <article v-for="point in filtered" :key="point.id" class="recovery-item">
       <span class="snapshot-icon"><DatabaseBackup :size="18" /></span>
       <div class="snapshot-main"><strong>{{ point.service_name }}</strong><span>{{ hostName(point.host_id) }}</span></div>
-      <div><small>快照</small><code>{{ point.snapshot_id.slice(0, 12) }}</code></div>
-      <div><small>校验和</small><code>{{ point.checksum.slice(0, 12) }}</code></div>
-      <div><small>创建时间</small><span>{{ formatTime(point.created_at) }}</span></div>
-      <StatusBadge :status="point.verified ? 'verified' : 'unknown'" :label="point.verified ? '已试恢复' : '未验证'" />
-      <button class="icon-button bordered" type="button" :title="copied === point.id ? '已复制' : '复制 Dry-run 命令'" aria-label="复制恢复命令" @click="copyCommand(point)"><CheckCircle2 v-if="copied === point.id" :size="16" /><Clipboard v-else :size="16" /></button>
+      <div><small>{{ $t('recovery.snapshot') }}</small><code>{{ point.snapshot_id.slice(0, 12) }}</code></div>
+      <div><small>{{ $t('recovery.checksum') }}</small><code>{{ point.checksum.slice(0, 12) }}</code></div>
+      <div><small>{{ $t('recovery.created') }}</small><span>{{ formatTime(point.created_at) }}</span></div>
+      <StatusBadge :status="point.verified ? 'verified' : 'unknown'" :label="point.verified ? $t('recovery.testRestored') : $t('recovery.unverified')" />
+      <button class="icon-button bordered" type="button" :title="copied === point.id ? $t('recovery.copied') : $t('recovery.copy')" :aria-label="$t('recovery.copy')" @click="copyCommand(point)"><CheckCircle2 v-if="copied === point.id" :size="16" /><Clipboard v-else :size="16" /></button>
     </article>
   </section>
-  <EmptyState v-else title="没有符合条件的恢复点" />
+  <EmptyState v-else :title="$t('recovery.noItems')" />
 </template>

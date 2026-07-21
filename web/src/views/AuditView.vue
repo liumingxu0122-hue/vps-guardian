@@ -23,23 +23,23 @@ onMounted(load)
 </script>
 
 <template>
-  <PageHeader title="审计日志" description="身份、动作、资源与结果的追加式记录">
-    <template #actions><button class="icon-button bordered" type="button" title="刷新" aria-label="刷新审计" @click="load"><RefreshCw :size="17" /></button></template>
+  <PageHeader :title="$t('audit.title')" :description="$t('audit.description')">
+    <template #actions><button class="icon-button bordered" type="button" :title="$t('common.refresh')" :aria-label="$t('audit.refresh')" @click="load"><RefreshCw :size="17" /></button></template>
   </PageHeader>
   <div class="toolbar-row">
-    <label class="search-field"><Search :size="16" /><input v-model="query" type="search" placeholder="搜索动作、资源或来源地址" /></label>
-    <label class="select-field"><Filter :size="15" /><select v-model="outcome"><option value="all">全部结果</option><option value="success">成功</option><option value="denied">拒绝</option><option value="failed">失败</option></select></label>
+    <label class="search-field"><Search :size="16" /><input v-model="query" type="search" :placeholder="$t('audit.searchPlaceholder')" /></label>
+    <label class="select-field"><Filter :size="15" /><select v-model="outcome"><option value="all">{{ $t('audit.allOutcomes') }}</option><option value="success">{{ $t('status.success') }}</option><option value="denied">{{ $t('status.denied') }}</option><option value="failed">{{ $t('status.failed') }}</option></select></label>
   </div>
   <div v-if="filtered.length" class="data-table audit-table">
-    <div class="table-head"><span>时间</span><span>动作</span><span>资源</span><span>操作者</span><span>来源</span><span>结果</span></div>
+    <div class="table-head"><span>{{ $t('audit.time') }}</span><span>{{ $t('audit.action') }}</span><span>{{ $t('audit.resource') }}</span><span>{{ $t('audit.actor') }}</span><span>{{ $t('audit.source') }}</span><span>{{ $t('audit.outcome') }}</span></div>
     <div v-for="entry in filtered" :key="entry.id" class="table-row">
       <span class="muted">{{ formatTime(entry.created_at) }}</span>
       <strong class="mono">{{ titleize(entry.action) }}</strong>
       <span>{{ entry.resource_type }}<small class="mono">{{ entry.resource_id?.slice(0, 12) || '—' }}</small></span>
-      <span class="mono muted">{{ entry.actor_id?.slice(0, 8) || 'system' }}</span>
-      <span class="mono muted">{{ entry.source_ip || 'internal' }}</span>
+      <span class="mono muted">{{ entry.actor_id?.slice(0, 8) || $t('common.system') }}</span>
+      <span class="mono muted">{{ entry.source_ip || $t('common.internal') }}</span>
       <StatusBadge :status="entry.outcome" />
     </div>
   </div>
-  <EmptyState v-else title="没有匹配的审计记录" />
+  <EmptyState v-else :title="$t('audit.noMatch')" />
 </template>

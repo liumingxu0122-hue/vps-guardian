@@ -32,17 +32,17 @@ onMounted(load)
 </script>
 
 <template>
-  <PageHeader title="服务" description="Agent 最近一次发现的 systemd、Docker、Compose 与监听状态">
-    <template #actions><button class="icon-button bordered" type="button" title="刷新" aria-label="刷新服务" @click="load"><RefreshCw :size="17" /></button></template>
+  <PageHeader :title="$t('services.title')" :description="$t('services.description')">
+    <template #actions><button class="icon-button bordered" type="button" :title="$t('common.refresh')" :aria-label="$t('services.refresh')" @click="load"><RefreshCw :size="17" /></button></template>
   </PageHeader>
-  <div class="toolbar-row"><label class="search-field"><Search :size="16" /><input v-model="query" type="search" placeholder="搜索主机、类型或摘要" /></label><span>{{ filtered.length }} 项观察</span></div>
+  <div class="toolbar-row"><label class="search-field"><Search :size="16" /><input v-model="query" type="search" :placeholder="$t('services.searchPlaceholder')" /></label><span>{{ $t('services.observations', { count: filtered.length }) }}</span></div>
   <section v-if="filtered.length" class="service-grid">
     <article v-for="service in filtered" :key="`${service.host_id}-${service.kind}`" class="service-item">
       <div class="service-heading"><span class="service-icon"><Boxes :size="17" /></span><div><strong>{{ titleize(service.kind) }}</strong><span>{{ service.host_name }}</span></div><StatusBadge :status="service.status" /></div>
       <pre>{{ service.summary }}</pre>
-      <small>采集于 {{ formatTime(service.collected_at) }}</small>
+      <small>{{ $t('services.collectedAt', { time: formatTime(service.collected_at) }) }}</small>
     </article>
   </section>
-  <EmptyState v-else-if="!loading" title="尚未收到服务摘要" />
+  <EmptyState v-else-if="!loading" :title="$t('services.noServices')" />
   <div v-else class="row-skeletons"><span v-for="item in 6" :key="item"></span></div>
 </template>

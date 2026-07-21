@@ -15,17 +15,17 @@ onMounted(async () => { incidents.value = await request<Incident[]>('/api/v1/inc
 </script>
 
 <template>
-  <PageHeader title="修复" description="规则引擎生成的建议、自动化资格与验证门槛" />
+  <PageHeader :title="$t('repairs.title')" :description="$t('repairs.description')" />
   <section v-if="repairable.length" class="repair-list">
     <article v-for="incident in repairable" :key="incident.id" class="repair-item">
       <div class="repair-status" :class="{ allowed: incident.auto_repair_allowed }"><CheckCircle2 v-if="incident.auto_repair_allowed" :size="19" /><ShieldAlert v-else :size="19" /></div>
       <div class="repair-content">
-        <div class="repair-heading"><div><h2>{{ incident.title }}</h2><span>{{ incident.risk }}</span></div><StatusBadge :status="incident.auto_repair_allowed ? 'approved' : 'pending'" :label="incident.auto_repair_allowed ? '可自动修复' : '需要审批'" /></div>
+        <div class="repair-heading"><div><h2>{{ incident.title }}</h2><span>{{ incident.risk }}</span></div><StatusBadge :status="incident.auto_repair_allowed ? 'approved' : 'pending'" :label="incident.auto_repair_allowed ? $t('repairs.automatic') : $t('repairs.approval')" /></div>
         <ul><li v-for="recommendation in incident.recommendations" :key="recommendation"><Wrench :size="15" />{{ recommendation }}</li></ul>
-        <div class="verification-line"><strong>修复后验证</strong><span>{{ incident.verification_plan.join(' · ') || '本机与外部双重健康检查' }}</span></div>
+        <div class="verification-line"><strong>{{ $t('repairs.verification') }}</strong><span>{{ incident.verification_plan.join(' · ') || $t('repairs.defaultVerification') }}</span></div>
       </div>
-      <RouterLink v-if="!incident.auto_repair_allowed" to="/approvals" class="icon-button bordered" title="打开审批" aria-label="打开审批"><ArrowRight :size="17" /></RouterLink>
+      <RouterLink v-if="!incident.auto_repair_allowed" to="/approvals" class="icon-button bordered" :title="$t('repairs.openApproval')" :aria-label="$t('repairs.openApproval')"><ArrowRight :size="17" /></RouterLink>
     </article>
   </section>
-  <EmptyState v-else title="没有待处理的修复建议" />
+  <EmptyState v-else :title="$t('repairs.noItems')" />
 </template>

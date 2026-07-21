@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { translateStatus } from '../i18n'
 
 const props = defineProps<{ status: string; label?: string }>()
 const tone = computed(() => {
@@ -19,6 +20,6 @@ const tone = computed(() => {
 <template>
   <span class="status-badge" :class="`status-${tone}`">
     <span class="status-dot" aria-hidden="true"></span>
-    {{ label ?? status }}
+    {{ label ?? translateStatus(status) }}
   </span>
 </template>

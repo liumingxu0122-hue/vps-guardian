@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
+import { i18n } from './i18n'
+
 import { formatBytes, formatDuration, percentUsed, titleize } from './utils'
 
 describe('operational formatters', () => {
@@ -19,6 +21,9 @@ describe('operational formatters', () => {
   })
 
   it('formats host uptime as a duration', () => {
+    i18n.global.locale.value = 'zh-CN'
     expect(formatDuration(90_000)).toBe('1天 1小时')
+    i18n.global.locale.value = 'en-US'
+    expect(formatDuration(90_000)).toBe('1 day 1 hour')
   })
 })

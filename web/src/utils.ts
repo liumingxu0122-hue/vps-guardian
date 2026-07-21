@@ -1,8 +1,12 @@
+import { i18n } from './i18n'
+
+const locale = (): string => i18n.global.locale.value
+
 export function formatTime(value: string | null | undefined): string {
-  if (!value) return '暂无'
+  if (!value) return i18n.global.t('common.none')
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '未知'
-  return new Intl.DateTimeFormat('zh-CN', {
+  if (Number.isNaN(date.getTime())) return i18n.global.t('common.unknown')
+  return new Intl.DateTimeFormat(locale(), {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -13,9 +17,9 @@ export function formatTime(value: string | null | undefined): string {
 }
 
 export function relativeTime(value: string | null | undefined): string {
-  if (!value) return '从未'
+  if (!value) return i18n.global.t('common.never')
   const seconds = Math.round((new Date(value).getTime() - Date.now()) / 1000)
-  const formatter = new Intl.RelativeTimeFormat('zh-CN', { numeric: 'auto' })
+  const formatter = new Intl.RelativeTimeFormat(locale(), { numeric: 'auto' })
   if (Math.abs(seconds) < 60) return formatter.format(seconds, 'second')
   const minutes = Math.round(seconds / 60)
   if (Math.abs(minutes) < 60) return formatter.format(minutes, 'minute')
@@ -33,7 +37,7 @@ export function formatBytes(value: unknown): string {
     amount /= 1024
     unit += 1
   }
-  return `${amount.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`
+  return `${new Intl.NumberFormat(locale(), { maximumFractionDigits: unit === 0 ? 0 : 1 }).format(amount)} ${units[unit]}`
 }
 
 export function formatDuration(value: unknown): string {
@@ -41,9 +45,11 @@ export function formatDuration(value: unknown): string {
   const days = Math.floor(value / 86_400)
   const hours = Math.floor((value % 86_400) / 3_600)
   const minutes = Math.floor((value % 3_600) / 60)
-  if (days) return `${days}天 ${hours}小时`
-  if (hours) return `${hours}小时 ${minutes}分钟`
-  return `${minutes}分钟`
+  const unit = (amount: number, name: 'day' | 'hour' | 'minute'): string =>
+    new Intl.NumberFormat(locale(), { style: 'unit', unit: name, unitDisplay: 'long' }).format(amount)
+  if (days) return `${unit(days, 'day')} ${unit(hours, 'hour')}`
+  if (hours) return `${unit(hours, 'hour')} ${unit(minutes, 'minute')}`
+  return unit(minutes, 'minute')
 }
 
 export function percentUsed(total: unknown, free: unknown): number | null {
