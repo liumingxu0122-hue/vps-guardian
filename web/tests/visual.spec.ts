@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 
-import type { Overview } from '../src/types'
+import type { Alert, AlertRule, Host, NotificationChannel, Overview, PublicSettings, ServiceCheck } from '../src/types'
 
 const user = { id: 'user-1', email: 'owner@example.test', role: 'owner', totp_enabled: true }
 const points = Array.from({ length: 12 }, (_, index) => ({
@@ -23,6 +23,7 @@ const overview: Overview = {
   global_health: 'degraded',
   hosts: { total: 2, healthy: 1, degraded: 1, offline: 0, unknown: 0 },
   incidents: { open: 2, critical: 1 },
+  alerts: { active: 2, critical: 1, warning: 1 },
   pending_approvals: 1,
   verified_recovery_points: 1,
   recent_incidents: [],
@@ -103,6 +104,13 @@ const overview: Overview = {
   ],
 }
 
+const hosts: Host[] = [{ id: 'host-1', name: 'edge-hk', address: '192.0.2.10', os_name: 'Ubuntu 24.04', location: 'Hong Kong', status: 'healthy', data_state: 'normal', enabled: true, group_name: 'edge', tags: ['linux', 'production'], labels: {}, last_seen_at: '2026-07-21T07:59:45Z', enrolled_at: '2026-07-20T00:00:00Z', disabled_at: null }]
+const checks: ServiceCheck[] = [{ id: 'check-1', name: 'public-api', kind: 'https', enabled: true, host_id: 'host-1', runner_agent_id: null, configuration: { target: 'https://example.test/health' }, group_name: 'api', interval_seconds: 60, timeout_seconds: 5, failure_threshold: 3, recovery_threshold: 2, severity: 'critical', last_checked_at: '2026-07-21T07:59:45Z', created_at: '2026-07-20T00:00:00Z', updated_at: '2026-07-21T07:59:45Z' }]
+const alertRules: AlertRule[] = [{ id: 'rule-1', name: 'service-public-api', enabled: true, source_type: 'service_check', source_id: 'check-1', severity: 'critical', group_key: 'api', failure_threshold: 3, recovery_threshold: 2, repeat_interval_seconds: 3600, escalation_after_seconds: null, recovery_notifications: true, created_at: '2026-07-20T00:00:00Z' }]
+const alerts: Alert[] = [{ id: 'alert-1', rule_id: 'rule-1', fingerprint: 'a'.repeat(64), state: 'firing', consecutive_failures: 3, consecutive_successes: 0, first_observed_at: '2026-07-21T07:55:00Z', last_observed_at: '2026-07-21T07:59:45Z', fired_at: '2026-07-21T07:57:00Z', acknowledged_at: null, acknowledged_by: null, silenced_until: null, resolved_at: null, last_notified_at: '2026-07-21T07:57:00Z', notification_count: 1, summary: 'HTTP status 503', details: {} }]
+const channels: NotificationChannel[] = [{ id: 'channel-1', name: 'local-mock', kind: 'webhook', enabled: true, configuration: { endpoint_env: 'GUARDIAN_TEST_WEBHOOK_URL' }, rate_limit_per_minute: 30, created_at: '2026-07-20T00:00:00Z' }]
+const publicSettings: PublicSettings = { environment: 'staging', secure_cookies: true, auto_create_schema: false, allowed_origins: ['https://guardian.example.test'], max_incident_log_bytes: 2_000_000, login_attempts_per_10m: 5, nonce_ttl_seconds: 300, agent_offline_after_seconds: 90, agent_pending_identity_ttl_minutes: 15, approval_ttl_minutes: 30, metric_retention_days: 7, service_result_retention_days: 30, max_metric_rows_per_host: 10080, max_results_per_check: 43200, external_notifications_enabled: false, features: { mtls: true, persistent_alerts: true } }
+
 interface MockOptions {
   payload?: Overview
   overviewStatus?: number
@@ -130,6 +138,20 @@ async function mockController(page: Page, options: MockOptions = {}): Promise<vo
         contentType: 'application/json',
         body: JSON.stringify(options.overviewStatus ? { code: 'controller_unavailable' } : options.payload ?? overview),
       })
+      return
+    }
+    const payloads: Record<string, unknown> = {
+      '/api/v1/hosts': hosts,
+      '/api/v1/service-checks': checks,
+      '/api/v1/services': [],
+      '/api/v1/alerts': alerts,
+      '/api/v1/alert-rules': alertRules,
+      '/api/v1/agents': [],
+      '/api/v1/notification-channels': channels,
+      '/api/v1/settings/public': publicSettings,
+    }
+    if (path in payloads) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(payloads[path]) })
       return
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
@@ -233,4 +255,37 @@ test('Chinese browser locale is selected on first visit', async ({ browser }) =>
   await page.goto('/overview')
   await expect(page.getByRole('heading', { name: '运营总览' })).toBeVisible()
   await context.close()
+})
+
+test('multi-VPS monitoring pages render persistent API data', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await mockController(page)
+  await page.goto('/hosts')
+  await expect(page.getByRole('heading', { name: 'Hosts' })).toBeVisible()
+  await expect(page.getByText('edge-hk', { exact: true })).toBeVisible()
+  await expect(page.getByText('Normal', { exact: true })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+
+  await page.goto('/services')
+  await expect(page.getByRole('heading', { name: 'Services' })).toBeVisible()
+  await expect(page.getByText('public-api', { exact: true })).toBeVisible()
+
+  await page.goto('/alerts')
+  await expect(page.getByRole('heading', { name: 'Alerts' })).toBeVisible()
+  await expect(page.getByText('HTTP status 503')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Acknowledge' })).toBeVisible()
+
+  await page.goto('/settings')
+  await expect(page.getByText('local-mock', { exact: true })).toBeVisible()
+  await expect(page.getByText('7 days / 10080')).toBeVisible()
+})
+
+test('mobile Chinese alerts remain readable without overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mockController(page, { locale: 'zh-CN', theme: 'light' })
+  await page.goto('/alerts')
+  await expect(page.getByRole('heading', { name: '告警' })).toBeVisible()
+  await expect(page.getByText('HTTP status 503')).toBeVisible()
+  await expect(page.getByRole('button', { name: '确认' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
 })
