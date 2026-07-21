@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,7 @@ from guardian.diagnostics import Diagnosis, DiagnosticContext, DiagnosticEngine
 from guardian.models import (
     Agent,
     AgentTask,
+    Approval,
     Incident,
     IncidentStatus,
     RepairAttempt,
@@ -568,6 +569,16 @@ def record_agent_results(db: Session, agent: Agent, events: list[dict[str, Any]]
         task.status = "succeeded" if result.get("success") is True else "failed"
         redacted = redact_structure(result)
         task.result = redacted if isinstance(redacted, dict) else {"result": "invalid"}
+        completed_at = datetime.now(UTC)
+        task.completed_at = completed_at
+        duration_ms = result.get("duration_ms")
+        if isinstance(duration_ms, int | float) and duration_ms >= 0:
+            task.started_at = completed_at - timedelta(milliseconds=float(duration_ms))
+        task.verification_result = {
+            "success": task.status == "succeeded",
+            "after": result.get("after", {}),
+            "exit_code": result.get("exit_code"),
+        }
         changed_task_ids.add(task.id)
         write_audit(
             db,
@@ -599,6 +610,11 @@ def record_agent_results(db: Session, agent: Agent, events: list[dict[str, Any]]
             "task_statuses": {task.id: task.status for task in tasks},
         }
         incident = db.get(Incident, attempt.incident_id)
+        approval_ids = {task.approval_id for task in tasks if task.approval_id}
+        for approval_id in approval_ids:
+            approval = db.get(Approval, approval_id)
+            if approval is not None and approval.status in {"approved", "dry_run_only"}:
+                approval.status = "executed"
         if incident:
             outcome = "passed" if attempt.success else "failed"
             incident.timeline = [

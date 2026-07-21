@@ -21,6 +21,7 @@ const router = createRouter({
         { path: 'hosts', name: 'hosts', component: () => import('./views/HostsView.vue') },
         { path: 'hosts/:hostId', name: 'host-detail', component: () => import('./views/HostsView.vue') },
         { path: 'services', name: 'services', component: () => import('./views/ServicesView.vue') },
+        { path: 'alerts', name: 'alerts', component: () => import('./views/AlertsView.vue') },
         {
           path: 'incidents',
           name: 'incidents',

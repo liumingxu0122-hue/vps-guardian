@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     login_attempts_per_10m: int = Field(default=5, ge=2, le=20)
     nonce_ttl_seconds: int = Field(default=300, ge=30, le=3600)
     agent_offline_after_seconds: int = Field(default=90, ge=60, le=3600)
+    metric_retention_days: int = Field(default=7, ge=1, le=365)
+    service_result_retention_days: int = Field(default=30, ge=1, le=365)
+    max_metric_rows_per_host: int = Field(default=10_080, ge=120, le=1_000_000)
+    max_results_per_check: int = Field(default=43_200, ge=120, le=1_000_000)
+    external_notifications_enabled: bool = False
     agent_pending_identity_ttl_minutes: int = Field(default=15, ge=5, le=60)
     approval_ttl_minutes: int = Field(default=30, ge=5, le=1440)
     deployment_stage: Literal["development", "test", "staging", "production"] = "development"

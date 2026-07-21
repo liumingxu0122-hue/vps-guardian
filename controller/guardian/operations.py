@@ -15,6 +15,8 @@ from guardian.models import (
     AgentIdentity,
     AgentIdentityState,
     AgentTask,
+    AlertInstance,
+    AlertRule,
     Approval,
     AuditLog,
     Host,
@@ -270,6 +272,17 @@ def build_operations_overview(
     incidents = list(
         database.scalars(select(Incident).order_by(desc(Incident.first_seen_at)).limit(100)).all()
     )
+    alerts = list(
+        database.scalars(
+            select(AlertInstance).order_by(desc(AlertInstance.last_observed_at)).limit(1000)
+        ).all()
+    )
+    alert_rules = {
+        rule.id: rule
+        for rule in database.scalars(
+            select(AlertRule).where(AlertRule.id.in_({alert.rule_id for alert in alerts}))
+        ).all()
+    }
     approvals = list(
         database.scalars(select(Approval).order_by(desc(Approval.requested_at)).limit(100)).all()
     )
@@ -298,10 +311,30 @@ def build_operations_overview(
         host_statuses[host.status if host.status in host_statuses else "unknown"] += 1
     active_incidents = [incident for incident in incidents if incident.status != "resolved"]
     critical_incidents = [incident for incident in active_incidents if incident.severity >= 4]
+    active_alerts = [
+        alert for alert in alerts if alert.state not in {"ok", "resolved"}
+    ]
+    critical_alerts = [
+        alert
+        for alert in active_alerts
+        if alert_rules.get(alert.rule_id) is not None
+        and alert_rules[alert.rule_id].severity == "critical"
+    ]
+    warning_alerts = [
+        alert
+        for alert in active_alerts
+        if alert_rules.get(alert.rule_id) is not None
+        and alert_rules[alert.rule_id].severity == "warning"
+    ]
     global_health = "healthy"
-    if critical_incidents or host_statuses["offline"]:
+    if critical_incidents or critical_alerts or host_statuses["offline"]:
         global_health = "critical"
-    elif active_incidents or host_statuses["degraded"] or host_statuses["unknown"]:
+    elif (
+        active_incidents
+        or warning_alerts
+        or host_statuses["degraded"]
+        or host_statuses["unknown"]
+    ):
         global_health = "degraded"
 
     role = ROLE_ORDER.get(user.role, 0)
@@ -398,6 +431,11 @@ def build_operations_overview(
         "global_health": global_health,
         "hosts": {"total": len(hosts), **host_statuses},
         "incidents": {"open": len(active_incidents), "critical": len(critical_incidents)},
+        "alerts": {
+            "active": len(active_alerts),
+            "critical": len(critical_alerts),
+            "warning": len(warning_alerts),
+        },
         "pending_approvals": sum(approval.status == "pending" for approval in approvals),
         "verified_recovery_points": len(verified_points),
         "recent_incidents": [

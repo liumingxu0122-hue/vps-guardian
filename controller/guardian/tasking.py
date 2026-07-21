@@ -23,6 +23,11 @@ REGISTERED_ACTIONS = {
     "local_health_check",
     "cleanup_cache",
     "rollback_caddy_config",
+    "collect_diagnostics",
+    "disk_cleanup_preview",
+    "restricted_cleanup",
+    "restic_backup",
+    "restic_check",
 }
 
 
@@ -71,6 +76,10 @@ def task_signing_payload(
     parameters: dict[str, str],
     nonce: str,
     expires_at: int,
+    approval_id: str = "",
+    requester_id: str = "",
+    approver_id: str = "",
+    target_host_id: str = "",
 ) -> bytes:
     payload = {
         "id": task_id,
@@ -78,6 +87,10 @@ def task_signing_payload(
         "parameters": dict(sorted(parameters.items())),
         "nonce": nonce,
         "expires_at": expires_at,
+        "approval_id": approval_id,
+        "requester_id": requester_id,
+        "approver_id": approver_id,
+        "target_host_id": target_host_id,
     }
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
 
@@ -90,6 +103,10 @@ def create_agent_task(
     parameters: dict[str, str],
     settings: Settings,
     ttl_seconds: int = 300,
+    approval_id: str | None = None,
+    requester_id: str | None = None,
+    approver_id: str | None = None,
+    target_host_id: str | None = None,
 ) -> AgentTask:
     if action not in REGISTERED_ACTIONS:
         raise ValueError("action is not registered")
@@ -108,6 +125,10 @@ def create_agent_task(
         parameters=parameters,
         nonce=nonce,
         expires_at=int(expires_at.timestamp()),
+        approval_id=approval_id or "",
+        requester_id=requester_id or "",
+        approver_id=approver_id or "",
+        target_host_id=target_host_id or "",
     )
     signature = load_controller_signing_key(settings).sign(payload)
     task = AgentTask(
@@ -118,6 +139,10 @@ def create_agent_task(
         nonce=nonce,
         expires_at=expires_at,
         signature=base64.b64encode(signature).decode(),
+        approval_id=approval_id,
+        requester_id=requester_id,
+        approver_id=approver_id,
+        target_host_id=target_host_id,
     )
     db.add(task)
     db.flush()
@@ -132,4 +157,8 @@ def serialize_agent_task(task: AgentTask) -> dict[str, object]:
         "nonce": task.nonce,
         "expires_at": int(task.expires_at.replace(tzinfo=UTC).timestamp()),
         "signature": task.signature,
+        "approval_id": task.approval_id or "",
+        "requester_id": task.requester_id or "",
+        "approver_id": task.approver_id or "",
+        "target_host_id": task.target_host_id or "",
     }

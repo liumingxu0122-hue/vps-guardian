@@ -4,6 +4,7 @@ import base64
 import binascii
 from datetime import UTC, datetime
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -39,6 +40,9 @@ class HostCreate(BaseModel):
     address: str = Field(min_length=1, max_length=255)
     os_name: str | None = Field(default=None, max_length=120)
     location: str | None = Field(default=None, max_length=120)
+    enabled: bool = True
+    group_name: str | None = Field(default=None, max_length=120)
+    tags: list[str] = Field(default_factory=list, max_length=32)
     labels: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("labels")
@@ -48,6 +52,34 @@ class HostCreate(BaseModel):
             raise ValueError("labels exceed limits")
         return value
 
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, value: list[str]) -> list[str]:
+        normalized = sorted({item.strip() for item in value if item.strip()})
+        if len(normalized) != len(value) or any(len(item) > 64 for item in normalized):
+            raise ValueError("tags must be unique non-empty values of at most 64 characters")
+        return normalized
+
+
+class HostUpdate(BaseModel):
+    name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,119}$")
+    address: str | None = Field(default=None, min_length=1, max_length=255)
+    location: str | None = Field(default=None, max_length=120)
+    enabled: bool | None = None
+    group_name: str | None = Field(default=None, max_length=120)
+    tags: list[str] | None = Field(default=None, max_length=32)
+    labels: dict[str, str] | None = None
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, value: list[str] | None) -> list[str] | None:
+        return HostCreate.validate_tags(value) if value is not None else None
+
+    @field_validator("labels")
+    @classmethod
+    def validate_labels(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        return HostCreate.validate_labels(value) if value is not None else None
+
 
 class HostView(ORMModel):
     id: str
@@ -56,8 +88,166 @@ class HostView(ORMModel):
     os_name: str | None
     location: str | None
     status: str
+    data_state: str
+    enabled: bool
+    group_name: str | None
+    tags: list[str]
     labels: dict[str, str]
     last_seen_at: datetime | None
+    enrolled_at: datetime | None
+    disabled_at: datetime | None
+
+
+class EnrollmentTokenIssue(BaseModel):
+    expires_in_minutes: int = Field(default=15, ge=1, le=1440)
+
+
+class EnrollmentTokenView(BaseModel):
+    token: str
+    expires_at: datetime
+    install_command: str
+
+
+class ServiceCheckCreate(BaseModel):
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,119}$")
+    kind: Literal["http", "https", "tcp", "icmp", "docker", "systemd"]
+    enabled: bool = True
+    host_id: str | None = Field(default=None, max_length=36)
+    runner_agent_id: str | None = Field(default=None, max_length=36)
+    configuration: dict[str, Any]
+    group_name: str | None = Field(default=None, max_length=120)
+    interval_seconds: int = Field(default=60, ge=15, le=86400)
+    timeout_seconds: int = Field(default=5, ge=1, le=30)
+    failure_threshold: int = Field(default=3, ge=1, le=100)
+    recovery_threshold: int = Field(default=2, ge=1, le=100)
+    severity: Literal["info", "warning", "critical"] = "warning"
+
+    @field_validator("configuration")
+    @classmethod
+    def reject_embedded_secrets(cls, value: dict[str, Any]) -> dict[str, Any]:
+        forbidden = ("password", "token", "secret", "authorization", "cookie", "api_key")
+        for key, item in value.items():
+            lowered = key.lower()
+            if any(marker in lowered for marker in forbidden):
+                raise ValueError(
+                    "service check credentials must use a protected external reference"
+                )
+            if isinstance(item, str) and key in {"target", "url"}:
+                parsed = urlsplit(item)
+                if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                    raise ValueError(
+                        "service check URLs cannot contain credentials or query secrets"
+                    )
+        return value
+
+
+class ServiceCheckView(ORMModel):
+    id: str
+    name: str
+    kind: str
+    enabled: bool
+    host_id: str | None
+    runner_agent_id: str | None
+    configuration: dict[str, Any]
+    group_name: str | None
+    interval_seconds: int
+    timeout_seconds: int
+    failure_threshold: int
+    recovery_threshold: int
+    severity: str
+    last_checked_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AlertRuleCreate(BaseModel):
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,119}$")
+    source_type: Literal["service_check", "host_liveness", "agent_error"]
+    source_id: str = Field(min_length=1, max_length=36)
+    severity: Literal["info", "warning", "critical"] = "warning"
+    group_key: str = Field(default="default", min_length=1, max_length=120)
+    failure_threshold: int = Field(default=3, ge=1, le=100)
+    recovery_threshold: int = Field(default=2, ge=1, le=100)
+    repeat_interval_seconds: int = Field(default=3600, ge=60, le=604800)
+    escalation_after_seconds: int | None = Field(default=None, ge=60, le=604800)
+    recovery_notifications: bool = True
+
+
+class AlertRuleView(ORMModel):
+    id: str
+    name: str
+    enabled: bool
+    source_type: str
+    source_id: str
+    severity: str
+    group_key: str
+    failure_threshold: int
+    recovery_threshold: int
+    repeat_interval_seconds: int
+    escalation_after_seconds: int | None
+    recovery_notifications: bool
+    created_at: datetime
+
+
+class AlertView(ORMModel):
+    id: str
+    rule_id: str
+    fingerprint: str
+    state: str
+    consecutive_failures: int
+    consecutive_successes: int
+    first_observed_at: datetime
+    last_observed_at: datetime
+    fired_at: datetime | None
+    acknowledged_at: datetime | None
+    acknowledged_by: str | None
+    silenced_until: datetime | None
+    resolved_at: datetime | None
+    last_notified_at: datetime | None
+    notification_count: int
+    summary: str
+    details: dict[str, Any]
+
+
+class AlertSilenceRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=255)
+    until: datetime
+
+    @field_validator("until")
+    @classmethod
+    def require_aware_until(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("silence expiry must include a UTC offset")
+        return value.astimezone(UTC)
+
+
+class NotificationChannelCreate(BaseModel):
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,119}$")
+    kind: Literal["telegram", "smtp", "webhook"]
+    enabled: bool = True
+    configuration: dict[str, str]
+    rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
+
+    @field_validator("configuration")
+    @classmethod
+    def require_external_secret_references(cls, value: dict[str, str]) -> dict[str, str]:
+        if not value or any(not key.endswith(("_env", "_file")) for key in value):
+            raise ValueError(
+                "notification configuration accepts only environment or file references"
+            )
+        if any(not item or "\x00" in item or len(item) > 255 for item in value.values()):
+            raise ValueError("notification secret reference is invalid")
+        return value
+
+
+class NotificationChannelView(ORMModel):
+    id: str
+    name: str
+    kind: str
+    enabled: bool
+    configuration: dict[str, Any]
+    rate_limit_per_minute: int
+    created_at: datetime
 
 
 class IncidentView(ORMModel):
@@ -94,6 +284,8 @@ class ApprovalView(ORMModel):
     expires_at: datetime
     decided_at: datetime | None
     decided_by: str | None
+    requested_by: str | None
+    target_host_id: str | None
 
 
 class ApprovalDecision(BaseModel):

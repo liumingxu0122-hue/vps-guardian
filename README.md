@@ -16,13 +16,14 @@ VPS Guardian is a security-first control plane for monitoring, diagnosing, and r
 - Agent heartbeat, CPU and network metrics, and a durable offline queue
 - Restic backup and restore with S3-compatible storage, including Cloudflare R2
 - Operations Overview with hosts, topology, disaster recovery, security, alerts, and audit data
+- Phase 4B multi-host inventory, service checks, persistent alert state, notifications, and approval-backed repairs
 - English and Simplified Chinese Dashboard, documentation, dates, numbers, and status messages
 
 ## Current limitations
 
 - No sustained validation across a large multi-VPS fleet
-- No end-to-end Telegram or email alert delivery
-- Incomplete service-level monitoring and automated approval/repair workflows
+- External Telegram, SMTP, and webhook delivery remains opt-in; default tests use local mocks
+- Enrollment still requires a pre-issued mTLS bundle; CSR bootstrap is planned
 - No automatic cross-cloud rebuilding or production-grade public deployment
 - Experimental Windows SSH dashboard launcher
 
@@ -39,7 +40,7 @@ flowchart LR
   B --> R[Restic and S3-compatible storage]
 ```
 
-Read the [architecture guide](docs/en/ARCHITECTURE.md).
+Read the [architecture guide](docs/en/ARCHITECTURE.md) and the [Phase 4B operations guide](docs/en/PHASE4B.md).
 
 ## Quick install
 
@@ -75,7 +76,7 @@ TLS 1.3 mTLS, signed tasks, replay defense, RBAC, TOTP, CSRF protection, rate li
 
 ## Roadmap
 
-The next milestones cover long-running fleet validation, alert delivery, deeper service monitoring, controlled repair automation, cross-cloud recovery, and production deployment guidance. Bilingual support is planned for `v0.1.0-alpha.2` together with Phase 4B work.
+The next milestones cover long-running fleet validation, CSR-based enrollment bootstrap, isolated Nezha runtime benchmarks, cross-cloud recovery, and production deployment guidance. See the [Nezha study](docs/en/comparisons/NEZHA_STUDY.md) and [benchmark plan](docs/en/comparisons/NEZHA_BENCHMARK.md); unmeasured runtime values remain `Pending`.
 
 ## Contributing
 

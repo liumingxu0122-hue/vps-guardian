@@ -36,6 +36,7 @@ const navItems = [
   { to: '/overview', label: 'nav.overview', icon: LayoutDashboard, exact: true },
   { to: '/hosts', label: 'nav.hosts', icon: Server },
   { to: '/services', label: 'nav.services', icon: Boxes },
+  { to: '/alerts', label: 'nav.alerts', icon: BellRing },
   { to: '/incidents', label: 'nav.incidents', icon: BellRing },
   { to: '/repairs', label: 'nav.repairs', icon: Wrench },
   { to: '/recovery', label: 'nav.recovery', icon: ArchiveRestore, minimumRole: 'operator' },

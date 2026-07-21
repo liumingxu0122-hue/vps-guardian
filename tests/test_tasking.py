@@ -37,7 +37,17 @@ def test_task_signature_is_compatible_and_registered(tmp_path) -> None:  # type:
         assert isinstance(key, Ed25519PrivateKey)
         key.public_key().verify(base64.b64decode(task.signature), payload)
         document = json.loads(payload)
-        assert list(document) == ["id", "action", "parameters", "nonce", "expires_at"]
+        assert list(document) == [
+            "id",
+            "action",
+            "parameters",
+            "nonce",
+            "expires_at",
+            "approval_id",
+            "requester_id",
+            "approver_id",
+            "target_host_id",
+        ]
 
 
 def test_unregistered_task_is_rejected(tmp_path) -> None:  # type: ignore[no-untyped-def]

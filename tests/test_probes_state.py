@@ -17,7 +17,13 @@ async def test_tcp_probe_against_local_server() -> None:
     port = server.sockets[0].getsockname()[1]
     try:
         result = await run_probe(
-            ProbeDefinition(id="tcp-local", kind="tcp", target="127.0.0.1", port=port)
+            ProbeDefinition(
+                id="tcp-local",
+                kind="tcp",
+                target="127.0.0.1",
+                port=port,
+                allowed_networks=["127.0.0.1/32"],
+            )
         )
     finally:
         server.close()
@@ -48,6 +54,7 @@ async def test_http_json_probe() -> None:
                 kind="http",
                 target=f"http://127.0.0.1:{port}/health",
                 expected_json={"status": "ok", "nested.ready": True},
+                allowed_networks=["127.0.0.1/32"],
             )
         )
     finally:
@@ -81,3 +88,56 @@ def test_disabled_probe_is_explicit_success() -> None:
     )
     assert result.success is True
     assert result.evidence == {"disabled": True}
+
+
+def test_probe_blocks_private_metadata_and_denylist_targets() -> None:
+    for target in ("127.0.0.1", "169.254.169.254", "10.0.0.8"):
+        result = asyncio.run(
+            run_probe(ProbeDefinition(id="blocked", kind="tcp", target=target, port=80))
+        )
+        assert result.success is False
+        assert result.status == "failed"
+        assert result.error and "network policy" in result.error
+    denied = asyncio.run(
+        run_probe(
+            ProbeDefinition(
+                id="denied",
+                kind="tcp",
+                target="127.0.0.1",
+                port=80,
+                allowed_networks=["127.0.0.0/8"],
+                denied_networks=["127.0.0.1/32"],
+            )
+        )
+    )
+    assert denied.success is False
+    assert denied.error and "network policy" in denied.error
+
+
+async def test_http_probe_enforces_response_size_limit() -> None:
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.read(4096)
+        body = b"x" * 2048
+        writer.write(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2048\r\nConnection: close\r\n\r\n" + body
+        )
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        result = await run_probe(
+            ProbeDefinition(
+                id="bounded-http",
+                kind="http",
+                target=f"http://127.0.0.1:{port}/large",
+                max_response_bytes=1024,
+                allowed_networks=["127.0.0.1/32"],
+            )
+        )
+    finally:
+        server.close()
+        await server.wait_closed()
+    assert result.success is False
+    assert result.error and "size limit" in result.error

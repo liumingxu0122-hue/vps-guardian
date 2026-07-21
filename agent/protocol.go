@@ -18,24 +18,42 @@ import (
 )
 
 type Task struct {
-	ID         string            `json:"id"`
-	Action     string            `json:"action"`
-	Parameters map[string]string `json:"parameters"`
-	Nonce      string            `json:"nonce"`
-	ExpiresAt  int64             `json:"expires_at"`
-	Signature  string            `json:"signature"`
+	ID           string            `json:"id"`
+	Action       string            `json:"action"`
+	Parameters   map[string]string `json:"parameters"`
+	Nonce        string            `json:"nonce"`
+	ExpiresAt    int64             `json:"expires_at"`
+	Signature    string            `json:"signature"`
+	ApprovalID   string            `json:"approval_id"`
+	RequesterID  string            `json:"requester_id"`
+	ApproverID   string            `json:"approver_id"`
+	TargetHostID string            `json:"target_host_id"`
 }
 
 type signedTask struct {
-	ID         string            `json:"id"`
-	Action     string            `json:"action"`
-	Parameters map[string]string `json:"parameters"`
-	Nonce      string            `json:"nonce"`
-	ExpiresAt  int64             `json:"expires_at"`
+	ID           string            `json:"id"`
+	Action       string            `json:"action"`
+	Parameters   map[string]string `json:"parameters"`
+	Nonce        string            `json:"nonce"`
+	ExpiresAt    int64             `json:"expires_at"`
+	ApprovalID   string            `json:"approval_id"`
+	RequesterID  string            `json:"requester_id"`
+	ApproverID   string            `json:"approver_id"`
+	TargetHostID string            `json:"target_host_id"`
 }
 
 func taskPayload(task Task) ([]byte, error) {
-	return json.Marshal(signedTask{task.ID, task.Action, task.Parameters, task.Nonce, task.ExpiresAt})
+	return json.Marshal(signedTask{
+		task.ID,
+		task.Action,
+		task.Parameters,
+		task.Nonce,
+		task.ExpiresAt,
+		task.ApprovalID,
+		task.RequesterID,
+		task.ApproverID,
+		task.TargetHostID,
+	})
 }
 
 func verifyTask(task Task, publicKey ed25519.PublicKey, now time.Time) error {

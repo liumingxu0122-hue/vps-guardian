@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from guardian.config import Settings
-from guardian.models import Agent, Approval, Incident, RepairAttempt
+from guardian.models import Agent, Approval, Incident, RepairAttempt, User
 from guardian.tasking import REGISTERED_ACTIONS, create_agent_task
 
 CONDITION_TYPES = {
@@ -31,6 +31,7 @@ CONTEXT_FIELDS = {
     "recovery_point",
     "restore_target",
     "cache_path",
+    "backup_path",
 }
 CONTEXT_VARIABLE = re.compile(
     r"^\$\{(service|container|systemd_unit|config_path|health_url|recovery_point|restore_target|cache_path)\}$"
@@ -94,7 +95,7 @@ RUNBOOK_SCHEMA: dict[str, Any] = {
                             "type": "string",
                             "pattern": (
                                 r"^(?:[^$]|\$\{(?:service|container|systemd_unit|config_path|health_url|"
-                                r"recovery_point|restore_target|cache_path)\})+$"
+                                r"recovery_point|restore_target|cache_path|backup_path)\})+$"
                             ),
                             "maxLength": 1024,
                         },
@@ -208,6 +209,7 @@ class RepairOrchestrator:
         settings: Settings,
         dry_run: bool = True,
         level2_enabled: bool = False,
+        requester: User | None = None,
     ) -> RepairPlan:
         matched, reason = self.conditions_match(
             runbook,
@@ -275,6 +277,8 @@ class RepairOrchestrator:
                 rollback_plan=["stop remaining actions", "execute runbook rollback metadata"],
                 requested_at=requested_at,
                 expires_at=requested_at + timedelta(minutes=settings.approval_ttl_minutes),
+                requested_by=requester.id if requester else None,
+                target_host_id=agent.host_id,
             )
             db.add(approval)
             db.flush()
@@ -298,6 +302,8 @@ class RepairOrchestrator:
                     action=str(action["type"]),
                     parameters=action["parameters"],  # type: ignore[arg-type]
                     settings=settings,
+                    requester_id=requester.id if requester else None,
+                    target_host_id=agent.host_id,
                 )
                 task_ids.append(task.id)
         db.add(

@@ -16,6 +16,8 @@ type Snapshot struct {
 	Events      []json.RawMessage `json:"events"`
 }
 
+const agentVersion = "0.2.0-dev"
+
 func collectCommand(ctx context.Context, name string, arguments ...string) string {
 	output, err := exec.CommandContext(ctx, name, arguments...).CombinedOutput()
 	if err != nil {
@@ -65,7 +67,7 @@ func collectServices(ctx context.Context, config Config) []map[string]any {
 	return services
 }
 
-func collectSnapshot(config Config, queue *DiskQueue) (Snapshot, error) {
+func collectSnapshot(config Config, queue *DiskQueue, checks []RemoteCheck, restartCount int64) (Snapshot, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.CommandTimeout))
 	defer cancel()
 	metrics, err := collectHostMetrics(config.DiskPath)
@@ -81,6 +83,10 @@ func collectSnapshot(config Config, queue *DiskQueue) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	metrics["offline_queue_depth"] = queueDepth
+	metrics["agent_version"] = agentVersion
+	metrics["agent_restart_count"] = restartCount
 	metrics["probes"] = collectProbes(ctx, config)
-	return Snapshot{time.Now().UTC().Format(time.RFC3339Nano), "0.1.0", metrics, collectServices(ctx, config), events}, nil
+	services := collectServices(ctx, config)
+	services = append(services, runRemoteChecks(ctx, config, checks)...)
+	return Snapshot{time.Now().UTC().Format(time.RFC3339Nano), agentVersion, metrics, services, events}, nil
 }

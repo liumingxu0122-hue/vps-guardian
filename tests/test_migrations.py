@@ -84,6 +84,37 @@ def test_migrations_enforce_audit_append_only(tmp_path: Path) -> None:
     ).fetchone()[0]
     assert "ck_recovery_point_verification_state" in recovery_table_sql
     assert "ck_recovery_point_attestation_digest" in recovery_table_sql
+    host_columns = {row[1] for row in connection.execute("PRAGMA table_info(hosts)")}
+    assert {"data_state", "enabled", "group_name", "tags", "enrolled_at", "disabled_at"} <= (
+        host_columns
+    )
+    phase4b_tables = {
+        "enrollment_tokens",
+        "service_checks",
+        "service_check_results",
+        "alert_rules",
+        "alert_instances",
+        "alert_transitions",
+        "maintenance_windows",
+        "alert_silences",
+        "notification_channels",
+        "notification_deliveries",
+    }
+    actual_tables = {
+        row[0]
+        for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert phase4b_tables <= actual_tables
+    task_columns = {row[1] for row in connection.execute("PRAGMA table_info(agent_tasks)")}
+    assert {
+        "approval_id",
+        "requester_id",
+        "approver_id",
+        "target_host_id",
+        "verification_result",
+        "started_at",
+        "completed_at",
+    } <= task_columns
     connection.execute(
         """
         INSERT INTO audit_logs

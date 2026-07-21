@@ -7,7 +7,6 @@ Wants=network-online.target
 Type=simple
 User=vps-guardian-agent
 Group=vps-guardian-agent
-SupplementaryGroups=docker systemd-journal
 ExecStart=/usr/local/sbin/vps-guardian-agent --config /etc/vps-guardian-agent/config.json
 Restart=always
 RestartSec=10s
