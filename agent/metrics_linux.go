@@ -60,6 +60,99 @@ func readNetworkBytes() (uint64, uint64) {
 	return receive, transmit
 }
 
+func decodeMountPath(value string) string {
+	replacer := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
+	return replacer.Replace(value)
+}
+
+func collectMounts() []map[string]any {
+	file, err := os.Open("/proc/self/mountinfo")
+	if err != nil {
+		return []map[string]any{}
+	}
+	defer file.Close()
+	mounts := []map[string]any{}
+	seen := map[string]bool{}
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() && len(mounts) < 256 {
+		parts := strings.SplitN(scanner.Text(), " - ", 2)
+		fields := strings.Fields(parts[0])
+		if len(parts) != 2 || len(fields) < 6 {
+			continue
+		}
+		mountPath := decodeMountPath(fields[4])
+		if seen[mountPath] {
+			continue
+		}
+		var stats syscall.Statfs_t
+		if err := syscall.Statfs(mountPath, &stats); err != nil {
+			continue
+		}
+		seen[mountPath] = true
+		total := stats.Blocks * uint64(stats.Bsize)
+		free := stats.Bavail * uint64(stats.Bsize)
+		entry := map[string]any{
+			"path":        mountPath,
+			"filesystem":  strings.Fields(parts[1])[0],
+			"total_bytes": total,
+			"free_bytes":  free,
+			"inode_total": stats.Files,
+			"inode_free":  stats.Ffree,
+		}
+		if total > 0 && free <= total {
+			entry["used_percent"] = float64(total-free) * 100 / float64(total)
+		}
+		if stats.Files > 0 && stats.Ffree <= stats.Files {
+			entry["inode_used_percent"] = float64(stats.Files-stats.Ffree) * 100 / float64(stats.Files)
+		}
+		mounts = append(mounts, entry)
+	}
+	return mounts
+}
+
+func readOSRelease() map[string]string {
+	result := map[string]string{}
+	file, err := os.Open("/etc/os-release")
+	if err != nil {
+		return result
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		parts := strings.SplitN(scanner.Text(), "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		value := strings.Trim(parts[1], `"`)
+		switch parts[0] {
+		case "ID", "VERSION_ID", "PRETTY_NAME":
+			result[strings.ToLower(parts[0])] = value
+		}
+	}
+	return result
+}
+
+func readSelfRSS() uint64 {
+	file, err := os.Open("/proc/self/status")
+	if err != nil {
+		return 0
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) >= 2 && fields[0] == "VmRSS:" {
+			value, _ := strconv.ParseUint(fields[1], 10, 64)
+			return value * 1024
+		}
+	}
+	return 0
+}
+
+func timevalSeconds(value syscall.Timeval) float64 {
+	return float64(value.Sec) + float64(value.Usec)/1_000_000
+}
+
 func readFirstLine(path string) string {
 	file, err := os.Open(path)
 	if err != nil {
@@ -76,6 +169,9 @@ func readFirstLine(path string) string {
 func collectHostMetrics(diskPath string) (map[string]any, error) {
 	metrics := map[string]any{}
 	metrics["cpu_count"] = runtime.NumCPU()
+	metrics["architecture"] = runtime.GOARCH
+	metrics["operating_system"] = readOSRelease()
+	metrics["kernel_version"] = readFirstLine("/proc/sys/kernel/osrelease")
 	firstTotal, firstIdle, firstOK := readCPUTimes()
 	if firstOK {
 		time.Sleep(100 * time.Millisecond)
@@ -96,7 +192,19 @@ func collectHostMetrics(diskPath string) (map[string]any, error) {
 	}
 	uptime := strings.Fields(readFirstLine("/proc/uptime"))
 	if len(uptime) > 0 {
-		metrics["uptime_seconds"], _ = strconv.ParseFloat(uptime[0], 64)
+		uptimeSeconds, _ := strconv.ParseFloat(uptime[0], 64)
+		metrics["uptime_seconds"] = uptimeSeconds
+		metrics["boot_time"] = time.Now().Add(-time.Duration(uptimeSeconds * float64(time.Second))).UTC().Format(time.RFC3339)
+	}
+	if total, totalOK := metrics["memory_total_bytes"].(uint64); totalOK && total > 0 {
+		if available, availableOK := metrics["memory_available_bytes"].(uint64); availableOK && available <= total {
+			metrics["memory_percent"] = float64(total-available) * 100 / float64(total)
+		}
+	}
+	if total, totalOK := metrics["swap_total_bytes"].(uint64); totalOK && total > 0 {
+		if free, freeOK := metrics["swap_free_bytes"].(uint64); freeOK && free <= total {
+			metrics["swap_percent"] = float64(total-free) * 100 / float64(total)
+		}
 	}
 	if file, err := os.Open("/proc/meminfo"); err == nil {
 		defer file.Close()
@@ -125,9 +233,20 @@ func collectHostMetrics(diskPath string) (map[string]any, error) {
 		metrics["disk_free_bytes"] = disk.Bavail * uint64(disk.Bsize)
 		metrics["inode_total"] = disk.Files
 		metrics["inode_free"] = disk.Ffree
+		total := disk.Blocks * uint64(disk.Bsize)
+		free := disk.Bavail * uint64(disk.Bsize)
+		if total > 0 && free <= total {
+			metrics["disk_percent"] = float64(total-free) * 100 / float64(total)
+		}
 	}
+	metrics["mounts"] = collectMounts()
 	receive, transmit := readNetworkBytes()
 	metrics["network_rx_bytes"] = receive
 	metrics["network_tx_bytes"] = transmit
+	metrics["agent_rss_bytes"] = readSelfRSS()
+	var usage syscall.Rusage
+	if syscall.Getrusage(syscall.RUSAGE_SELF, &usage) == nil {
+		metrics["agent_cpu_seconds"] = timevalSeconds(usage.Utime) + timevalSeconds(usage.Stime)
+	}
 	return metrics, nil
 }

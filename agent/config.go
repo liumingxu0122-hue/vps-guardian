@@ -49,6 +49,9 @@ type Config struct {
 	ActionBackupDirectory string        `json:"action_backup_directory"`
 	LocalHealthURLs       []string      `json:"local_health_urls"`
 	ProbeTargets          []ProbeTarget `json:"probe_targets"`
+	ResticRepositoryFile  string        `json:"restic_repository_file"`
+	ResticPasswordFile    string        `json:"restic_password_file"`
+	ResticPathsAllowlist  []string      `json:"restic_paths_allowlist"`
 }
 
 type Duration time.Duration
@@ -111,6 +114,19 @@ func loadConfig(path string) (Config, error) {
 	for _, directory := range []string{config.SnapshotDirectory, config.ActionBackupDirectory} {
 		if directory != "" && !filepath.IsAbs(directory) {
 			return Config{}, fmt.Errorf("action directory must be absolute: %s", directory)
+		}
+	}
+	if (config.ResticRepositoryFile == "") != (config.ResticPasswordFile == "") {
+		return Config{}, errors.New("restic repository and password files must be set together")
+	}
+	for _, secretPath := range []string{config.ResticRepositoryFile, config.ResticPasswordFile} {
+		if secretPath != "" && !filepath.IsAbs(secretPath) {
+			return Config{}, errors.New("restic secret file path must be absolute")
+		}
+	}
+	for _, backupPath := range config.ResticPathsAllowlist {
+		if !filepath.IsAbs(backupPath) {
+			return Config{}, errors.New("restic backup path must be absolute")
 		}
 	}
 	if (config.CaddyContainer == "") != (config.CaddyContainerConfig == "") {

@@ -37,7 +37,7 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "Agent installation must run as root" >&2
   exit 77
 fi
-for command in curl jq openssl sha256sum systemctl getent groupadd useradd usermod install; do
+for command in base64 cut curl jq openssl sha256sum systemctl getent groupadd useradd usermod install; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing command: $command" >&2; exit 69; }
 done
 for value in "$binary" "$expected_sha256" "$controller_url" "$agent_name" "$agent_address" \
@@ -58,21 +58,71 @@ openssl x509 -in "$certificate" -noout -checkend 86400 >/dev/null || {
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup_dir="/var/backups/vps-guardian-agent/$timestamp"
+had_binary=false
+had_config=false
 if [ -e /usr/local/sbin/vps-guardian-agent ] || [ -e /etc/vps-guardian-agent/config.json ]; then
   install -d -m 0700 "$backup_dir"
-  [ ! -e /usr/local/sbin/vps-guardian-agent ] || cp -a /usr/local/sbin/vps-guardian-agent "$backup_dir/"
-  [ ! -e /etc/vps-guardian-agent ] || cp -a /etc/vps-guardian-agent "$backup_dir/"
+  if [ -e /usr/local/sbin/vps-guardian-agent ]; then
+    had_binary=true
+    cp -a /usr/local/sbin/vps-guardian-agent "$backup_dir/agent-binary"
+  fi
+  if [ -e /etc/vps-guardian-agent ]; then
+    had_config=true
+    cp -a /etc/vps-guardian-agent "$backup_dir/etc-vps-guardian-agent"
+  fi
   find "$backup_dir" -type f -exec sha256sum {} \; > "$backup_dir/SHA256SUMS"
 fi
+
+rollback_install() {
+  status="$?"
+  [ "$status" -ne 0 ] || return 0
+  rm -f "${header_file:-}"
+  systemctl disable --now vps-guardian-agent.service >/dev/null 2>&1 || true
+  if [ -d "$backup_dir" ]; then
+    if [ "$had_binary" = true ]; then
+      cp -a "$backup_dir/agent-binary" /usr/local/sbin/vps-guardian-agent
+    else
+      rm -f /usr/local/sbin/vps-guardian-agent
+    fi
+    if [ "$had_config" = true ]; then
+      rm -rf /etc/vps-guardian-agent
+      cp -a "$backup_dir/etc-vps-guardian-agent" /etc/vps-guardian-agent
+    else
+      rm -rf /etc/vps-guardian-agent
+    fi
+  else
+    rm -f /usr/local/sbin/vps-guardian-agent
+    rm -rf /etc/vps-guardian-agent
+  fi
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if [ "$had_binary" = true ] && [ "$had_config" = true ]; then
+    systemctl enable --now vps-guardian-agent.service >/dev/null 2>&1 || true
+  fi
+  echo "Agent installation failed; previous installation was restored" >&2
+  exit "$status"
+}
+trap rollback_install EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+printf '%s\n' 'The installer will modify only:' \
+  '  /usr/local/sbin/vps-guardian-agent' \
+  '  /etc/vps-guardian-agent/' \
+  '  /var/lib/vps-guardian-agent/' \
+  '  /etc/systemd/system/vps-guardian-agent.service'
 
 getent group vps-guardian-agent >/dev/null 2>&1 || groupadd --system vps-guardian-agent
 id vps-guardian-agent >/dev/null 2>&1 || \
   useradd --system --gid vps-guardian-agent --home-dir /var/lib/vps-guardian-agent \
     --shell /usr/sbin/nologin vps-guardian-agent
-getent group docker >/dev/null 2>&1 || { echo 'Docker group is required' >&2; exit 69; }
-supplementary='docker'
-if getent group systemd-journal >/dev/null 2>&1; then supplementary="$supplementary,systemd-journal"; fi
-usermod -a -G "$supplementary" vps-guardian-agent
+supplementary=''
+if getent group docker >/dev/null 2>&1; then supplementary='docker'; fi
+if getent group systemd-journal >/dev/null 2>&1; then
+  if [ -n "$supplementary" ]; then supplementary="$supplementary,systemd-journal"
+  else supplementary='systemd-journal'; fi
+fi
+[ -z "$supplementary" ] || usermod -a -G "$supplementary" vps-guardian-agent
 
 install -d -o root -g vps-guardian-agent -m 0750 \
   /etc/vps-guardian-agent /etc/vps-guardian-agent/tls
@@ -99,7 +149,6 @@ payload="$(jq -cn \
   --arg fingerprint "$fingerprint" \
   '{host:{name:$name,address:$address,labels:{}},signing_public_key:$key,certificate_fingerprint:$fingerprint,version:"0.1.0"}')"
 header_file="$(mktemp)"
-trap 'rm -f "$header_file"' EXIT HUP INT TERM
 chmod 0600 "$header_file"
 printf 'X-Enrollment-Token: %s\n' "$enrollment_token" > "$header_file"
 response="$(curl --fail --silent --show-error --cacert "$server_ca" --cert "$certificate" \
@@ -108,7 +157,7 @@ response="$(curl --fail --silent --show-error --cacert "$server_ca" --cert "$cer
   "${controller_url%/}/api/v1/agents/enroll")"
 unset enrollment_token
 rm -f "$header_file"
-trap - EXIT HUP INT TERM
+rm -f "$enrollment_token_file"
 agent_id="$(printf '%s' "$response" | jq -er '.agent_id')"
 
 jq -n \
@@ -124,4 +173,5 @@ install -m 0644 "$script_dir/../deploy/systemd/vps-guardian-agent.service" /etc/
 systemctl daemon-reload
 systemctl enable --now vps-guardian-agent.service
 systemctl --no-pager --full status vps-guardian-agent.service
+trap - EXIT HUP INT TERM
 printf 'Agent enrolled as %s; previous files: %s\n' "$agent_id" "${backup_dir:-none}"

@@ -52,6 +52,51 @@ class HostStatus(StrEnum):
     offline = "offline"
 
 
+class HostDataState(StrEnum):
+    normal = "normal"
+    no_data = "no_data"
+    stale = "stale"
+    offline = "offline"
+    agent_error = "agent_error"
+
+
+class ServiceCheckKind(StrEnum):
+    http = "http"
+    https = "https"
+    tcp = "tcp"
+    icmp = "icmp"
+    docker = "docker"
+    systemd = "systemd"
+
+
+class CheckResultStatus(StrEnum):
+    ok = "ok"
+    failed = "failed"
+    unsupported = "unsupported"
+    error = "error"
+
+
+class AlertState(StrEnum):
+    ok = "ok"
+    pending = "pending"
+    firing = "firing"
+    acknowledged = "acknowledged"
+    silenced = "silenced"
+    resolved = "resolved"
+
+
+class AlertSeverity(StrEnum):
+    info = "info"
+    warning = "warning"
+    critical = "critical"
+
+
+class NotificationKind(StrEnum):
+    telegram = "telegram"
+    smtp = "smtp"
+    webhook = "webhook"
+
+
 class IncidentStatus(StrEnum):
     open = "open"
     investigating = "investigating"
@@ -98,8 +143,16 @@ class Host(Base):
     os_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     location: Mapped[str | None] = mapped_column(String(120), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default=HostStatus.unknown.value)
+    data_state: Mapped[str] = mapped_column(
+        String(32), default=HostDataState.no_data.value, server_default="no_data"
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    group_name: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     labels: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     agent: Mapped[Agent | None] = relationship(back_populates="host", uselist=False)
 
@@ -180,6 +233,199 @@ class MetricSnapshot(Base):
     payload: Mapped[dict[str, object]] = mapped_column(JSON)
 
 
+class EnrollmentToken(Base):
+    __tablename__ = "enrollment_tokens"
+    __table_args__ = (
+        CheckConstraint("length(token_hash) = 64", name="ck_enrollment_token_hash_length"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    host_id: Mapped[str] = mapped_column(ForeignKey("hosts.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ServiceCheck(Base):
+    __tablename__ = "service_checks"
+    __table_args__ = (
+        CheckConstraint("interval_seconds >= 15", name="ck_service_check_interval"),
+        CheckConstraint("timeout_seconds >= 1", name="ck_service_check_timeout"),
+        CheckConstraint("failure_threshold >= 1", name="ck_service_check_failure_threshold"),
+        CheckConstraint("recovery_threshold >= 1", name="ck_service_check_recovery_threshold"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    kind: Mapped[str] = mapped_column(String(24), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    host_id: Mapped[str | None] = mapped_column(
+        ForeignKey("hosts.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    runner_agent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    configuration: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    group_name: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=60)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=5)
+    failure_threshold: Mapped[int] = mapped_column(Integer, default=3)
+    recovery_threshold: Mapped[int] = mapped_column(Integer, default=2)
+    severity: Mapped[str] = mapped_column(String(16), default=AlertSeverity.warning.value)
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ServiceCheckResult(Base):
+    __tablename__ = "service_check_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    check_id: Mapped[str] = mapped_column(
+        ForeignKey("service_checks.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(24), index=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    details: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+
+
+class AlertRule(Base):
+    __tablename__ = "alert_rules"
+    __table_args__ = (
+        CheckConstraint("failure_threshold >= 1", name="ck_alert_rule_failure_threshold"),
+        CheckConstraint("recovery_threshold >= 1", name="ck_alert_rule_recovery_threshold"),
+        CheckConstraint("repeat_interval_seconds >= 60", name="ck_alert_rule_repeat_interval"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    source_type: Mapped[str] = mapped_column(String(32), index=True)
+    source_id: Mapped[str] = mapped_column(String(36), index=True)
+    severity: Mapped[str] = mapped_column(String(16), default=AlertSeverity.warning.value)
+    group_key: Mapped[str] = mapped_column(String(120), default="default")
+    failure_threshold: Mapped[int] = mapped_column(Integer, default=3)
+    recovery_threshold: Mapped[int] = mapped_column(Integer, default=2)
+    repeat_interval_seconds: Mapped[int] = mapped_column(Integer, default=3600)
+    escalation_after_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recovery_notifications: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AlertInstance(Base):
+    __tablename__ = "alert_instances"
+    __table_args__ = (
+        CheckConstraint("consecutive_failures >= 0", name="ck_alert_failures"),
+        CheckConstraint("consecutive_successes >= 0", name="ck_alert_successes"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    rule_id: Mapped[str] = mapped_column(
+        ForeignKey("alert_rules.id", ondelete="CASCADE"), index=True
+    )
+    fingerprint: Mapped[str] = mapped_column(String(64), unique=True)
+    state: Mapped[str] = mapped_column(String(24), default=AlertState.ok.value, index=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    consecutive_successes: Mapped[int] = mapped_column(Integer, default=0)
+    first_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    acknowledged_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    silenced_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notification_count: Mapped[int] = mapped_column(Integer, default=0)
+    summary: Mapped[str] = mapped_column(String(512), default="")
+    details: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+
+
+class AlertTransition(Base):
+    __tablename__ = "alert_transitions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    alert_id: Mapped[str] = mapped_column(
+        ForeignKey("alert_instances.id", ondelete="CASCADE"), index=True
+    )
+    previous_state: Mapped[str] = mapped_column(String(24))
+    current_state: Mapped[str] = mapped_column(String(24), index=True)
+    reason: Mapped[str] = mapped_column(String(255))
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+
+
+class MaintenanceWindow(Base):
+    __tablename__ = "maintenance_windows"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    matchers: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AlertSilence(Base):
+    __tablename__ = "alert_silences"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    alert_id: Mapped[str | None] = mapped_column(
+        ForeignKey("alert_instances.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    matchers: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    reason: Mapped[str] = mapped_column(String(255))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class NotificationChannel(Base):
+    __tablename__ = "notification_channels"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    kind: Mapped[str] = mapped_column(String(24), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    configuration: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    rate_limit_per_minute: Mapped[int] = mapped_column(Integer, default=30)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class NotificationDelivery(Base):
+    __tablename__ = "notification_deliveries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    channel_id: Mapped[str] = mapped_column(
+        ForeignKey("notification_channels.id", ondelete="CASCADE"), index=True
+    )
+    alert_id: Mapped[str] = mapped_column(
+        ForeignKey("alert_instances.id", ondelete="CASCADE"), index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    response_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Incident(Base):
     __tablename__ = "incidents"
 
@@ -222,6 +468,10 @@ class Approval(Base):
     )
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     decided_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    requested_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    target_host_id: Mapped[str | None] = mapped_column(
+        ForeignKey("hosts.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class AuditLog(Base):
@@ -263,6 +513,14 @@ class AgentTask(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    approval_id: Mapped[str | None] = mapped_column(
+        ForeignKey("approvals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    requester_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    approver_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    target_host_id: Mapped[str | None] = mapped_column(
+        ForeignKey("hosts.id", ondelete="SET NULL"), nullable=True
+    )
     action: Mapped[str] = mapped_column(String(120))
     parameters: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
@@ -270,6 +528,9 @@ class AgentTask(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     signature: Mapped[str] = mapped_column(Text)
     result: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    verification_result: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

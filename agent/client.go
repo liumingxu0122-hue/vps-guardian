@@ -17,11 +17,12 @@ import (
 )
 
 type HeartbeatResponse struct {
-	Accepted        bool   `json:"accepted"`
-	ServerTime      string `json:"server_time"`
-	IdentityState   string `json:"identity_state"`
-	IdentityVersion int    `json:"identity_version"`
-	Tasks           []Task `json:"tasks"`
+	Accepted        bool          `json:"accepted"`
+	ServerTime      string        `json:"server_time"`
+	IdentityState   string        `json:"identity_state"`
+	IdentityVersion int           `json:"identity_version"`
+	Tasks           []Task        `json:"tasks"`
+	Checks          []RemoteCheck `json:"checks"`
 }
 type ControllerClient struct {
 	config     Config

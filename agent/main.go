@@ -18,12 +18,13 @@ func run(config Config) error {
 		return err
 	}
 	registry := NewActionRegistry(config)
+	pendingChecks := []RemoteCheck{}
 	ticker := time.NewTicker(time.Duration(config.HeartbeatInterval))
 	defer ticker.Stop()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	for {
-		snapshot, err := collectSnapshot(config, queue)
+		snapshot, err := collectSnapshot(config, queue, pendingChecks, registry.RestartCount())
 		if err != nil {
 			log.Printf("snapshot collection failed: %v", err)
 		} else {
@@ -33,6 +34,7 @@ func run(config Config) error {
 				_ = queue.Enqueue(map[string]any{"type": "heartbeat_failed", "at": time.Now().UTC().Format(time.RFC3339), "summary_sha256": sha256String(encoded)})
 				log.Printf("controller heartbeat unavailable: %v", heartbeatErr)
 			} else if response.Accepted {
+				pendingChecks = response.Checks
 				_ = queue.Ack(len(snapshot.Events))
 				for _, task := range response.Tasks {
 					if err := verifyTask(task, client.serverKey, time.Now()); err != nil {

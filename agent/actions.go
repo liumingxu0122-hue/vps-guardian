@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -29,11 +30,14 @@ type ActionResult struct {
 	After      map[string]string `json:"after"`
 	Message    string            `json:"message"`
 	FinishedAt string            `json:"finished_at"`
+	ExitCode   int               `json:"exit_code"`
+	DurationMS float64           `json:"duration_ms"`
 }
 
 type actionState struct {
-	Completed map[string]int64 `json:"completed"`
-	LastRun   map[string]int64 `json:"last_run"`
+	Completed  map[string]int64 `json:"completed"`
+	LastRun    map[string]int64 `json:"last_run"`
+	StartCount int64            `json:"start_count"`
 }
 type ActionRegistry struct {
 	config Config
@@ -42,11 +46,34 @@ type ActionRegistry struct {
 }
 
 func NewActionRegistry(config Config) *ActionRegistry {
-	r := &ActionRegistry{config: config, state: actionState{map[string]int64{}, map[string]int64{}}}
+	r := &ActionRegistry{
+		config: config,
+		state: actionState{
+			Completed: map[string]int64{},
+			LastRun:   map[string]int64{},
+		},
+	}
 	if data, err := os.ReadFile(config.StateFile); err == nil {
 		_ = json.Unmarshal(data, &r.state)
 	}
+	if r.state.Completed == nil {
+		r.state.Completed = map[string]int64{}
+	}
+	if r.state.LastRun == nil {
+		r.state.LastRun = map[string]int64{}
+	}
+	r.state.StartCount++
+	_ = r.saveState()
 	return r
+}
+
+func (r *ActionRegistry) RestartCount() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state.StartCount <= 1 {
+		return 0
+	}
+	return r.state.StartCount - 1
 }
 
 func (r *ActionRegistry) saveState() error {
@@ -65,6 +92,7 @@ func (r *ActionRegistry) saveState() error {
 }
 
 func (r *ActionRegistry) Execute(ctx context.Context, task Task) ActionResult {
+	started := time.Now()
 	dryRun := task.Parameters["dry_run"] != "false"
 	result := ActionResult{TaskID: task.ID, Action: task.Action, DryRun: dryRun, Before: map[string]string{}, After: map[string]string{}, FinishedAt: time.Now().UTC().Format(time.RFC3339)}
 	r.mu.Lock()
@@ -93,13 +121,29 @@ func (r *ActionRegistry) Execute(ctx context.Context, task Task) ActionResult {
 		err = r.localHealthCheck(ctx, task.Parameters["target"], &result)
 	case "cleanup_cache":
 		err = r.cleanupCache(task.Parameters["target"], dryRun, &result)
+	case "collect_diagnostics":
+		err = r.collectDiagnostics(&result)
+	case "disk_cleanup_preview":
+		err = r.cleanupCache(task.Parameters["target"], true, &result)
+	case "restricted_cleanup":
+		if dryRun || task.Parameters["second_confirmation"] != "confirmed" {
+			err = errors.New("restricted cleanup requires a second confirmation")
+		} else {
+			err = r.cleanupCache(task.Parameters["target"], false, &result)
+		}
+	case "restic_backup":
+		err = r.resticBackup(ctx, task.Parameters["target"], dryRun, &result)
+	case "restic_check":
+		err = r.resticCheck(ctx, dryRun, &result)
 	case "rollback_caddy_config":
 		err = r.rollbackCaddyConfig(ctx, task.Parameters["target"], task.Parameters["snapshot"], dryRun, &result)
 	default:
 		err = errors.New("action is not registered")
 	}
 	result.Success = err == nil
+	result.ExitCode = 0
 	if err != nil {
+		result.ExitCode = 1
 		result.Message = err.Error()
 	} else if result.Message == "" {
 		result.Message = "action completed"
@@ -108,8 +152,105 @@ func (r *ActionRegistry) Execute(ctx context.Context, task Task) ActionResult {
 		r.state.LastRun[key] = time.Now().Unix()
 	}
 	r.state.Completed[task.ID] = time.Now().Unix()
+	result.DurationMS = float64(time.Since(started).Microseconds()) / 1000
 	_ = r.saveState()
 	return result
+}
+
+func (r *ActionRegistry) collectDiagnostics(result *ActionResult) error {
+	result.After["operating_system"] = runtime.GOOS
+	result.After["architecture"] = runtime.GOARCH
+	result.After["registered_systemd_services"] = fmt.Sprintf("%d", len(r.config.SystemdAllowlist))
+	result.After["registered_containers"] = fmt.Sprintf("%d", len(r.config.ContainerAllowlist))
+	result.After["registered_backup_paths"] = fmt.Sprintf("%d", len(r.config.ResticPathsAllowlist))
+	result.Message = "bounded diagnostics collected"
+	return nil
+}
+
+func readProtectedActionSecret(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("action secret file is unavailable")
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		return "", errors.New("action secret file permissions are too broad")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 || len(data) > 4096 {
+		return "", errors.New("action secret file is invalid")
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" || strings.ContainsRune(value, '\x00') || strings.ContainsAny(value, "\r\n") {
+		return "", errors.New("action secret file is invalid")
+	}
+	return value, nil
+}
+
+func (r *ActionRegistry) resticEnvironment() ([]string, error) {
+	if r.config.ResticRepositoryFile == "" || r.config.ResticPasswordFile == "" {
+		return nil, errors.New("Restic is not configured")
+	}
+	repository, err := readProtectedActionSecret(r.config.ResticRepositoryFile)
+	if err != nil {
+		return nil, err
+	}
+	password, err := readProtectedActionSecret(r.config.ResticPasswordFile)
+	if err != nil {
+		return nil, err
+	}
+	return []string{
+		"PATH=" + os.Getenv("PATH"),
+		"RESTIC_REPOSITORY=" + repository,
+		"RESTIC_PASSWORD=" + password,
+	}, nil
+}
+
+func runCommandWithEnvironment(ctx context.Context, environment []string, name string, arguments ...string) error {
+	command := exec.CommandContext(ctx, name, arguments...)
+	command.Env = environment
+	output, err := command.CombinedOutput()
+	if len(output) > 4096 {
+		output = output[:4096]
+	}
+	if err != nil {
+		return fmt.Errorf("registered command failed: %w", err)
+	}
+	return nil
+}
+
+func (r *ActionRegistry) resticBackup(ctx context.Context, target string, dryRun bool, result *ActionResult) error {
+	if !filepath.IsAbs(target) || !contains(r.config.ResticPathsAllowlist, target) {
+		return errors.New("backup path is not allowlisted")
+	}
+	environment, err := r.resticEnvironment()
+	if err != nil {
+		return err
+	}
+	arguments := []string{"backup", "--no-scan", target}
+	if dryRun {
+		arguments = append(arguments, "--dry-run")
+	}
+	if err := runCommandWithEnvironment(ctx, environment, "restic", arguments...); err != nil {
+		return err
+	}
+	result.After["backup"] = "completed"
+	return nil
+}
+
+func (r *ActionRegistry) resticCheck(ctx context.Context, dryRun bool, result *ActionResult) error {
+	if dryRun {
+		result.Message = "would execute bounded Restic repository check"
+		return nil
+	}
+	environment, err := r.resticEnvironment()
+	if err != nil {
+		return err
+	}
+	if err := runCommandWithEnvironment(ctx, environment, "restic", "check", "--read-data-subset=1/20"); err != nil {
+		return err
+	}
+	result.After["check"] = "completed"
+	return nil
 }
 
 func runCommand(ctx context.Context, name string, arguments ...string) (string, error) {
