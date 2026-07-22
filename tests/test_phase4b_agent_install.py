@@ -14,6 +14,9 @@ def test_agent_installer_verifies_artifact_runs_nonroot_and_rolls_back() -> None
     assert "NoNewPrivileges=yes" in unit
     assert "SupplementaryGroups=docker" not in unit
     assert "curl |" not in installer
+    assert installer.index("systemctl stop vps-guardian-agent.service") < installer.index(
+        'install -m 0755 "$binary" /usr/local/sbin/vps-guardian-agent'
+    )
 
 
 def test_agent_uninstall_preserves_state_and_controller_history_by_default() -> None:
