@@ -30,6 +30,12 @@ def production_values(tmp_path: Path) -> dict[str, object]:
         "postgresql+psycopg://guardian@example/guardian\n", encoding="utf-8"
     )
     database_url_file.chmod(0o600)
+    agent_ca_certificate = tmp_path / "agent-ca.crt"
+    agent_ca_private_key = tmp_path / "agent-ca.key"
+    agent_ca_certificate.write_text("test certificate fixture\n", encoding="ascii")
+    agent_ca_private_key.write_text("test private-key fixture\n", encoding="ascii")
+    agent_ca_certificate.chmod(0o644)
+    agent_ca_private_key.chmod(0o600)
     return {
         "environment": "production",
         "database_url_file": database_url_file,
@@ -38,6 +44,8 @@ def production_values(tmp_path: Path) -> dict[str, object]:
         "agent_enrollment_token": "e" * 48,
         "trusted_proxy_cert_header_secret": "p" * 48,
         "controller_signing_key_file": key_file,
+        "agent_ca_certificate_file": agent_ca_certificate,
+        "agent_ca_private_key_file": agent_ca_private_key,
         "secure_cookies": True,
         "auto_create_schema": False,
         "allowed_origins": ["https://guardian.example.test"],
@@ -132,6 +140,8 @@ def test_controlled_database_url_cannot_bypass_the_production_database_policy(
         ("allowed_origins", ["http://guardian.example.test"]),
         ("trusted_hosts", ["*"]),
         ("database_url", "mysql+pymysql://guardian@example/guardian"),
+        ("agent_ca_certificate_file", Path("missing-agent-ca.crt")),
+        ("agent_ca_private_key_file", Path("missing-agent-ca.key")),
     ],
 )
 def test_insecure_production_configuration_is_rejected(

@@ -20,7 +20,7 @@ docker compose config --quiet
 docker compose build
 docker compose up -d
 docker compose ps
-docker compose exec -it controller guardian-admin create-user
+docker compose exec -it controller controller-entrypoint guardian-admin create-user
 ```
 
 管理员命令会交互询问邮箱、角色、TOTP 选项及隐藏密码。禁止把密码写入 argv、`.env`、Git、Shell 历史或日志。等待 `database`、`controller`、`agent-gateway` 和 `web` 全部健康后，打开 `https://<GUARDIAN_DOMAIN>/overview`。

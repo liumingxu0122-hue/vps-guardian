@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Annotated
@@ -8,6 +9,8 @@ import pyotp
 import typer
 from sqlalchemy import select
 
+from guardian.agent_crl import generate_agent_crl, read_serial_file
+from guardian.agent_pki import AgentCertificateError
 from guardian.audit import write_audit
 from guardian.config import get_settings
 from guardian.database import SessionLocal
@@ -140,6 +143,7 @@ def configure_staging_host(
 def record_crl_publication(
     crl_number: Annotated[str, typer.Option("--crl-number")],
     checksum_sha256: Annotated[str, typer.Option("--sha256")],
+    certificate_serial: Annotated[str, typer.Option("--certificate-serial")],
     outcome: Annotated[str, typer.Option()],
     reason_code: Annotated[str, typer.Option("--reason-code")],
     execute: Annotated[bool, typer.Option("--execute")] = False,
@@ -152,6 +156,9 @@ def record_crl_publication(
         raise typer.BadParameter("CRL number must be decimal or unknown")
     if not re.fullmatch(r"[a-f0-9]{64}", checksum_sha256):
         raise typer.BadParameter("CRL SHA-256 is invalid")
+    if not re.fullmatch(r"[A-Fa-f0-9]{1,128}", certificate_serial):
+        raise typer.BadParameter("certificate serial is invalid")
+    normalized_serial = certificate_serial.upper().lstrip("0") or "0"
     if outcome not in {"attempt", "success", "failure", "rollback"}:
         raise typer.BadParameter("CRL audit outcome is invalid")
     if not re.fullmatch(r"[a-z0-9_.-]{1,64}", reason_code):
@@ -167,11 +174,52 @@ def record_crl_publication(
             details={
                 "crl_number": crl_number,
                 "sha256": checksum_sha256,
+                "certificate_serial": normalized_serial,
                 "reason_code": reason_code,
             },
         )
         db.commit()
         typer.echo(f"recorded CRL publication audit id={entry.id} outcome={outcome}")
+
+
+@app.command("build-agent-crl")
+def build_agent_crl(
+    current_crl: Annotated[Path, typer.Option("--current-crl")],
+    serial_file: Annotated[Path, typer.Option("--serial-file")],
+    output: Annotated[Path, typer.Option("--output")],
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+    confirmation: Annotated[str, typer.Option("--confirm")] = "",
+) -> None:
+    """Build a signed, monotonic Agent CRL candidate without publishing it."""
+    if not execute or confirmation != "BUILD VPS GUARDIAN AGENT CRL":
+        raise typer.BadParameter("exact Agent CRL confirmation and --execute are required")
+    for path, label in ((current_crl, "current CRL"), (output, "output")):
+        if not path.is_absolute():
+            raise typer.BadParameter(f"{label} path must be absolute")
+    if current_crl.is_symlink() or not current_crl.is_file():
+        raise typer.BadParameter("current CRL must be a regular file")
+    if output.exists() or output.is_symlink() or not output.parent.is_dir():
+        raise typer.BadParameter("output must be a new file in an existing directory")
+    try:
+        generated = generate_agent_crl(
+            current_crl_pem=current_crl.read_bytes(),
+            revoked_serial=read_serial_file(serial_file),
+            settings=get_settings(),
+        )
+        descriptor = os.open(
+            output,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(generated.pem)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except (OSError, AgentCertificateError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(
+        f"built Agent CRL candidate number={generated.number} sha256={generated.sha256}"
+    )
 
 
 if __name__ == "__main__":

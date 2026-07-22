@@ -24,34 +24,36 @@ type ProbeTarget struct {
 }
 
 type Config struct {
-	ControllerURL         string        `json:"controller_url"`
-	AgentID               string        `json:"agent_id"`
-	CertificateFile       string        `json:"certificate_file"`
-	PrivateKeyFile        string        `json:"private_key_file"`
-	CAFile                string        `json:"ca_file"`
-	SigningKeyFile        string        `json:"signing_key_file"`
-	ControllerPublicKey   string        `json:"controller_public_key"`
-	CertificateFP         string        `json:"certificate_fingerprint"`
-	QueueFile             string        `json:"queue_file"`
-	StateFile             string        `json:"state_file"`
-	HeartbeatInterval     Duration      `json:"heartbeat_interval"`
-	CommandTimeout        Duration      `json:"command_timeout"`
-	MaxQueueBytes         int64         `json:"max_queue_bytes"`
-	DiskPath              string        `json:"disk_path"`
-	SystemdAllowlist      []string      `json:"systemd_allowlist"`
-	ContainerAllowlist    []string      `json:"container_allowlist"`
-	ConfigAllowlist       []string      `json:"config_allowlist"`
-	CacheAllowlist        []string      `json:"cache_allowlist"`
-	CacheRetention        Duration      `json:"cache_retention"`
-	CaddyContainer        string        `json:"caddy_container"`
-	CaddyContainerConfig  string        `json:"caddy_container_config"`
-	SnapshotDirectory     string        `json:"snapshot_directory"`
-	ActionBackupDirectory string        `json:"action_backup_directory"`
-	LocalHealthURLs       []string      `json:"local_health_urls"`
-	ProbeTargets          []ProbeTarget `json:"probe_targets"`
-	ResticRepositoryFile  string        `json:"restic_repository_file"`
-	ResticPasswordFile    string        `json:"restic_password_file"`
-	ResticPathsAllowlist  []string      `json:"restic_paths_allowlist"`
+	ControllerURL          string        `json:"controller_url"`
+	AgentID                string        `json:"agent_id"`
+	CertificateFile        string        `json:"certificate_file"`
+	PrivateKeyFile         string        `json:"private_key_file"`
+	CAFile                 string        `json:"ca_file"`
+	AgentCAFile            string        `json:"agent_ca_file"`
+	SigningKeyFile         string        `json:"signing_key_file"`
+	ControllerPublicKey    string        `json:"controller_public_key"`
+	CertificateFP          string        `json:"certificate_fingerprint"`
+	QueueFile              string        `json:"queue_file"`
+	StateFile              string        `json:"state_file"`
+	HeartbeatInterval      Duration      `json:"heartbeat_interval"`
+	CertificateRenewBefore Duration      `json:"certificate_renew_before"`
+	CommandTimeout         Duration      `json:"command_timeout"`
+	MaxQueueBytes          int64         `json:"max_queue_bytes"`
+	DiskPath               string        `json:"disk_path"`
+	SystemdAllowlist       []string      `json:"systemd_allowlist"`
+	ContainerAllowlist     []string      `json:"container_allowlist"`
+	ConfigAllowlist        []string      `json:"config_allowlist"`
+	CacheAllowlist         []string      `json:"cache_allowlist"`
+	CacheRetention         Duration      `json:"cache_retention"`
+	CaddyContainer         string        `json:"caddy_container"`
+	CaddyContainerConfig   string        `json:"caddy_container_config"`
+	SnapshotDirectory      string        `json:"snapshot_directory"`
+	ActionBackupDirectory  string        `json:"action_backup_directory"`
+	LocalHealthURLs        []string      `json:"local_health_urls"`
+	ProbeTargets           []ProbeTarget `json:"probe_targets"`
+	ResticRepositoryFile   string        `json:"restic_repository_file"`
+	ResticPasswordFile     string        `json:"restic_password_file"`
+	ResticPathsAllowlist   []string      `json:"restic_paths_allowlist"`
 }
 
 type Duration time.Duration
@@ -83,8 +85,12 @@ func loadConfig(path string) (Config, error) {
 	if config.ControllerURL == "" || config.AgentID == "" {
 		return Config{}, errors.New("controller_url and agent_id are required")
 	}
+	if config.AgentCAFile == "" {
+		config.AgentCAFile = filepath.Join(filepath.Dir(config.CertificateFile), "agent-ca.crt")
+	}
 	for _, keyPath := range []string{
-		config.CertificateFile, config.PrivateKeyFile, config.CAFile, config.SigningKeyFile,
+		config.CertificateFile, config.PrivateKeyFile, config.CAFile, config.AgentCAFile,
+		config.SigningKeyFile,
 	} {
 		if !filepath.IsAbs(keyPath) {
 			return Config{}, fmt.Errorf("security-sensitive path must be absolute: %s", keyPath)
@@ -92,6 +98,9 @@ func loadConfig(path string) (Config, error) {
 	}
 	if config.HeartbeatInterval == 0 {
 		config.HeartbeatInterval = Duration(30 * time.Second)
+	}
+	if config.CertificateRenewBefore == 0 {
+		config.CertificateRenewBefore = Duration(7 * 24 * time.Hour)
 	}
 	if config.CommandTimeout == 0 {
 		config.CommandTimeout = Duration(20 * time.Second)

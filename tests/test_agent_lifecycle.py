@@ -443,6 +443,33 @@ def test_rotation_id_is_idempotent_and_old_identity_is_revoked_after_crl(
         ).one()
         retiring_id = retiring.id
 
+    unverified = client.post(
+        f"/api/v1/agents/{agent_id}/identities/{retiring_id}/revoke",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={
+            "expected_version": 3,
+            "crl_number": 4102,
+            "crl_sha256": "ab" * 32,
+        },
+    )
+    assert unverified.status_code == 409
+    assert unverified.json()["detail"] == "matching CRL publication is not verified"
+    with SessionLocal() as database:
+        database.add(
+            AuditLog(
+                actor_id=None,
+                action="gateway.crl_publication",
+                resource_type="agent_ca_crl",
+                resource_id="4102",
+                outcome="success",
+                details={
+                    "crl_number": "4102",
+                    "sha256": "ab" * 32,
+                    "certificate_serial": "1000",
+                },
+            )
+        )
+        database.commit()
     revoked = client.post(
         f"/api/v1/agents/{agent_id}/identities/{retiring_id}/revoke",
         headers={"Authorization": f"Bearer {owner_token}"},
@@ -614,9 +641,33 @@ def test_owner_can_list_identities_without_public_keys_and_revoke_agent(
 ) -> None:
     agent_id, old_key = seed_agent()
     headers = {"Authorization": f"Bearer {owner_token}"}
+    with SessionLocal() as database:
+        database.add(
+            AuditLog(
+                actor_id=None,
+                action="gateway.crl_publication",
+                resource_type="agent_ca_crl",
+                resource_id="5102",
+                outcome="success",
+                details={
+                    "crl_number": "5102",
+                    "sha256": "cd" * 32,
+                    "certificate_serial": "1000",
+                },
+            )
+        )
+        database.commit()
 
     listed = client.get(f"/api/v1/agents/{agent_id}/identities", headers=headers)
-    revoked = client.post(f"/api/v1/agents/{agent_id}/revoke", headers=headers)
+    revoked = client.post(
+        f"/api/v1/agents/{agent_id}/revoke",
+        headers=headers,
+        json={
+            "expected_version": 1,
+            "crl_number": 5102,
+            "crl_sha256": "cd" * 32,
+        },
+    )
 
     assert listed.status_code == 200
     assert listed.json()[0]["state"] == AgentIdentityState.active.value

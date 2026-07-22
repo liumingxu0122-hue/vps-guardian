@@ -10,7 +10,7 @@ Hosts expose explicit data states: `normal`, `no_data`, `stale`, `offline`, and 
 
 ### Enrollment boundary
 
-The Controller issues a short-lived token and the generated command passes it through a mode-0600 token file. The current production installer still requires a pre-issued mTLS certificate, private key, and CA bundle to call the enrollment endpoint. A full CSR bootstrap flow that creates those artifacts on the target host is not implemented yet; certificate rotation and revocation remain Controller-governed operations.
+The Controller issues a short-lived token and the generated command passes it through a mode-0600 token file. Phase 4C extends this boundary with local private-key generation and CSR bootstrap through the private Agent Gateway. Certificate renewal and CRL publication remain controlled, audited operations. See the [Phase 4C staging guide](PHASE4C.md) for the implementation and validation status.
 
 ## Metrics and retention
 

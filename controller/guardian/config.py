@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     max_results_per_check: int = Field(default=43_200, ge=120, le=1_000_000)
     external_notifications_enabled: bool = False
     agent_pending_identity_ttl_minutes: int = Field(default=15, ge=5, le=60)
+    agent_certificate_ttl_hours: int = Field(default=720, ge=24, le=2160)
+    agent_ca_certificate_file: Path = Path("./secrets/pki/agent-ca.crt")
+    agent_ca_private_key_file: Path = Path("./secrets/pki/private/agent-ca.key")
+    agent_gateway_url: str = "https://agents.guardian.example.com"
+    enrollment_attempts_per_10m: int = Field(default=10, ge=2, le=100)
     approval_ttl_minutes: int = Field(default=30, ge=5, le=1440)
     deployment_stage: Literal["development", "test", "staging", "production"] = "development"
     production_deployed: bool = False
@@ -106,6 +111,13 @@ class Settings(BaseSettings):
             raise ValueError("production Controller database must use PostgreSQL")
         if not self.controller_signing_key_file.is_file():
             raise ValueError("GUARDIAN_CONTROLLER_SIGNING_KEY_FILE is missing")
+        if not self.agent_ca_certificate_file.is_file():
+            raise ValueError("GUARDIAN_AGENT_CA_CERTIFICATE_FILE is missing")
+        if not self.agent_ca_private_key_file.is_file():
+            raise ValueError("GUARDIAN_AGENT_CA_PRIVATE_KEY_FILE is missing")
+        from guardian.agent_pki import validate_agent_gateway_url
+
+        validate_agent_gateway_url(self.agent_gateway_url)
         if not self.runbook_directory.is_dir():
             raise ValueError("GUARDIAN_RUNBOOK_DIRECTORY is missing")
         if any(not origin.startswith("https://") for origin in self.allowed_origins):

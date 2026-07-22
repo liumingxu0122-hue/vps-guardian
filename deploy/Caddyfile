@@ -15,7 +15,13 @@
 
   @controller path /api/* /health /docs* /openapi.json
   handle @controller {
-    reverse_proxy controller:8090
+    reverse_proxy controller:8090 {
+      header_up -X-Guardian-Proxy-Auth
+      header_up -X-Guardian-Client-Certificate-Der
+      header_up -X-Client-Cert-Fingerprint
+      header_up -X-Forwarded-Client-Cert
+      header_up -X-SSL-Client-Cert
+    }
   }
 
   handle {

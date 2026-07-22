@@ -137,6 +137,11 @@ services:
       GUARDIAN_ALLOWED_ORIGINS: '["${GUARDIAN_BROWSER_ORIGIN:-https://${GUARDIAN_DOMAIN}}"]'
       GUARDIAN_TRUSTED_HOSTS: '["${GUARDIAN_DOMAIN}","${GUARDIAN_AGENT_DOMAIN}","controller"]'
       GUARDIAN_CONTROLLER_SIGNING_KEY_FILE: /run/secrets/controller_signing_key
+      GUARDIAN_AGENT_CA_CERTIFICATE_FILE: /run/secrets/agent_ca_certificate
+      GUARDIAN_AGENT_CA_PRIVATE_KEY_FILE: /run/secrets/agent_ca_private_key
+      GUARDIAN_AGENT_GATEWAY_URL: ${GUARDIAN_AGENT_GATEWAY_URL:-https://${GUARDIAN_AGENT_DOMAIN}:${GUARDIAN_AGENT_PORT:-8444}}
+      GUARDIAN_AGENT_CERTIFICATE_TTL_HOURS: ${GUARDIAN_AGENT_CERTIFICATE_TTL_HOURS:-720}
+      GUARDIAN_ENROLLMENT_ATTEMPTS_PER_10M: ${GUARDIAN_ENROLLMENT_ATTEMPTS_PER_10M:-10}
     secrets:
       - database_url
       - jwt_secret
@@ -144,6 +149,8 @@ services:
       - enrollment_token
       - proxy_auth
       - controller_signing_key
+      - agent_ca_certificate
+      - agent_ca_private_key
     volumes:
       - controller_data:/var/lib/vps-guardian
       - recovery_exchange:/var/lib/vps-guardian-recovery:ro
@@ -337,6 +344,10 @@ secrets:
     file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/proxy-auth
   controller_signing_key:
     file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/controller-ed25519.pem
+  agent_ca_certificate:
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/pki/agent-ca.crt
+  agent_ca_private_key:
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/pki/private/agent-ca.key
   restic_password:
     file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/restic-password
   agent_gateway_certificate:

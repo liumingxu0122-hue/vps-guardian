@@ -31,13 +31,14 @@ VPS Guardian is a security-first control plane for monitoring, diagnosing, and r
 - Restic backup and restore with S3-compatible storage, including Cloudflare R2
 - Operations Overview with hosts, topology, disaster recovery, security, alerts, and audit data
 - Phase 4B multi-host inventory, service checks, persistent alert state, opt-in notifications, and approval-backed repairs
+- Host-bound CSR bootstrap with locally generated Agent keys and bounded certificate renewal
 - English and Simplified Chinese UI, documentation, dates, numbers, durations, statuses, and errors
 
 ## Current limitations
 
 - No sustained validation across a large multi-VPS fleet
 - External Telegram, SMTP, and webhook delivery is opt-in; default tests use local mocks
-- Enrollment still requires a pre-issued mTLS bundle; CSR bootstrap is planned
+- CSR bootstrap is implemented, but two-host staging validation and sustained rotation observation remain pending
 - No automatic cross-cloud rebuilding or production-grade public deployment
 - Experimental Windows SSH dashboard launcher
 
@@ -54,7 +55,7 @@ flowchart LR
   B --> R[Restic and S3-compatible storage]
 ```
 
-Read the [architecture guide](docs/en/ARCHITECTURE.md) for trust boundaries, data flow, and component responsibilities, and the [Phase 4B operations guide](docs/en/PHASE4B.md) for monitoring workflows.
+Read the [architecture guide](docs/en/ARCHITECTURE.md) for trust boundaries and data flow, the [Phase 4B operations guide](docs/en/PHASE4B.md) for monitoring workflows, and the [Phase 4C staging guide](docs/en/PHASE4C.md) for CSR bootstrap and validation status.
 
 ## Quick install
 
@@ -67,14 +68,14 @@ cp .env.example .env
 sudo sh scripts/generate-controller-secrets.sh ./secrets agents.guardian.example.com
 sudo sh scripts/prepare-compose-secrets.sh --secrets-dir "$(pwd)/secrets"
 docker compose build && docker compose up -d
-docker compose exec -it controller guardian-admin create-user
+docker compose exec -it controller controller-entrypoint guardian-admin create-user
 ```
 
 The final command securely prompts for the administrator email and hidden password. Never put a password in argv, `.env`, Git, or logs. Read the [complete quick start](docs/en/QUICKSTART.md) before exposing ports.
 
 ## Agent enrollment
 
-Create the host inventory entry, generate a short-lived enrollment bundle through an authorized Controller workflow, install the architecture-specific Agent, and verify heartbeat, certificate serial, metrics, and offline queue. See [Agent installation](docs/en/AGENT_INSTALLATION.md).
+Create the host inventory entry, generate a short-lived enrollment bundle through an authorized Controller workflow, and install the architecture-specific Agent. The Agent generates its private keys and CSR locally. Verify heartbeat, certificate serial, metrics, and offline queue. See [Agent installation](docs/en/AGENT_INSTALLATION.md).
 
 ## Dashboard access
 
@@ -91,7 +92,7 @@ TLS 1.3 mTLS, signed tasks, replay defense, RBAC, TOTP, CSRF protection, rate li
 ## Roadmap
 
 - Validate long-running operation across a larger multi-VPS fleet
-- Add CSR-based enrollment bootstrap
+- Complete two-host CSR bootstrap, renewal, and CRL enforcement validation in staging
 - Complete isolated Nezha runtime benchmarks; unmeasured values remain `Pending`
 - Add cross-cloud recovery workflows and production deployment guidance
 - Publish the bilingual Phase 4B work in `v0.1.0-alpha.2`
