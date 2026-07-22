@@ -2,7 +2,7 @@ name: vps-guardian
 
 services:
   database-volume-init:
-    image: ${VPS_GUARDIAN_DATABASE_IMAGE:-vps-guardian-postgres:0.1.0-alpha.1}
+    image: ${VPS_GUARDIAN_DATABASE_IMAGE:-vps-guardian-postgres:0.3.0-alpha.1}
     pull_policy: never
     restart: "no"
     user: "0:0"
@@ -44,7 +44,7 @@ services:
       - no-new-privileges:true
 
   database:
-    image: ${VPS_GUARDIAN_DATABASE_IMAGE:-vps-guardian-postgres:0.1.0-alpha.1}
+    image: ${VPS_GUARDIAN_DATABASE_IMAGE:-vps-guardian-postgres:0.3.0-alpha.1}
     pull_policy: never
     build:
       context: .

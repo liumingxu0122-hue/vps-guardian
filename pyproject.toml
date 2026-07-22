@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vps-guardian"
-version = "0.1.0a1"
+version = "0.3.0a1"
 description = "Security-first multi-VPS monitoring, diagnosis, repair and recovery controller"
 readme = "README.md"
 license = "Apache-2.0"

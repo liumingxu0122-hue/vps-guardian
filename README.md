@@ -92,10 +92,10 @@ TLS 1.3 mTLS, signed tasks, replay defense, RBAC, TOTP, CSRF protection, rate li
 ## Roadmap
 
 - Validate long-running operation across a larger multi-VPS fleet
-- Complete two-host CSR bootstrap, renewal, and CRL enforcement validation in staging
+- Extend the completed two-host CSR, renewal, and CRL staging gate into longer fleet endurance testing
 - Complete isolated Nezha runtime benchmarks; unmeasured values remain `Pending`
 - Add cross-cloud recovery workflows and production deployment guidance
-- Publish the bilingual Phase 4B work in `v0.1.0-alpha.2`
+- Stabilize the `v0.3.0-alpha.1` certificate lifecycle, service checks, and approval workflow before beta
 
 See the [Nezha study](docs/en/comparisons/NEZHA_STUDY.md) and [benchmark plan](docs/en/comparisons/NEZHA_BENCHMARK.md).
 

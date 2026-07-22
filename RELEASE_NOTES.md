@@ -1,3 +1,7 @@
+# Release notes index
+
+Current release: [v0.3.0-alpha.1](RELEASE_NOTES_v0.3.0-alpha.1.md) | [简体中文](RELEASE_NOTES_v0.3.0-alpha.1.zh-CN.md)
+
 # v0.1.0-alpha.1 / Public Alpha
 
 ## English

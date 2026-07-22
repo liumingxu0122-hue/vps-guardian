@@ -16,7 +16,11 @@ type Snapshot struct {
 	Events      []json.RawMessage `json:"events"`
 }
 
-const agentVersion = "0.2.0-dev"
+var (
+	agentVersion = "0.3.0-alpha.1"
+	buildCommit  = "unknown"
+	buildTime    = "unknown"
+)
 
 func collectCommand(ctx context.Context, name string, arguments ...string) string {
 	output, err := exec.CommandContext(ctx, name, arguments...).CombinedOutput()
@@ -84,6 +88,8 @@ func collectSnapshot(config Config, queue *DiskQueue, checks []RemoteCheck, rest
 	}
 	metrics["offline_queue_depth"] = queueDepth
 	metrics["agent_version"] = agentVersion
+	metrics["agent_build_commit"] = buildCommit
+	metrics["agent_build_time"] = buildTime
 	metrics["agent_restart_count"] = restartCount
 	metrics["probes"] = collectProbes(ctx, config)
 	services := collectServices(ctx, config)
