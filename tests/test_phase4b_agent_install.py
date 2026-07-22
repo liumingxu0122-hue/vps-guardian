@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 
@@ -45,3 +46,20 @@ def test_generated_command_uses_token_file_and_complete_installer_contract() -> 
     )[0]
     for forbidden in ("--private-key", "--certificate", "--signing-key"):
         assert forbidden not in generated_command
+
+
+def test_runtime_entrypoints_are_executable_in_git() -> None:
+    result = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--stage",
+            "deploy/agent-gateway-entrypoint.sh",
+            "scripts/install-agent.sh",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    modes = {line.split(maxsplit=1)[0] for line in result.stdout.splitlines()}
+    assert modes == {"100755"}
