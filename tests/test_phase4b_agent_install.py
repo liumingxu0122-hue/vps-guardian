@@ -12,6 +12,10 @@ def test_agent_installer_verifies_artifact_runs_nonroot_and_rolls_back() -> None
     assert "useradd --system" in installer
     assert "User=vps-guardian-agent" in unit
     assert "NoNewPrivileges=yes" in unit
+    assert (
+        "ReadWritePaths=/var/lib/vps-guardian-agent "
+        "/etc/vps-guardian-agent/identities" in unit
+    )
     assert "SupplementaryGroups=docker" not in unit
     assert "curl |" not in installer
     assert installer.index("systemctl stop vps-guardian-agent.service") < installer.index(
