@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -56,6 +60,48 @@ def production_values(tmp_path: Path) -> dict[str, object]:
 def test_secure_production_configuration_is_accepted(tmp_path: Path) -> None:
     settings = Settings(**production_values(tmp_path))  # type: ignore[arg-type]
     assert settings.environment == "production"
+
+
+def test_production_model_import_has_no_pki_import_cycle(tmp_path: Path) -> None:
+    values = production_values(tmp_path)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "GUARDIAN_ENVIRONMENT": "production",
+            "GUARDIAN_DATABASE_URL_FILE": str(values["database_url_file"]),
+            "GUARDIAN_JWT_SECRET": str(values["jwt_secret"]),
+            "GUARDIAN_FIELD_ENCRYPTION_KEY": str(values["field_encryption_key"]),
+            "GUARDIAN_AGENT_ENROLLMENT_TOKEN": str(values["agent_enrollment_token"]),
+            "GUARDIAN_TRUSTED_PROXY_CERT_HEADER_SECRET": str(
+                values["trusted_proxy_cert_header_secret"]
+            ),
+            "GUARDIAN_CONTROLLER_SIGNING_KEY_FILE": str(
+                values["controller_signing_key_file"]
+            ),
+            "GUARDIAN_AGENT_CA_CERTIFICATE_FILE": str(
+                values["agent_ca_certificate_file"]
+            ),
+            "GUARDIAN_AGENT_CA_PRIVATE_KEY_FILE": str(
+                values["agent_ca_private_key_file"]
+            ),
+            "GUARDIAN_SECURE_COOKIES": "true",
+            "GUARDIAN_AUTO_CREATE_SCHEMA": "false",
+            "GUARDIAN_ALLOWED_ORIGINS": json.dumps(values["allowed_origins"]),
+            "GUARDIAN_TRUSTED_HOSTS": json.dumps(values["trusted_hosts"]),
+        }
+    )
+    environment.pop("GUARDIAN_DATABASE_URL", None)
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import guardian.models"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_production_compose_requires_prebuilt_immutable_application_images() -> None:
