@@ -90,10 +90,9 @@ node_version=$(node --version 2>/dev/null || printf 'unavailable')
 npm_version=$(npm --version)
 docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || printf 'unavailable')
 EOF
-cp "$output/BUILD_INFO" "$output/dist/BUILD_INFO-${release_version}.txt"
 cp RELEASE_NOTES_v0.2.0-alpha.1.md "$output/dist/vps-guardian-release-notes-en-${release_version}.md"
 cp RELEASE_NOTES_v0.2.0-alpha.1.zh-CN.md "$output/dist/vps-guardian-release-notes-zh-CN-${release_version}.md"
 (cd "$output" && \
-  { find dist sbom -type f -exec sha256sum {} \;; } | \
+  { sha256sum BUILD_INFO; find dist sbom -type f -exec sha256sum {} \;; } | \
   sort > checksums.sha256)
 printf 'built artifacts under %s\n' "$output"
