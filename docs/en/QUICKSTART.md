@@ -20,7 +20,7 @@ docker compose config --quiet
 docker compose build
 docker compose up -d
 docker compose ps
-docker compose exec -it controller guardian-admin create-user
+docker compose exec -it controller controller-entrypoint guardian-admin create-user
 ```
 
 The administrator command prompts for email, role, TOTP choice, and a hidden password. Never put passwords in argv, `.env`, Git, shell history, or logs. Wait until `database`, `controller`, `agent-gateway`, and `web` are healthy, then open `https://<GUARDIAN_DOMAIN>/overview`.

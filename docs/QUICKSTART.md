@@ -42,7 +42,7 @@ Wait until `database`, `controller`, `agent-gateway`, and `web` are healthy.
 Interactive mode is preferred:
 
 ```sh
-docker compose exec -it controller guardian-admin create-user
+docker compose exec -it controller controller-entrypoint guardian-admin create-user
 ```
 
 The command prompts for email, role, TOTP choice, and a hidden password with confirmation. For unattended bootstrap, create a root-only temporary password file and mount or copy it into the Controller through a controlled local process, then run:
