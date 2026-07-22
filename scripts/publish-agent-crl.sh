@@ -42,6 +42,7 @@ docker compose run --rm --no-deps --user 0:0 \
   --output "/work/gateway-pki/$candidate_name" \
   --execute --confirm 'BUILD VPS GUARDIAN AGENT CRL'
 
+chmod 0644 "$candidate"
 docker compose exec -T agent-gateway \
   /usr/local/bin/guardian-agent-gateway-entrypoint \
   --validate-crl "/etc/vps-guardian/gateway-pki/$candidate_name"
@@ -57,7 +58,6 @@ certificate_serial="$(printf '%s' "$certificate_serial" | sed 's/^0*//')"
 [ -n "$certificate_serial" ] || certificate_serial=0
 
 cp -p "$active" "$previous"
-chmod 0644 "$candidate"
 mv -f "$candidate" "$active"
 if ! docker compose up -d --no-deps --force-recreate agent-gateway; then
   mv -f "$previous" "$active"

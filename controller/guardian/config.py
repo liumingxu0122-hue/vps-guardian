@@ -4,10 +4,20 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from cryptography.fernet import Fernet
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _validate_agent_gateway_url(value: str) -> None:
+    """Validate the gateway origin without importing model-dependent PKI code."""
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("Agent gateway URL must be an HTTPS origin")
+    if parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
+        raise ValueError("Agent gateway URL must not include a path, query, or fragment")
 
 
 class Settings(BaseSettings):
@@ -115,9 +125,7 @@ class Settings(BaseSettings):
             raise ValueError("GUARDIAN_AGENT_CA_CERTIFICATE_FILE is missing")
         if not self.agent_ca_private_key_file.is_file():
             raise ValueError("GUARDIAN_AGENT_CA_PRIVATE_KEY_FILE is missing")
-        from guardian.agent_pki import validate_agent_gateway_url
-
-        validate_agent_gateway_url(self.agent_gateway_url)
+        _validate_agent_gateway_url(self.agent_gateway_url)
         if not self.runbook_directory.is_dir():
             raise ValueError("GUARDIAN_RUNBOOK_DIRECTORY is missing")
         if any(not origin.startswith("https://") for origin in self.allowed_origins):

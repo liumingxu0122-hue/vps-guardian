@@ -1,0 +1,18 @@
+name: restricted_cache_cleanup
+version: 1
+risk_level: 2
+conditions:
+  - type: fault_type
+    value: storage_pressure
+prechecks: []
+actions:
+  - type: restricted_cleanup
+    parameters:
+      target: "${cache_path}"
+postchecks:
+  - type: disk_cleanup_preview
+    parameters:
+      target: "${cache_path}"
+rollback_on_failure: false
+cooldown: 10m
+max_attempts: 1

@@ -4,14 +4,21 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ## [Unreleased]
 
+## [0.3.0-alpha.1] - 2026-07-23
+
 ### English
 
 - Added English and Simplified Chinese Dashboard resources with browser-language detection, an explicit persisted selector, and localized dates, numbers, durations, statuses, errors, loading, empty, offline, and permission states.
 - Added paired English and Simplified Chinese core documentation and Dashboard screenshots built from fictional data.
 - Added host-bound CSR bootstrap, locally generated Agent private keys, bounded certificate renewal with atomic identity generation switching, and controlled monotonic CRL publication.
 - Added Phase 4C bilingual staging and Nezha 2.3.0 benchmark documents. Runtime acceptance remains blocked or pending where real evidence is unavailable.
+- Validated two real staging Agents through CSR bootstrap, renewal, revocation, CRL enforcement, eight service checks, alert recovery, approval-separated repair, exact task replay idempotency, and TTL rejection.
+- Preserved post-repair verification steps when an approved runbook is converted into signed Agent tasks.
 
 ### 简体中文
+
+- 使用两台真实 staging Agent 验证 CSR 接入、续签、吊销、CRL 拦截、八项服务检查、告警恢复、职责分离审批修复、任务重放幂等和 TTL 拒绝。
+- 修复审批通过后丢失 runbook 复检步骤的问题，确保修复操作和 postcheck 都转换为签名 Agent 任务。
 
 - 新增 English / 简体中文 Dashboard 资源，支持浏览器语言检测、手动选择持久化，以及日期、数字、时长、状态、错误、加载、空数据、断网和权限状态本地化。
 - 新增成对的 English / 简体中文核心文档，以及使用虚构数据生成的 Dashboard 截图。

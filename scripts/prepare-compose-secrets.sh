@@ -47,6 +47,8 @@ flock -n 9 || { echo "another runtime Secret refresh is active" >&2; exit 75; }
 
 required='postgres-password database-url jwt-secret field-encryption-key enrollment-token proxy-auth controller-ed25519.pem restic-password server.crt server.key'
 s3_optional='aws-access-key-id aws-secret-access-key aws-region'
+agent_ca_certificate="$secrets_dir/pki/agent-ca.crt"
+agent_ca_private_key="$secrets_dir/pki/private/agent-ca.key"
 for name in $required; do
   [ -f "$secrets_dir/$name" ] && [ ! -L "$secrets_dir/$name" ] && \
     [ -s "$secrets_dir/$name" ] || {
@@ -59,6 +61,23 @@ for name in $required; do
   }
   [ "$(stat -c '%s' "$secrets_dir/$name")" -le 4096 ] || {
     echo "required master Secret is too large: $name" >&2
+    exit 66
+  }
+done
+
+[ -f "$agent_ca_certificate" ] && [ ! -L "$agent_ca_certificate" ] && \
+  [ "$(stat -c '%u:%a' "$agent_ca_certificate")" = '0:644' ] || {
+  echo "Agent CA certificate must be root-owned with mode 0644" >&2
+  exit 77
+}
+[ -f "$agent_ca_private_key" ] && [ ! -L "$agent_ca_private_key" ] && \
+  [ "$(stat -c '%u:%a' "$agent_ca_private_key")" = '0:600' ] || {
+  echo "Agent CA private key must be root-owned with mode 0600" >&2
+  exit 77
+}
+for path in "$agent_ca_certificate" "$agent_ca_private_key"; do
+  [ -s "$path" ] && [ "$(stat -c '%s' "$path")" -le 32768 ] || {
+    echo "Agent CA material is missing, empty, or unexpectedly large" >&2
     exit 66
   }
 done
@@ -113,7 +132,7 @@ chmod 0700 "$staged"
 previous=''
 cleanup_staged() {
   [ -n "$staged" ] || return 0
-  for name in $required $s3_optional; do
+  for name in $required $s3_optional agent-ca.crt agent-ca.key; do
     rm -f "$staged/$name"
   done
   rmdir "$staged" 2>/dev/null || true
@@ -123,6 +142,8 @@ trap 'exit 75' HUP INT TERM
 for name in $required; do
   install -o root -g root -m 0444 "$secrets_dir/$name" "$staged/$name"
 done
+install -o root -g root -m 0444 "$agent_ca_certificate" "$staged/agent-ca.crt"
+install -o root -g root -m 0444 "$agent_ca_private_key" "$staged/agent-ca.key"
 if [ "$s3_count" -eq 3 ]; then
   for name in $s3_optional; do
     install -o root -g root -m 0444 "$secrets_dir/$name" "$staged/$name"

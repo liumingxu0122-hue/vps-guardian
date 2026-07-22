@@ -2,19 +2,21 @@
 
 [English](PHASE4C.md) | [简体中文](../zh-CN/PHASE4C.md)
 
-Phase 4C adds CSR-based Agent bootstrap, bounded certificate renewal, controlled CRL publication, and a protocol for real two-host staging acceptance and an isolated Nezha 2.3.0 comparison. It does not authorize production deployment or a release.
+Phase 4C adds CSR-based Agent bootstrap, bounded certificate renewal, controlled CRL publication, and real two-host staging acceptance. It does not authorize production deployment. The isolated Nezha 2.3.0 comparison remains a separate pending benchmark.
 
 ## Current status
 
 | Gate | Status | Evidence boundary |
 | --- | --- | --- |
-| CSR bootstrap implementation | Passed locally | P-256/RSA CSR validation, host-bound one-time token, gateway-only production ingress |
-| Concurrent token consumption | Pending CI | PostgreSQL test uses two independent transactions; SQLite covers sequential reuse |
-| Agent certificate renewal | Passed locally | New keys are generated locally; CA/SPIFFE binding is verified before atomic generation switch |
-| CRL generation | Passed locally | Signed monotonic CRL preserves all earlier revocations |
-| HAProxy CRL enforcement | Pending staging | Candidate validation and rollback workflow implemented; real TLS rejection not yet measured |
-| Staging deployment | Blocked | Preflight did not establish a controlled SSH path to every registered staging host and found an unrelated-service baseline requiring confirmation |
-| Agents enrolled by CSR in staging | 0 | No staging write was allowed after the blocking preflight |
+| CSR bootstrap implementation | Passed | Two real staging hosts consumed distinct host-bound one-time tokens |
+| Token consumption | Passed | Both tokens were consumed once; authenticated replay returned 401; no usable token remains |
+| Agent certificate renewal | Passed | New keys remained local and the identity generation switched atomically |
+| CRL generation | Passed | Signed monotonic CRL retained earlier revocations and loaded through the Gateway workflow |
+| HAProxy CRL enforcement | Passed | The retired certificate was rejected while the renewed certificate reached the Controller |
+| Staging deployment | Passed | Four project containers are healthy with RestartCount 0; unrelated services matched the accepted baseline |
+| Agents enrolled by CSR in staging | 2 | Distinct active certificate serials, fresh heartbeats, non-root systemd units, zero active task backlog |
+| Service and alert workflow | Passed | Eight Docker/systemd/HTTP/TCP checks; firing, acknowledge, silence, local delivery, and recovery verified |
+| Approval repair workflow | Passed | Separate requester/approver, signed tasks, bounded cleanup, postcheck, replay idempotency, and TTL rejection verified |
 | Nezha 2.3.0 isolated deployment | Pending | No runtime comparison has been claimed |
 | 24-hour collection | Not started | Starts only after both isolated deployments pass preflight |
 | Seven-day observation | Pending | Can be accepted only after seven real days have elapsed |
@@ -39,4 +41,4 @@ Fault injection is limited to VPS Guardian or dedicated synthetic services. Root
 
 ## Observation conclusion
 
-The current production conclusion remains **NO-GO**. Phase 4C is an alpha validation activity. A green CI run proves implementation gates only; it does not replace two-host staging evidence, a real notification delivery, the isolated comparison, or the required elapsed observation periods.
+The current production conclusion remains **NO-GO**. Phase 4C is an alpha validation activity. The two-host staging, local notification, certificate lifecycle, and approval-repair gates passed, but they do not replace long-duration observation, external notification delivery, the isolated comparison, or production readiness review.

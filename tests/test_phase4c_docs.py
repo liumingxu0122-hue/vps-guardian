@@ -24,3 +24,11 @@ def test_nezha_benchmark_has_no_fabricated_runtime_values() -> None:
         assert "Nezha 2.3.0" in text or "哪吒 2.3.0" in text
         assert text.count("Pending") >= 20
         assert "Running/Pending" in text
+
+
+def test_crl_candidate_is_readable_before_nonroot_gateway_validation() -> None:
+    script = (ROOT / "scripts/publish-agent-crl.sh").read_text(encoding="utf-8")
+    readable = script.index('chmod 0644 "$candidate"')
+    validation = script.index("docker compose exec -T agent-gateway")
+    publication = script.index('mv -f "$candidate" "$active"')
+    assert readable < validation < publication

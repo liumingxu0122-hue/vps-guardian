@@ -199,6 +199,7 @@ install -d -o root -g vps-guardian-agent -m 0770 \
 identity_generation='/etc/vps-guardian-agent/identities/generation-1'
 install -d -o root -g vps-guardian-agent -m 0750 "$identity_generation"
 install -d -o vps-guardian-agent -g vps-guardian-agent -m 0700 /var/lib/vps-guardian-agent
+systemctl stop vps-guardian-agent.service >/dev/null 2>&1 || true
 install -m 0755 "$binary" /usr/local/sbin/vps-guardian-agent
 install -o root -g vps-guardian-agent -m 0640 "$private_key" "$identity_generation/agent.key"
 install -o root -g vps-guardian-agent -m 0644 "$certificate" "$identity_generation/agent.crt"
