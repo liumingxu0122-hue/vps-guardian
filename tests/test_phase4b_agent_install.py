@@ -33,16 +33,15 @@ def test_generated_command_uses_token_file_and_complete_installer_contract() -> 
         "--binary",
         "--sha256",
         "--controller-url",
-        "--agent-name",
-        "--agent-address",
-        "--certificate",
-        "--private-key",
-        "--agent-ca",
+        "--host-id",
         "--server-ca",
-        "--signing-key",
         "--controller-public-key",
         "--enrollment-token-file",
     ):
         assert option in api
         assert option in installer
-
+    generated_command = api.split("command = (", 1)[1].split(
+        "return EnrollmentTokenView", 1
+    )[0]
+    for forbidden in ("--private-key", "--certificate", "--signing-key"):
+        assert forbidden not in generated_command

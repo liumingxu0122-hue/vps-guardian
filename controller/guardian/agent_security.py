@@ -58,10 +58,7 @@ def trusted_client_certificate_identity(
     settings: Settings,
 ) -> tuple[str, str]:
     """Return the SHA-256 fingerprint and serial asserted by the trusted mTLS gateway."""
-    expected_proxy_auth = settings.trusted_proxy_cert_header_secret.get_secret_value()
-    proxy_auth = request.headers.get("x-guardian-proxy-auth", "")
-    if not expected_proxy_auth or not secrets.compare_digest(proxy_auth, expected_proxy_auth):
-        raise HTTPException(status_code=401, detail="untrusted mTLS proxy")
+    require_trusted_agent_gateway(request, settings)
 
     encoded_certificate = request.headers.get("x-guardian-client-certificate-der", "")
     if not encoded_certificate or len(encoded_certificate) > MAX_FORWARDED_CERTIFICATE_BYTES:
@@ -78,6 +75,14 @@ def trusted_client_certificate_identity(
         certificate.fingerprint(hashes.SHA256()).hex().upper(),
         normalize_certificate_serial(format(certificate.serial_number, "X")),
     )
+
+
+def require_trusted_agent_gateway(request: Request, settings: Settings) -> None:
+    """Reject Agent ingress requests that did not pass through the private gateway."""
+    expected_proxy_auth = settings.trusted_proxy_cert_header_secret.get_secret_value()
+    proxy_auth = request.headers.get("x-guardian-proxy-auth", "")
+    if not expected_proxy_auth or not secrets.compare_digest(proxy_auth, expected_proxy_auth):
+        raise HTTPException(status_code=401, detail="untrusted mTLS proxy")
 
 
 def build_agent_signing_message(

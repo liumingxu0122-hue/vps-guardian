@@ -21,6 +21,11 @@ from guardian import api
 from guardian.agent_security import build_agent_signing_message
 from guardian.config import Settings
 from guardian.database import Base
+from guardian.enrollment import (
+    EnrollmentTokenError,
+    consume_enrollment_token,
+    issue_enrollment_token,
+)
 from guardian.models import (
     Agent,
     AgentIdentity,
@@ -36,6 +41,7 @@ from guardian.schemas import (
     AgentHeartbeat,
     AgentIdentityActivateRequest,
     AgentIdentityRetireRequest,
+    AgentIdentityRevokeRequest,
     AgentIdentityValidateRequest,
     AgentRotateRequest,
 )
@@ -226,6 +232,45 @@ def seed_active_only(
         agent.identity_version = 1
         database.commit()
     return agent_id, owner
+
+
+def test_concurrent_enrollment_token_consumption_has_exactly_one_winner(
+    postgres_sessions: sessionmaker[Session],
+) -> None:
+    with postgres_sessions() as database:
+        owner = User(
+            email=f"owner-{uuid.uuid4().hex}@example.test",
+            password_hash="unused",
+            role=Role.owner.value,
+        )
+        host = Host(name=f"bootstrap-{uuid.uuid4().hex}", address="192.0.2.120")
+        database.add_all([owner, host])
+        database.flush()
+        issued = issue_enrollment_token(database, host=host, actor=owner)
+        host_id = host.id
+        database.commit()
+
+    barrier = threading.Barrier(2)
+
+    def consume() -> str:
+        with postgres_sessions() as database:
+            barrier.wait(timeout=10)
+            try:
+                consume_enrollment_token(
+                    database,
+                    value=issued.value,
+                    expected_host_id=host_id,
+                )
+                database.commit()
+                return "accepted"
+            except EnrollmentTokenError:
+                database.rollback()
+                return "rejected"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(lambda _: consume(), range(2)))
+
+    assert sorted(outcomes) == ["accepted", "rejected"]
 
 
 def test_postgresql_partial_indexes_reject_second_live_identity(
@@ -483,7 +528,32 @@ def test_active_heartbeat_is_linearized_before_identity_transition(
                     database,
                     owner,
                 )
-            return api.revoke_agent(agent_id, owner_request(), database, owner)
+            database.add(
+                AuditLog(
+                    actor_id=None,
+                    action="gateway.crl_publication",
+                    resource_type="agent_ca_crl",
+                    resource_id="6102",
+                    outcome="success",
+                    details={
+                        "crl_number": "6102",
+                        "sha256": "ef" * 32,
+                        "certificate_serial": "1000",
+                    },
+                )
+            )
+            database.flush()
+            return api.revoke_agent(
+                agent_id,
+                AgentIdentityRevokeRequest(
+                    expected_version=2,
+                    crl_number=6102,
+                    crl_sha256="ef" * 32,
+                ),
+                owner_request(),
+                database,
+                owner,
+            )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         heartbeat_future = executor.submit(send_heartbeat)

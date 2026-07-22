@@ -103,6 +103,7 @@ class EnrollmentTokenIssue(BaseModel):
 
 
 class EnrollmentTokenView(BaseModel):
+    id: str
     token: str
     expires_at: datetime
     install_command: str
@@ -389,6 +390,51 @@ class AgentEnrollResponse(BaseModel):
     agent_id: str
     host_id: str
     heartbeat_interval_seconds: int = 30
+
+
+class AgentBootstrapRequest(BaseModel):
+    host_id: str = Field(min_length=36, max_length=36)
+    csr_pem: str = Field(min_length=200, max_length=32768)
+    signing_public_key: str = Field(min_length=40, max_length=512)
+    version: str = Field(min_length=1, max_length=64)
+
+    @field_validator("signing_public_key")
+    @classmethod
+    def validate_signing_public_key(cls, value: str) -> str:
+        return AgentEnrollRequest.validate_signing_public_key(value)
+
+
+class AgentBootstrapResponse(BaseModel):
+    agent_id: str
+    host_id: str
+    certificate_pem: str
+    ca_bundle_pem: str
+    certificate_serial: str
+    certificate_expires_at: datetime
+    agent_gateway_endpoint: str
+    heartbeat_interval_seconds: int = 30
+
+
+class AgentRenewRequest(BaseModel):
+    rotation_id: str = Field(
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    )
+    expected_version: int = Field(ge=1)
+    csr_pem: str = Field(min_length=200, max_length=32768)
+    signing_public_key: str = Field(min_length=40, max_length=512)
+    signing_key_proof: str = Field(min_length=80, max_length=128)
+
+    @field_validator("signing_public_key")
+    @classmethod
+    def validate_signing_public_key(cls, value: str) -> str:
+        return AgentEnrollRequest.validate_signing_public_key(value)
+
+
+class AgentRenewResponse(BaseModel):
+    identity: AgentIdentityView
+    certificate_pem: str
+    ca_bundle_pem: str
+    certificate_expires_at: datetime
 
 
 class AgentView(ORMModel):

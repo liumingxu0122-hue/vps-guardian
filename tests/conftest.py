@@ -12,6 +12,7 @@ os.environ["GUARDIAN_SECURE_COOKIES"] = "false"
 import pytest
 from fastapi.testclient import TestClient
 from guardian.database import Base, SessionLocal, engine
+from guardian.enrollment import enrollment_limiter
 from guardian.main import app
 from guardian.models import Role, User
 from guardian.security import hash_password, login_limiter
@@ -22,6 +23,7 @@ def clean_database():  # type: ignore[no-untyped-def]
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     login_limiter._attempts.clear()
+    enrollment_limiter.clear()
     yield
     Base.metadata.drop_all(engine)
 

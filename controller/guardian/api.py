@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 import shlex
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, cast
 
@@ -13,10 +14,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from guardian import __version__
+from guardian.agent_pki import (
+    AgentCertificateError,
+    issue_agent_certificate,
+    validate_agent_csr,
+    validate_agent_gateway_url,
+    verify_signing_key_proof,
+)
 from guardian.agent_security import (
     lock_active_agent,
     normalize_certificate_fingerprint,
     normalize_certificate_serial,
+    require_trusted_agent_gateway,
     trusted_client_certificate_identity,
     verify_agent_request,
 )
@@ -31,9 +40,13 @@ from guardian.backup import (
 from guardian.config import Settings, get_settings
 from guardian.database import get_db
 from guardian.enrollment import (
+    EnrollmentRateLimitError,
     EnrollmentTokenError,
     consume_enrollment_token,
+    enrollment_limiter,
     issue_enrollment_token,
+    revoke_enrollment_token,
+    token_digest,
 )
 from guardian.events import event_broker
 from guardian.models import (
@@ -62,6 +75,8 @@ from guardian.operations import Window, build_operations_overview
 from guardian.reconciliation import reconcile_staging_heartbeat, record_agent_results
 from guardian.redaction import redact_structure
 from guardian.schemas import (
+    AgentBootstrapRequest,
+    AgentBootstrapResponse,
     AgentEnrollRequest,
     AgentEnrollResponse,
     AgentHeartbeat,
@@ -70,6 +85,8 @@ from guardian.schemas import (
     AgentIdentityRevokeRequest,
     AgentIdentityValidateRequest,
     AgentIdentityView,
+    AgentRenewRequest,
+    AgentRenewResponse,
     AgentRotateRequest,
     AgentView,
     AlertRuleCreate,
@@ -389,6 +406,7 @@ def create_enrollment_token(
     payload: EnrollmentTokenIssue,
     request: Request,
     db: DB,
+    settings: Config,
     user: Annotated[User, Depends(require_role(Role.admin))],
 ) -> EnrollmentTokenView:
     host = db.get(Host, host_id)
@@ -414,26 +432,217 @@ def create_enrollment_token(
         source_ip=request.client.host if request.client else None,
     )
     db.commit()
-    controller_url = str(request.base_url).rstrip("/")
+    controller_url = validate_agent_gateway_url(settings.agent_gateway_url)
     command = (
         "sudo ./scripts/install-agent.sh "
         "--binary ./agent-bundle/vps-guardian-agent "
         ' --sha256 "$(cat ./agent-bundle/vps-guardian-agent.sha256)" '
         f"--controller-url {shlex.quote(controller_url)} "
-        f"--agent-name {shlex.quote(host.name)} "
-        f"--agent-address {shlex.quote(host.address)} "
-        "--certificate ./agent-bundle/agent.crt "
-        "--private-key ./agent-bundle/agent.key "
-        "--agent-ca ./agent-bundle/agent-ca.crt "
+        f"--host-id {shlex.quote(host.id)} "
         "--server-ca ./agent-bundle/controller-ca.crt "
-        "--signing-key ./agent-bundle/signing-ed25519.pem "
         ' --controller-public-key "$(cat ./agent-bundle/controller-public-key.txt)" '
         "--enrollment-token-file ./agent-bundle/enrollment-token"
     )
     return EnrollmentTokenView(
+        id=issued.id,
         token=issued.value,
         expires_at=issued.expires_at,
         install_command=command,
+    )
+
+
+@router.post(
+    "/api/v1/hosts/{host_id}/enrollment-tokens/{token_id}/revoke",
+    status_code=204,
+    tags=["agent"],
+)
+def revoke_host_enrollment_token(
+    host_id: str,
+    token_id: str,
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.admin))],
+) -> None:
+    try:
+        token = revoke_enrollment_token(db, token_id=token_id, host_id=host_id)
+    except EnrollmentTokenError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    write_audit(
+        db,
+        actor=user,
+        action="agent.enrollment_token.revoke",
+        resource_type="enrollment_token",
+        resource_id=token.id,
+        outcome="success",
+        details={"host_id": host_id, "reason_code": "operator_revoked"},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+
+
+def _record_bootstrap_failure(
+    db: Session,
+    *,
+    request: Request,
+    host_id: str | None,
+    reason_code: str,
+) -> None:
+    db.rollback()
+    write_audit(
+        db,
+        actor=None,
+        action="agent.csr_bootstrap",
+        resource_type="host",
+        resource_id=host_id,
+        outcome="denied",
+        details={"reason_code": reason_code},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+
+
+@router.post(
+    "/api/v1/agents/bootstrap",
+    response_model=AgentBootstrapResponse,
+    tags=["agent"],
+)
+def bootstrap_agent(
+    payload: AgentBootstrapRequest,
+    request: Request,
+    db: DB,
+    settings: Config,
+    enrollment_token: Annotated[str | None, Header(alias="X-Enrollment-Token")] = None,
+) -> AgentBootstrapResponse:
+    if settings.environment == "production":
+        try:
+            require_trusted_agent_gateway(request, settings)
+        except HTTPException:
+            _record_bootstrap_failure(
+                db,
+                request=request,
+                host_id=payload.host_id,
+                reason_code="gateway_rejected",
+            )
+            raise
+    if not enrollment_token:
+        _record_bootstrap_failure(
+            db, request=request, host_id=payload.host_id, reason_code="token_missing"
+        )
+        raise HTTPException(status_code=401, detail="invalid enrollment token")
+    source = request.client.host if request.client else "unknown"
+    limiter_key = f"{source}:{token_digest(enrollment_token)[:16]}"
+    try:
+        enrollment_limiter.check(limiter_key, settings.enrollment_attempts_per_10m)
+    except EnrollmentRateLimitError as exc:
+        _record_bootstrap_failure(
+            db, request=request, host_id=payload.host_id, reason_code="rate_limited"
+        )
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    try:
+        validate_agent_csr(payload.csr_pem)
+    except AgentCertificateError as exc:
+        _record_bootstrap_failure(
+            db, request=request, host_id=payload.host_id, reason_code="csr_rejected"
+        )
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        token, host = consume_enrollment_token(
+            db,
+            value=enrollment_token,
+            expected_host_id=payload.host_id,
+        )
+    except EnrollmentTokenError as exc:
+        _record_bootstrap_failure(
+            db, request=request, host_id=payload.host_id, reason_code="token_rejected"
+        )
+        raise HTTPException(status_code=401, detail="invalid enrollment token") from exc
+
+    existing_agent = db.scalar(select(Agent).where(Agent.host_id == host.id).with_for_update())
+    if existing_agent is not None and existing_agent.revoked_at is None:
+        _record_bootstrap_failure(
+            db, request=request, host_id=host.id, reason_code="active_agent_exists"
+        )
+        raise HTTPException(status_code=409, detail="host already has an active agent")
+    agent_id = existing_agent.id if existing_agent is not None else str(uuid.uuid4())
+    try:
+        issued = issue_agent_certificate(
+            csr_pem=payload.csr_pem,
+            agent_id=agent_id,
+            host_id=host.id,
+            settings=settings,
+        )
+        gateway_endpoint = validate_agent_gateway_url(settings.agent_gateway_url)
+    except AgentCertificateError as exc:
+        _record_bootstrap_failure(
+            db, request=request, host_id=host.id, reason_code="certificate_issuance_failed"
+        )
+        raise HTTPException(status_code=503, detail="certificate issuance unavailable") from exc
+
+    enrolled_at = datetime.now(UTC)
+    try:
+        if existing_agent is None:
+            agent = Agent(
+                id=agent_id,
+                host_id=host.id,
+                signing_public_key=payload.signing_public_key,
+                certificate_fingerprint=issued.fingerprint,
+                certificate_serial=issued.serial,
+                version=payload.version,
+            )
+            db.add(agent)
+        else:
+            agent = existing_agent
+            agent.identity_version += 1
+            agent.signing_public_key = payload.signing_public_key
+            agent.certificate_fingerprint = issued.fingerprint
+            agent.certificate_serial = issued.serial
+            agent.version = payload.version
+            agent.revoked_at = None
+        db.flush()
+        identity = AgentIdentity(
+            agent_id=agent.id,
+            generation=agent.identity_version,
+            state=AgentIdentityState.active.value,
+            signing_public_key=payload.signing_public_key,
+            certificate_fingerprint=issued.fingerprint,
+            certificate_serial=issued.serial,
+            expires_at=issued.expires_at,
+            verified_at=enrolled_at,
+            activated_at=enrolled_at,
+        )
+        db.add(identity)
+        host.enrolled_at = enrolled_at
+        write_audit(
+            db,
+            actor=None,
+            action="agent.csr_bootstrap",
+            resource_type="agent",
+            resource_id=agent.id,
+            outcome="success",
+            details={
+                "host_id": host.id,
+                "token_id": token.id,
+                "certificate_serial": issued.serial,
+                "certificate_fingerprint_suffix": issued.fingerprint[-12:],
+                "certificate_expires_at": issued.expires_at.isoformat(),
+            },
+            source_ip=source,
+        )
+        db.commit()
+    except IntegrityError as exc:
+        _record_bootstrap_failure(
+            db, request=request, host_id=host.id, reason_code="identity_conflict"
+        )
+        raise HTTPException(status_code=409, detail="certificate identity conflict") from exc
+    enrollment_limiter.reset(limiter_key)
+    return AgentBootstrapResponse(
+        agent_id=agent.id,
+        host_id=host.id,
+        certificate_pem=issued.certificate_pem,
+        ca_bundle_pem=issued.ca_bundle_pem,
+        certificate_serial=issued.serial,
+        certificate_expires_at=issued.expires_at,
+        agent_gateway_endpoint=gateway_endpoint,
     )
 
 
@@ -1346,6 +1555,117 @@ def prepare_agent_identity(
 
 
 @router.post(
+    "/api/v1/agents/{agent_id}/certificate/renew",
+    response_model=AgentRenewResponse,
+    tags=["agent"],
+)
+async def renew_agent_certificate(
+    agent_id: str,
+    payload: AgentRenewRequest,
+    request: Request,
+    db: DB,
+    settings: Config,
+) -> AgentRenewResponse:
+    request_body = await request.body()
+    agent = lock_active_agent(db, agent_id)
+    authenticated_identity = verify_agent_request(
+        request=request,
+        agent=agent,
+        payload=request_body,
+        db=db,
+        settings=settings,
+    )
+    if authenticated_identity.state != AgentIdentityState.active.value:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="only the active identity can renew")
+    try:
+        validate_agent_csr(payload.csr_pem)
+        verify_signing_key_proof(
+            csr_pem=payload.csr_pem,
+            signing_public_key=payload.signing_public_key,
+            signing_key_proof=payload.signing_key_proof,
+        )
+    except AgentCertificateError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if db.scalar(
+        select(AgentIdentity).where(
+            AgentIdentity.agent_id == agent.id,
+            AgentIdentity.rotation_id == payload.rotation_id,
+        )
+    ):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="rotation id already used")
+    try:
+        issued = issue_agent_certificate(
+            csr_pem=payload.csr_pem,
+            agent_id=agent.id,
+            host_id=agent.host_id,
+            settings=settings,
+        )
+    except AgentCertificateError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="certificate issuance unavailable") from exc
+    if db.scalar(
+        select(AgentIdentity).where(
+            (AgentIdentity.certificate_fingerprint == issued.fingerprint)
+            | (AgentIdentity.certificate_serial == issued.serial)
+        )
+    ):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="certificate identity already enrolled")
+    renewed_at = datetime.now(UTC)
+    try:
+        generation = claim_agent_identity_version(db, agent, payload.expected_version)
+        authenticated_identity.state = AgentIdentityState.retiring.value
+        authenticated_identity.retiring_at = renewed_at
+        identity = AgentIdentity(
+            agent_id=agent.id,
+            generation=generation,
+            rotation_id=payload.rotation_id,
+            state=AgentIdentityState.active.value,
+            signing_public_key=payload.signing_public_key,
+            certificate_fingerprint=issued.fingerprint,
+            certificate_serial=issued.serial,
+            expires_at=issued.expires_at,
+            verified_at=renewed_at,
+            activated_at=renewed_at,
+        )
+        db.add(identity)
+        agent.signing_public_key = payload.signing_public_key
+        agent.certificate_fingerprint = issued.fingerprint
+        agent.certificate_serial = issued.serial
+        db.flush()
+        write_audit(
+            db,
+            actor=None,
+            action="agent.certificate_renewed",
+            resource_type="agent_identity",
+            resource_id=identity.id,
+            outcome="success",
+            details={
+                "agent_id": agent.id,
+                "generation": generation,
+                "rotation_id": payload.rotation_id,
+                "previous_generation": authenticated_identity.generation,
+                "certificate_serial": issued.serial,
+                "certificate_expires_at": issued.expires_at.isoformat(),
+            },
+            source_ip=request.client.host if request.client else None,
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="certificate identity conflict") from exc
+    return AgentRenewResponse(
+        identity=identity,
+        certificate_pem=issued.certificate_pem,
+        ca_bundle_pem=issued.ca_bundle_pem,
+        certificate_expires_at=issued.expires_at,
+    )
+
+
+@router.post(
     "/api/v1/agents/{agent_id}/identities/{identity_id}/activate",
     response_model=AgentIdentityView,
     tags=["agent"],
@@ -1466,6 +1786,7 @@ def revoke_retiring_agent_identity(
         return identity
     if identity.state != AgentIdentityState.retiring.value:
         raise HTTPException(status_code=409, detail="only a retiring identity can be revoked")
+    require_matching_crl_publication(db, payload, identity.certificate_serial)
     new_version = claim_agent_identity_version(db, agent, payload.expected_version)
     identity.state = AgentIdentityState.revoked.value
     identity.revoked_at = datetime.now(UTC)
@@ -1488,6 +1809,30 @@ def revoke_retiring_agent_identity(
     )
     db.commit()
     return identity
+
+
+def require_matching_crl_publication(
+    db: Session,
+    payload: AgentIdentityRevokeRequest,
+    certificate_serial: str | None,
+) -> AuditLog:
+    publication = db.scalar(
+        select(AuditLog)
+        .where(
+            AuditLog.action == "gateway.crl_publication",
+            AuditLog.outcome == "success",
+            AuditLog.resource_id == str(payload.crl_number),
+        )
+        .order_by(AuditLog.id.desc())
+    )
+    if (
+        certificate_serial is None
+        or publication is None
+        or publication.details.get("sha256") != payload.crl_sha256
+        or publication.details.get("certificate_serial") != certificate_serial
+    ):
+        raise HTTPException(status_code=409, detail="matching CRL publication is not verified")
+    return publication
 
 
 @router.post(
@@ -1601,12 +1946,26 @@ async def validate_pending_agent_identity(
 @router.post("/api/v1/agents/{agent_id}/revoke", status_code=204, tags=["agent"])
 def revoke_agent(
     agent_id: str,
+    payload: AgentIdentityRevokeRequest,
     request: Request,
     db: DB,
     user: Annotated[User, Depends(require_role(Role.owner))],
 ) -> None:
     agent = lock_active_agent(db, agent_id)
-    agent.revoked_at = datetime.now(UTC)
+    active_identity = db.scalar(
+        select(AgentIdentity).where(
+            AgentIdentity.agent_id == agent.id,
+            AgentIdentity.state == AgentIdentityState.active.value,
+        )
+    )
+    if active_identity is None:
+        raise HTTPException(status_code=409, detail="active Agent identity is missing")
+    require_matching_crl_publication(db, payload, active_identity.certificate_serial)
+    new_version = claim_agent_identity_version(db, agent, payload.expected_version)
+    revoked_at = datetime.now(UTC)
+    active_identity.state = AgentIdentityState.revoked.value
+    active_identity.revoked_at = revoked_at
+    agent.revoked_at = revoked_at
     write_audit(
         db,
         actor=user,
@@ -1614,7 +1973,13 @@ def revoke_agent(
         resource_type="agent",
         resource_id=agent.id,
         outcome="success",
-        details={"certificate_fingerprint_suffix": agent.certificate_fingerprint[-12:]},
+        details={
+            "certificate_fingerprint_suffix": agent.certificate_fingerprint[-12:],
+            "certificate_serial": active_identity.certificate_serial,
+            "identity_version": new_version,
+            "crl_number": payload.crl_number,
+            "crl_sha256": payload.crl_sha256,
+        },
         source_ip=request.client.host if request.client else None,
     )
     db.commit()

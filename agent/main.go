@@ -19,6 +19,7 @@ func run(config Config) error {
 	}
 	registry := NewActionRegistry(config)
 	pendingChecks := []RemoteCheck{}
+	nextRenewalAttempt := time.Time{}
 	ticker := time.NewTicker(time.Duration(config.HeartbeatInterval))
 	defer ticker.Stop()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -34,6 +35,18 @@ func run(config Config) error {
 				_ = queue.Enqueue(map[string]any{"type": "heartbeat_failed", "at": time.Now().UTC().Format(time.RFC3339), "summary_sha256": sha256String(encoded)})
 				log.Printf("controller heartbeat unavailable: %v", heartbeatErr)
 			} else if response.Accepted {
+				if client.CertificateExpiresWithin(time.Now(), time.Duration(config.CertificateRenewBefore)) &&
+					time.Now().After(nextRenewalAttempt) {
+					replacement, renewalErr := client.RenewCertificate(ctx, response.IdentityVersion)
+					if renewalErr != nil {
+						nextRenewalAttempt = time.Now().Add(time.Hour)
+						log.Printf("certificate renewal failed; retry deferred: %v", renewalErr)
+					} else {
+						client = replacement
+						nextRenewalAttempt = time.Time{}
+						log.Printf("certificate identity renewed to generation %d", response.IdentityVersion+1)
+					}
+				}
 				pendingChecks = response.Checks
 				_ = queue.Ack(len(snapshot.Events))
 				for _, task := range response.Tasks {

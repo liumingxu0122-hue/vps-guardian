@@ -25,10 +25,11 @@ type HeartbeatResponse struct {
 	Checks          []RemoteCheck `json:"checks"`
 }
 type ControllerClient struct {
-	config     Config
-	httpClient *http.Client
-	signingKey ed25519.PrivateKey
-	serverKey  ed25519.PublicKey
+	config      Config
+	httpClient  *http.Client
+	signingKey  ed25519.PrivateKey
+	serverKey   ed25519.PublicKey
+	certificate *x509.Certificate
 }
 
 func NewControllerClient(config Config) (*ControllerClient, error) {
@@ -36,6 +37,14 @@ func NewControllerClient(config Config) (*ControllerClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(certificate.Certificate) != 1 {
+		return nil, errors.New("Agent certificate file must contain exactly one certificate")
+	}
+	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("parse Agent certificate: %w", err)
+	}
+	config.CertificateFP = certificateFingerprint(leaf)
 	caData, err := os.ReadFile(config.CAFile)
 	if err != nil {
 		return nil, err
@@ -53,7 +62,17 @@ func NewControllerClient(config Config) (*ControllerClient, error) {
 		return nil, err
 	}
 	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: caPool, Certificates: []tls.Certificate{certificate}}}
-	return &ControllerClient{config, &http.Client{Transport: transport, Timeout: time.Duration(config.CommandTimeout)}, signingKey, serverKey}, nil
+	return &ControllerClient{
+		config:      config,
+		httpClient:  &http.Client{Transport: transport, Timeout: time.Duration(config.CommandTimeout)},
+		signingKey:  signingKey,
+		serverKey:   serverKey,
+		certificate: leaf,
+	}, nil
+}
+
+func (c *ControllerClient) CertificateExpiresWithin(now time.Time, window time.Duration) bool {
+	return !c.certificate.NotAfter.After(now.Add(window))
 }
 
 func (c *ControllerClient) Heartbeat(ctx context.Context, snapshot Snapshot) (HeartbeatResponse, error) {

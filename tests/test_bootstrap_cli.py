@@ -32,6 +32,8 @@ def test_crl_publication_cli_appends_bounded_audit_event() -> None:
             "4097",
             "--sha256",
             "a" * 64,
+            "--certificate-serial",
+            "00A001",
             "--outcome",
             "success",
             "--reason-code",
@@ -48,6 +50,7 @@ def test_crl_publication_cli_appends_bounded_audit_event() -> None:
         assert entry.action == "gateway.crl_publication"
         assert entry.outcome == "success"
         assert entry.details["sha256"] == "a" * 64
+        assert entry.details["certificate_serial"] == "A001"
 
 
 @pytest.mark.parametrize(
@@ -55,6 +58,7 @@ def test_crl_publication_cli_appends_bounded_audit_event() -> None:
     [
         ["--crl-number", "invalid"],
         ["--sha256", "short"],
+        ["--certificate-serial", "not-a-serial"],
         ["--outcome", "ignored"],
         ["--reason-code", "contains spaces"],
     ],
@@ -65,6 +69,7 @@ def test_crl_publication_cli_rejects_unbounded_metadata(
     values = {
         "--crl-number": "4097",
         "--sha256": "a" * 64,
+        "--certificate-serial": "A001",
         "--outcome": "success",
         "--reason-code": "published",
     }
@@ -90,6 +95,8 @@ def test_crl_publication_cli_requires_explicit_confirmation() -> None:
             "unknown",
             "--sha256",
             "a" * 64,
+            "--certificate-serial",
+            "A001",
             "--outcome",
             "attempt",
             "--reason-code",
