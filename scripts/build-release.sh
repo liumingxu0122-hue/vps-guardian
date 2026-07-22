@@ -37,8 +37,11 @@ git archive --format=tar.gz \
   -o "$output/dist/vps-guardian-compose-${release_version}.tar.gz" HEAD
 (cd "$output/dist" && wheel_file="$(find . -maxdepth 1 -name 'vps_guardian-*.whl' -print -quit)" && \
   python3 -m venv "$output/.wheel-check" && \
-  "$output/.wheel-check/bin/python" -m pip install --no-deps "$wheel_file" >/dev/null && \
-  "$output/.wheel-check/bin/python" -c 'import guardian; assert guardian.__version__ == "0.2.0a1"')
+  if [ -x "$output/.wheel-check/bin/python" ]; then wheel_python="$output/.wheel-check/bin/python"; \
+  elif [ -x "$output/.wheel-check/Scripts/python.exe" ]; then wheel_python="$output/.wheel-check/Scripts/python.exe"; \
+  else echo 'wheel verification venv has no Python executable' >&2; exit 69; fi && \
+  "$wheel_python" -m pip install --no-deps "$wheel_file" >/dev/null && \
+  "$wheel_python" -c 'import guardian; assert guardian.__version__ == "0.2.0a1"')
 rm -rf "$output/.wheel-check"
 (cd web && npm sbom --package-lock-only --sbom-format cyclonedx) \
   > "$output/sbom/web.cdx.json"
