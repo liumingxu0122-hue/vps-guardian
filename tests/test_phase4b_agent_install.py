@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -56,9 +57,11 @@ def test_generated_command_uses_token_file_and_complete_installer_contract() -> 
 
 
 def test_runtime_entrypoints_are_executable_in_git() -> None:
-    result = subprocess.run(
+    git = shutil.which("git")
+    assert git is not None
+    result = subprocess.run(  # noqa: S603 - executable is resolved to an absolute path.
         [
-            "git",
+            git,
             "ls-files",
             "--stage",
             "deploy/agent-gateway-entrypoint.sh",
