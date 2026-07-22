@@ -265,6 +265,13 @@ class RepairOrchestrator:
             parameters = interpolate_parameters(action["parameters"], context)
             parameters["dry_run"] = "true" if dry_run or requires_approval else "false"
             actions.append({"type": action["type"], "parameters": parameters})
+        if requires_approval:
+            # The approved plan must retain its verification steps. The decision API
+            # changes dry_run to false only after a separate approver accepts it.
+            for postcheck in runbook.data["postchecks"]:
+                parameters = interpolate_parameters(postcheck["parameters"], context)
+                parameters["dry_run"] = "true"
+                actions.append({"type": postcheck["type"], "parameters": parameters})
         task_ids: list[str] = []
         if requires_approval:
             requested_at = datetime.now(UTC)

@@ -17,6 +17,7 @@ def test_all_repository_runbooks_validate() -> None:
     assert {runbook.name for runbook in loaded} == {
         "cleanup_allowlisted_cache",
         "reload_valid_caddy",
+        "restricted_cache_cleanup",
         "restart_exited_container",
         "restart_unhealthy_container",
         "restore_database",
@@ -143,6 +144,36 @@ def test_level3_always_creates_approval(tmp_path: Path) -> None:
         requested_at = approval.requested_at.replace(tzinfo=UTC)
         expires_at = approval.expires_at.replace(tzinfo=UTC)
         assert expires_at - requested_at == timedelta(minutes=settings.approval_ttl_minutes)
+
+
+def test_approved_plan_retains_postchecks(tmp_path: Path) -> None:
+    agent_id, incident_id = create_inventory()
+    runbook = load_runbook(RUNBOOKS / "restricted_cache_cleanup.yaml")
+    settings = Settings(environment="test", controller_signing_key_file=tmp_path / "key.pem")
+    with SessionLocal() as db:
+        incident = db.get(Incident, incident_id)
+        agent = db.get(Agent, agent_id)
+        assert incident and agent
+        incident.fault_type = "storage_pressure"
+        plan = RepairOrchestrator().plan(
+            db,
+            runbook=runbook,
+            incident=incident,
+            agent=agent,
+            context={"cache_path": "/var/lib/vps-guardian-agent/phase4c-cache"},
+            settings=settings,
+            dry_run=False,
+        )
+        assert plan.requires_approval is True
+        assert [step["type"] for step in plan.actions] == [
+            "restricted_cleanup",
+            "disk_cleanup_preview",
+        ]
+        approval = db.query(Approval).one()
+        assert [step["type"] for step in approval.parameters["actions"]] == [
+            "restricted_cleanup",
+            "disk_cleanup_preview",
+        ]
 
 
 def test_level2_dry_run_is_allowed_but_execution_is_blocked_when_disabled(
