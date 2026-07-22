@@ -22,6 +22,11 @@ jobs:
       - run: ruff check .
       - run: mypy controller
       - run: sudo "$(command -v pytest)"
+      - run: pip-audit --requirement requirements.lock --disable-pip
+      - run: python -m pip wheel --no-deps --wheel-dir /tmp/vps-guardian-wheel .
+      - run: python -m venv /tmp/vps-guardian-wheel-test
+      - run: /tmp/vps-guardian-wheel-test/bin/python -m pip install --no-deps /tmp/vps-guardian-wheel/*.whl
+      - run: /tmp/vps-guardian-wheel-test/bin/python -c 'import guardian; assert guardian.__version__ == "0.2.0a1"'
 
   agent:
     runs-on: ubuntu-latest
@@ -54,6 +59,8 @@ jobs:
         run: npm test
       - working-directory: web
         run: npm run build
+      - working-directory: web
+        run: npm audit --audit-level=high
 
   web-e2e:
     runs-on: ubuntu-latest

@@ -9,13 +9,13 @@ from guardian.security import hash_password
 def test_health_is_public(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": "0.1.0a1"}
+    assert response.json() == {"status": "ok", "version": "0.2.0a1"}
 
 
 def test_readiness_is_public_and_queries_critical_tables(client: TestClient) -> None:
     response = client.get("/ready")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": "0.1.0a1"}
+    assert response.json() == {"status": "ok", "version": "0.2.0a1"}
 
 
 def test_login_sets_secure_shape_cookies(client: TestClient, owner: User) -> None:

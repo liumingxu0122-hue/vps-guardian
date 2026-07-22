@@ -1,4 +1,4 @@
-# VPS Guardian
+# VPS Guardian v0.2.0-alpha.1
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -94,7 +94,7 @@ TLS 1.3 mTLS, signed tasks, replay defense, RBAC, TOTP, CSRF protection, rate li
 - Add CSR-based enrollment bootstrap
 - Complete isolated Nezha runtime benchmarks; unmeasured values remain `Pending`
 - Add cross-cloud recovery workflows and production deployment guidance
-- Publish the bilingual Phase 4B work in `v0.1.0-alpha.2`
+- Publish a separate v0.3.0-alpha.1 only after Phase 4C staging acceptance
 
 See the [Nezha study](docs/en/comparisons/NEZHA_STUDY.md) and [benchmark plan](docs/en/comparisons/NEZHA_BENCHMARK.md).
 
