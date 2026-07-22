@@ -345,9 +345,9 @@ secrets:
   controller_signing_key:
     file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/controller-ed25519.pem
   agent_ca_certificate:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/pki/agent-ca.crt
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/agent-ca.crt
   agent_ca_private_key:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/pki/private/agent-ca.key
+    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/agent-ca.key
   restic_password:
     file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/restic-password
   agent_gateway_certificate:

@@ -38,3 +38,15 @@ def test_secret_refresh_never_cleans_a_tree_after_exchange_can_start() -> None:
 
     assert clear_cleanup_target < execute_exchange
     assert "the transaction trees were preserved for review" in refresh_block
+
+
+def test_agent_ca_private_key_uses_nonroot_readable_runtime_secret() -> None:
+    script = (ROOT / "scripts" / "prepare-compose-secrets.sh").read_text(
+        encoding="utf-8"
+    )
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert '"$secrets_dir/pki/private/agent-ca.key"' in script
+    assert '"$staged/agent-ca.key"' in script
+    assert "runtime/agent-ca.key" in compose
+    assert "pki/private/agent-ca.key" not in compose
