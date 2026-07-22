@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import OperationsLayout from './layouts/OperationsLayout.vue'
+import { hostRoutes } from './hostRoutes'
 import { session } from './session'
 
 const router = createRouter({
@@ -18,8 +19,7 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/overview' },
         { path: 'overview', name: 'overview', component: () => import('./views/OverviewView.vue') },
-        { path: 'hosts', name: 'hosts', component: () => import('./views/HostsView.vue') },
-        { path: 'hosts/:hostId', name: 'host-detail', component: () => import('./views/HostsView.vue') },
+        ...hostRoutes,
         { path: 'services', name: 'services', component: () => import('./views/ServicesView.vue') },
         { path: 'alerts', name: 'alerts', component: () => import('./views/AlertsView.vue') },
         {

@@ -158,6 +158,17 @@ async function mockController(page: Page, options: MockOptions = {}): Promise<vo
   })
 }
 
+async function mockUnauthenticated(page: Page): Promise<void> {
+  await page.route('**/api/v1/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    await route.fulfill({
+      status: path === '/api/v1/auth/me' ? 401 : 403,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: path === '/api/v1/auth/me' ? 'not_authenticated' : 'forbidden' }),
+    })
+  })
+}
+
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   const dimensions = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
@@ -278,6 +289,31 @@ test('multi-VPS monitoring pages render persistent API data', async ({ page }) =
   await page.goto('/settings')
   await expect(page.getByText('local-mock', { exact: true })).toBeVisible()
   await expect(page.getByText('7 days / 10080')).toBeVisible()
+})
+
+test('VPS aliases require login and preserve deep links after refresh', async ({ page }) => {
+  await mockUnauthenticated(page)
+  await page.goto('/vps')
+  await expect(page).toHaveURL(/\/login\?redirect=\/vps$/)
+
+  await page.unroute('**/api/v1/**')
+  await mockController(page)
+  await page.goto('/vps/host-1')
+  await expect(page.getByRole('heading', { name: 'Hosts' })).toBeVisible()
+  await expect(page.getByText('edge-hk', { exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/\/vps\/host-1$/)
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Hosts' })).toBeVisible()
+  await expect(page).toHaveURL(/\/vps\/host-1$/)
+})
+
+test('VPS list alias is usable on a mobile viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mockController(page)
+  await page.goto('/vps')
+  await expect(page.getByRole('heading', { name: 'Hosts' })).toBeVisible()
+  await expect(page.getByText('edge-hk', { exact: true })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
 })
 
 test('mobile Chinese alerts remain readable without overflow', async ({ page }) => {
