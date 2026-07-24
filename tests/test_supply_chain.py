@@ -31,6 +31,15 @@ def test_controller_image_uses_hashed_locks_and_separate_wheel_builder() -> None
         "RESTIC_SOURCE_SHA256="
         "6318c51f187bafbaf33d1ab6dcb5abde9a94de11476651cbb2982f1ba89ca8a8"
     ) in dockerfile
+    assert "GRPC_GO_VERSION=v1.82.1" in dockerfile
+    assert (
+        "GRPC_GO_MODULE_SUM="
+        "h1:NnAxzGRA0677vCa4BUkOAnO5+FfQqVl9iUXeD0IqcGE="
+    ) in dockerfile
+    assert 'go mod edit -require="google.golang.org/grpc@$GRPC_GO_VERSION"' in dockerfile
+    assert 'go mod download "google.golang.org/grpc@$GRPC_GO_VERSION"' in dockerfile
+    assert "go mod verify" in dockerfile
+    assert "go version -m /out/restic" in dockerfile
     assert "COPY --from=restic-build /out/restic /usr/local/bin/restic" in dockerfile
     assert "restic 0\\.19\\.1 compiled with go1\\.26\\.5" in dockerfile
     assert "USER guardian:guardian" in dockerfile
