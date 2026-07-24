@@ -82,6 +82,15 @@ def test_web_image_rebuilds_versioned_caddy_with_the_fixed_go_toolchain() -> Non
         "CADDY_SOURCE_SHA256="
         "a593bd7077c76102ca76d19287a5e247d4e359dd67eddbc933f865afd3c131eb"
     ) in dockerfile
+    assert "GRPC_GO_VERSION=v1.82.1" in dockerfile
+    assert (
+        "GRPC_GO_MODULE_SUM="
+        "h1:NnAxzGRA0677vCa4BUkOAnO5+FfQqVl9iUXeD0IqcGE="
+    ) in dockerfile
+    assert 'go mod edit -require="google.golang.org/grpc@$GRPC_GO_VERSION"' in dockerfile
+    assert "go mod tidy" in dockerfile
+    assert "go mod verify" in dockerfile
+    assert "go version -m /out/caddy" in dockerfile
     assert "github.com/caddyserver/caddy/v2.CustomVersion=$CADDY_VERSION" in dockerfile
     assert dockerfile.count("^v2\\.11\\.4( |$)") == 2
     assert "apk del --no-cache curl libcurl c-ares" in dockerfile

@@ -10,6 +10,8 @@ FROM golang:1.26.5-alpine3.24@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1
 ARG CADDY_VERSION=v2.11.4
 ARG CADDY_COMMIT=e2eee6a7fce366321294c9c2a79f3146891dcbdf
 ARG CADDY_SOURCE_SHA256=a593bd7077c76102ca76d19287a5e247d4e359dd67eddbc933f865afd3c131eb
+ARG GRPC_GO_VERSION=v1.82.1
+ARG GRPC_GO_MODULE_SUM=h1:NnAxzGRA0677vCa4BUkOAnO5+FfQqVl9iUXeD0IqcGE=
 RUN apk add --no-cache ca-certificates wget tar \
     && wget -q "https://codeload.github.com/caddyserver/caddy/tar.gz/$CADDY_COMMIT" -O /tmp/caddy.tar.gz \
     && echo "$CADDY_SOURCE_SHA256  /tmp/caddy.tar.gz" | sha256sum -c - \
@@ -17,12 +19,20 @@ RUN apk add --no-cache ca-certificates wget tar \
     && tar -xzf /tmp/caddy.tar.gz -C /src --strip-components=1 \
     && rm -f /tmp/caddy.tar.gz
 WORKDIR /src
-RUN go mod download
 RUN test "$(grep '^module ' go.mod | awk '{print $2}')" = 'github.com/caddyserver/caddy/v2' \
     && test "$CADDY_VERSION" = 'v2.11.4' \
+    && go mod edit -require="google.golang.org/grpc@$GRPC_GO_VERSION" \
+    && go mod download "google.golang.org/grpc@$GRPC_GO_VERSION" \
+    && grep -Fx "google.golang.org/grpc $GRPC_GO_VERSION $GRPC_GO_MODULE_SUM" go.sum \
+    && go mod tidy \
+    && grep -Fx "google.golang.org/grpc $GRPC_GO_VERSION $GRPC_GO_MODULE_SUM" go.sum \
+    && go mod verify \
+    && test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "$GRPC_GO_VERSION" \
     && go build -trimpath -buildvcs=false \
       -ldflags="-s -w -X github.com/caddyserver/caddy/v2.CustomVersion=$CADDY_VERSION" \
-      -o /out/caddy ./cmd/caddy
+      -o /out/caddy ./cmd/caddy \
+    && go version -m /out/caddy \
+      | grep -F "google.golang.org/grpc	$GRPC_GO_VERSION	$GRPC_GO_MODULE_SUM"
 RUN /out/caddy version | grep -Eq '^v2\.11\.4( |$)'
 
 FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS runtime
