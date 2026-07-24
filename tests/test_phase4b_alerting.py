@@ -169,3 +169,48 @@ def test_acknowledge_and_silence_are_explicit_persistent_states() -> None:
             now=now,
         )
         assert observed.alert.state == AlertState.silenced.value
+
+
+def test_notification_channel_filters_are_enforced_when_scheduling() -> None:
+    now = datetime(2026, 7, 22, 0, 0, tzinfo=UTC)
+    with SessionLocal() as db:
+        rule = AlertRule(
+            name="filtered-alert",
+            source_type="service_check",
+            source_id="filtered-check",
+            severity="critical",
+            failure_threshold=1,
+        )
+        firing = NotificationChannel(
+            name="critical-firing",
+            kind="webhook",
+            configuration={"endpoint_env": "GUARDIAN_TEST_WEBHOOK_URL"},
+            event_scope=["firing"],
+            severity_filter=["critical"],
+        )
+        wrong_event = NotificationChannel(
+            name="resolved-only",
+            kind="webhook",
+            configuration={"endpoint_env": "GUARDIAN_TEST_WEBHOOK_URL"},
+            event_scope=["resolved"],
+        )
+        wrong_severity = NotificationChannel(
+            name="warning-only",
+            kind="webhook",
+            configuration={"endpoint_env": "GUARDIAN_TEST_WEBHOOK_URL"},
+            severity_filter=["warning"],
+        )
+        db.add_all([rule, firing, wrong_event, wrong_severity])
+        db.flush()
+        result = observe_alert(
+            db,
+            rule=rule,
+            success=False,
+            summary="critical check failed",
+            now=now,
+        )
+        db.flush()
+        assert result.notification_scheduled is True
+        deliveries = list(db.scalars(select(NotificationDelivery)).all())
+        assert len(deliveries) == 1
+        assert deliveries[0].channel_id == firing.id

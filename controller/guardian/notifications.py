@@ -142,7 +142,7 @@ async def _send(
 ) -> int:
     configuration = resolve_channel_configuration(channel)
     payload = _notification_payload(alert, delivery.event_type)
-    if channel.kind == "webhook":
+    if channel.kind in {"webhook", "discord"}:
         return await _send_webhook(configuration, payload, external_enabled=external_enabled)
     if channel.kind == "telegram":
         return await _send_telegram(configuration, payload, external_enabled=external_enabled)
@@ -162,7 +162,7 @@ async def send_test_notification(channel: NotificationChannel) -> int:
         "summary": "VPS Guardian local notification test",
         "observed_at": datetime.now(UTC).isoformat(),
     }
-    if channel.kind == "webhook":
+    if channel.kind in {"webhook", "discord"}:
         return await _send_webhook(configuration, payload, external_enabled=False)
     if channel.kind == "telegram":
         return await _send_telegram(configuration, payload, external_enabled=False)
@@ -214,11 +214,23 @@ async def deliver_pending_notifications(
             )
         except Exception as exc:  # noqa: BLE001 - error details must remain type-only.
             delivery.error_summary = type(exc).__name__
-            if delivery.attempt_count >= 5:
-                delivery.status = "failed"
+            raw_max_attempts = channel.retry_policy.get("max_attempts", 5)
+            max_attempts = (
+                max(1, min(10, raw_max_attempts))
+                if isinstance(raw_max_attempts, int)
+                else 5
+            )
+            if delivery.attempt_count >= max_attempts:
+                delivery.status = "dead_letter"
             else:
                 delivery.status = "retrying"
-                delay = min(3600, 2 ** (delivery.attempt_count - 1) * 30)
+                raw_base_delay = channel.retry_policy.get("base_delay_seconds", 30)
+                base_delay = (
+                    max(5, min(3600, raw_base_delay))
+                    if isinstance(raw_base_delay, int)
+                    else 30
+                )
+                delay = min(3600, 2 ** (delivery.attempt_count - 1) * base_delay)
                 delivery.next_attempt_at = now + timedelta(seconds=delay)
         else:
             delivery.status = "delivered"

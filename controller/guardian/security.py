@@ -68,6 +68,7 @@ def create_access_token(user: User, settings: Settings) -> tuple[str, int]:
     payload = {
         "sub": user.id,
         "role": user.role,
+        "sv": user.session_version,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(seconds=ttl)).timestamp()),
         "jti": secrets.token_urlsafe(16),
@@ -140,6 +141,50 @@ def enforce_csrf(request: Request) -> None:
         raise HTTPException(status_code=403, detail="CSRF validation failed")
 
 
+SCOPE_PREFIXES = {
+    "/api/v1/overview": "operations",
+    "/api/v1/attention": "operations",
+    "/api/v1/stability": "operations",
+    "/api/v1/hosts": "hosts",
+    "/api/v1/services": "services",
+    "/api/v1/service-checks": "services",
+    "/api/v1/service-check-results": "services",
+    "/api/v1/alerts": "alerts",
+    "/api/v1/alert-rules": "alerts",
+    "/api/v1/incidents": "incidents",
+    "/api/v1/repairs": "repairs",
+    "/api/v1/approvals": "approvals",
+    "/api/v1/recovery-points": "recovery",
+    "/api/v1/audit": "audit",
+    "/api/v1/users": "users",
+    "/api/v1/agents": "agents",
+    "/api/v1/notification": "notifications",
+    "/api/v1/settings": "settings",
+}
+
+
+def enforce_explicit_scopes(request: Request, user: User) -> None:
+    """Treat non-empty scopes as an additional least-privilege restriction."""
+    if not user.scopes or request.url.path.startswith("/api/v1/auth/"):
+        return
+    resource = next(
+        (
+            scope_resource
+            for prefix, scope_resource in SCOPE_PREFIXES.items()
+            if request.url.path.startswith(prefix)
+        ),
+        "system",
+    )
+    action = "read" if request.method in {"GET", "HEAD", "OPTIONS"} else "write"
+    allowed = {
+        "*:*",
+        f"{resource}:*",
+        f"{resource}:{action}",
+    }
+    if not allowed.intersection(user.scopes):
+        raise HTTPException(status_code=403, detail="explicit scope denied")
+
+
 def get_current_user(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
@@ -153,7 +198,10 @@ def get_current_user(
     user = db.scalar(select(User).where(User.id == str(payload["sub"])))
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="account disabled")
+    if payload.get("sv") != user.session_version:
+        raise HTTPException(status_code=401, detail="session revoked")
     enforce_csrf(request)
+    enforce_explicit_scopes(request, user)
     return user
 
 

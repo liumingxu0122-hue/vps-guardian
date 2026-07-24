@@ -83,6 +83,7 @@ class AlertState(StrEnum):
     acknowledged = "acknowledged"
     silenced = "silenced"
     resolved = "resolved"
+    closed = "closed"
 
 
 class AlertSeverity(StrEnum):
@@ -94,13 +95,15 @@ class AlertSeverity(StrEnum):
 class NotificationKind(StrEnum):
     telegram = "telegram"
     smtp = "smtp"
+    discord = "discord"
     webhook = "webhook"
 
 
 class IncidentStatus(StrEnum):
     open = "open"
+    acknowledged = "acknowledged"
     investigating = "investigating"
-    mitigated = "mitigated"
+    mitigating = "mitigating"
     resolved = "resolved"
 
 
@@ -131,6 +134,10 @@ class User(Base):
     totp_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    scopes: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    session_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -340,8 +347,10 @@ class AlertInstance(Base):
     fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     acknowledged_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    assigned_to: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     silenced_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_notified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -400,6 +409,9 @@ class NotificationChannel(Base):
     kind: Mapped[str] = mapped_column(String(24), index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     configuration: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    event_scope: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    severity_filter: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    retry_policy: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, server_default="{}")
     rate_limit_per_minute: Mapped[int] = mapped_column(Integer, default=30)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -434,6 +446,8 @@ class Incident(Base):
     fault_type: Mapped[str] = mapped_column(String(120), index=True)
     severity: Mapped[int] = mapped_column(Integer, default=2)
     status: Mapped[str] = mapped_column(String(32), default=IncidentStatus.open.value, index=True)
+    assigned_to: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     affected_hosts: Mapped[list[str]] = mapped_column(JSON, default=list)
     affected_services: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -444,7 +458,10 @@ class Incident(Base):
     risk: Mapped[str] = mapped_column(String(255), default="unknown")
     verification_plan: Mapped[list[str]] = mapped_column(JSON, default=list)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    postmortem: Mapped[str | None] = mapped_column(Text, nullable=True)
     timeline: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
 
 

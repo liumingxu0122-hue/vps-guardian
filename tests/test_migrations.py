@@ -115,6 +115,26 @@ def test_migrations_enforce_audit_append_only(tmp_path: Path) -> None:
         "started_at",
         "completed_at",
     } <= task_columns
+    user_columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
+    assert {"scopes", "session_version", "last_login_at", "disabled_at"} <= user_columns
+    alert_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(alert_instances)")
+    }
+    assert {"assigned_to", "closed_at"} <= alert_columns
+    incident_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(incidents)")
+    }
+    assert {
+        "assigned_to",
+        "acknowledged_at",
+        "updated_at",
+        "resolution_summary",
+        "postmortem",
+    } <= incident_columns
+    channel_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(notification_channels)")
+    }
+    assert {"event_scope", "severity_filter", "retry_policy"} <= channel_columns
     connection.execute(
         """
         INSERT INTO audit_logs
@@ -129,6 +149,42 @@ def test_migrations_enforce_audit_append_only(tmp_path: Path) -> None:
     connection.rollback()
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         connection.execute("DELETE FROM audit_logs")
+    connection.close()
+
+
+def test_phase4_completion_migration_round_trip(tmp_path: Path) -> None:
+    database = tmp_path / "phase4-completion-round-trip.db"
+    environment = os.environ.copy()
+    environment["GUARDIAN_DATABASE_URL"] = f"sqlite:///{database.as_posix()}"
+    commands = [
+        ["upgrade", "head"],
+        ["downgrade", "0007_multivps_alerts"],
+        ["upgrade", "head"],
+    ]
+    for command in commands:
+        result = subprocess.run(  # noqa: S603 - fixed Python/Alembic argv, no shell
+            [
+                sys.executable,
+                "-m",
+                "alembic",
+                "-c",
+                "controller/alembic.ini",
+                *command,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+    connection = sqlite3.connect(database)
+    assert "session_version" in {
+        row[1] for row in connection.execute("PRAGMA table_info(users)")
+    }
+    assert "closed_at" in {
+        row[1] for row in connection.execute("PRAGMA table_info(alert_instances)")
+    }
     connection.close()
 
 
