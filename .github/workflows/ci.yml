@@ -57,6 +57,7 @@ jobs:
           test -z "$(gofmt -l .)"
           go vet ./...
           go test ./...
+          go test -race ./...
 
   web:
     runs-on: ubuntu-latest
@@ -100,7 +101,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -110,4 +111,114 @@ jobs:
       - uses: actions/checkout@v4
       - run: cp .env.example .env
       - run: docker compose config --quiet
-      - run: docker compose build database controller web
+      - run: docker compose build database controller backup web
+      - name: Source SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: source.spdx.json
+          artifact-name: vps-guardian-source-sbom
+      - name: Controller image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: vps-guardian-controller:local
+          format: cyclonedx-json
+          output-file: controller.cdx.json
+          artifact-name: vps-guardian-controller-sbom
+      - name: Web image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: vps-guardian-web:local
+          format: cyclonedx-json
+          output-file: web.cdx.json
+          artifact-name: vps-guardian-web-sbom
+      - name: Backup image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: vps-guardian-backup:local
+          format: cyclonedx-json
+          output-file: backup.cdx.json
+          artifact-name: vps-guardian-backup-sbom
+      - name: Database image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: vps-guardian-postgres:0.3.0-alpha.1
+          format: cyclonedx-json
+          output-file: database.cdx.json
+          artifact-name: vps-guardian-database-sbom
+      - name: Controller image Critical gate
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: vps-guardian-controller:local
+          format: table
+          exit-code: '1'
+          vuln-type: os,library
+          severity: CRITICAL
+      - name: Controller image fixable High gate
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: vps-guardian-controller:local
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH
+          skip-setup-trivy: true
+      - name: Web image Critical gate
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: vps-guardian-web:local
+          format: table
+          exit-code: '1'
+          vuln-type: os,library
+          severity: CRITICAL
+          skip-setup-trivy: true
+      - name: Web image fixable High gate
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: vps-guardian-web:local
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH
+          skip-setup-trivy: true
+      - name: Backup image Critical gate
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: vps-guardian-backup:local
+          format: table
+          exit-code: '1'
+          vuln-type: os,library
+          severity: CRITICAL
+          skip-setup-trivy: true
+      - name: Backup image fixable High gate
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: vps-guardian-backup:local
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH
+          skip-setup-trivy: true
+      - name: Database image Critical gate
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: vps-guardian-postgres:0.3.0-alpha.1
+          format: table
+          exit-code: '1'
+          vuln-type: os,library
+          severity: CRITICAL
+          skip-setup-trivy: true
+      - name: Database image fixable High gate
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: vps-guardian-postgres:0.3.0-alpha.1
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH
+          skip-setup-trivy: true

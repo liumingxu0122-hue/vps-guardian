@@ -18,7 +18,7 @@ VPS Guardian 是一个以安全为核心的 Linux VPS 集群监控、诊断与�
 | --- | --- | --- |
 | 控制平面 | FastAPI Controller 与 PostgreSQL 状态存储 | 可用 |
 | 受管主机 | Go Agent、多主机清单、服务检查、指标和离线队列 | 可用 |
-| 运营界面 | 支持 English / 简体中文的响应式 Overview | 可用 |
+| 运营界面 | Phase 4 分组控制台、需要关注队列、工作流和中英文 | 预览 |
 | 灾难恢复 | Restic、S3 兼容存储与隔离恢复验证 | 预览 |
 | 生产就绪 | 公网部署与多 VPS 长期运行验证 | 未完成 |
 
@@ -29,16 +29,19 @@ VPS Guardian 是一个以安全为核心的 Linux VPS 集群监控、诊断与�
 - 签名任务、Nonce 防重放、审批和追加式审计事件
 - Agent 心跳、CPU 与网络指标及持久化离线队列
 - Restic + S3 兼容存储备份恢复，包括 Cloudflare R2
-- 覆盖主机、拓扑、灾备、安全、告警和审计的 Operations Overview
+- 面向决策的总览与“需要关注”队列，提供可解释健康状态、稳定性组成项和部署来源
+- 覆盖主机、检查、拓扑、告警、事故、修复、审批、恢复、安全、用户、Agent、通知、审计和设置的分组响应式控制台
 - Phase 4B 多主机清单、服务检查、持久告警、可选通知和带审批的修复
+- 告警指派/关闭、带审计事故流转、通知重试/死信记录和结构化检查历史
+- Owner/Admin/Operator/Viewer 角色上限、可选收窄 Scope、再认证和 Session 撤销
 - 主机绑定 CSR Bootstrap、Agent 本地生成密钥和受限证书续签
 - English / 简体中文界面、文档、日期、数字、时长、状态和错误提示
 
 ## 当前限制
 
 - 尚未完成大规模多 VPS 长期运行验证
-- Telegram、SMTP 和 Webhook 外发默认关闭，测试仅使用本地 mock
-- CSR Bootstrap 已实现，但双主机 staging 验收和持续轮换观察仍为 Pending
+- Telegram、SMTP、Discord 和 Webhook 外发默认关闭；真实双通道闭环仍为 Pending
+- 双主机 CSR Staging 证据属于历史结果；当前 CRL 握手、轮换和更大集群观察仍需重新验证
 - 尚无跨云自动重建和生产级公网部署
 - Windows SSH Dashboard 启动脚本仍为 Experimental
 
@@ -55,7 +58,7 @@ flowchart LR
   B --> R[Restic and S3-compatible storage]
 ```
 
-有关信任边界和数据流，请阅读[架构说明](docs/zh-CN/ARCHITECTURE.md)；监控工作流参见 [Phase 4B 运维说明](docs/zh-CN/PHASE4B.md)；CSR Bootstrap 和验收状态参见 [Phase 4C Staging 说明](docs/zh-CN/PHASE4C.md)。
+有关信任边界和数据流，请阅读[架构说明](docs/zh-CN/ARCHITECTURE.md)；完整工作流和门禁参见 [Phase 4 完成指南](docs/zh-CN/PHASE4_COMPLETION.md)；CSR Bootstrap 和验收状态参见 [Phase 4C Staging 说明](docs/zh-CN/PHASE4C.md)。
 
 ## 快速安装
 
@@ -79,7 +82,7 @@ docker compose exec -it controller controller-entrypoint guardian-admin create-u
 
 ## Dashboard 访问
 
-打开 `https://<GUARDIAN_DOMAIN>/overview`。中文浏览器环境首次访问时选择简体中文，其他语言环境使用 English；语言选择器会持久保存手动选择。Windows SSH 启动脚本仍为 Experimental。
+打开 `https://<GUARDIAN_DOMAIN>/overview` 并登录。管理面板和 API 不提供匿名降级。中文浏览器环境首次访问时选择简体中文，其他语言环境使用 English；语言选择器会持久保存手动选择。Windows SSH 启动脚本仍为 Experimental。
 
 ## 备份与恢复
 
@@ -97,7 +100,7 @@ TLS 1.3 mTLS、签名任务、防重放、RBAC、TOTP、CSRF 防护、限流、�
 - 增加跨云恢复流程和生产部署指南
 - 在进入 Beta 前稳定 `v0.3.0-alpha.1` 的证书生命周期、服务检查和审批流程
 
-参见[哪吒研究](docs/zh-CN/comparisons/NEZHA_STUDY.md)和[基准计划](docs/zh-CN/comparisons/NEZHA_BENCHMARK.md)。
+参见[哪吒 2.3.0 对比](docs/comparison/nezha-2.3.0.md)、[观察计划](docs/phase4/observation-run.md)和[生产门禁](docs/phase4/production-gate.md)。未测量值保持 `Pending`；生产结论为 `NO-GO`。
 
 ## 贡献方式
 

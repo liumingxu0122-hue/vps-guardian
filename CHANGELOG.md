@@ -4,6 +4,32 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ## [Unreleased]
 
+### Added
+
+- Added the Phase 4 V2 grouped operations console, Attention queue, topology/security/user/Agent/notification pages, breadcrumbs, command palette, responsive drawer, and light/dark tokens.
+- Added explainable deployment health, 1h/24h/7d/30d stability components, confidence, group/location aggregates, and bounded service-check history.
+- Added persistent alert assignment/closure, audited incident transitions, resolution/postmortem fields, notification scope/severity filters, retry history, and dead-letter handling.
+- Added Owner/Admin/Operator/Viewer management, optional narrowing scopes, high-risk reauthentication, last-Owner protection, password rotation, and session-version revocation.
+- Added reversible migration `0008_phase4_completion` and production startup guards requiring an explicit production gate and immutable commit.
+- Added bilingual Phase 4 workflows plus security, observation, production-gate, Staging/rollback, Komari coexistence, disk migration, and Nezha 2.3.0 comparison documentation.
+
+### Changed
+
+- Reworked Overview, Services, Alerts, Incidents, Approvals, and Settings around structured actions instead of raw operational data.
+- Added API pagination to fleet/history collections, GET request deduplication, and request cancellation support without increasing Agent sampling frequency.
+- Kept the dashboard authenticated and excluded the cancelled anonymous-read-only experiment.
+
+### Security
+
+- Explicit scopes now narrow role permissions at the API for separate read/write resources.
+- Notification routing enforces event-scope and severity filters before enqueueing.
+- Settings expose Secret configuration state and source only, never Secret values.
+
+### Known limitations
+
+- Current CRL handshake revalidation, off-site isolated restore, two real notification channels, larger multi-VPS validation, cross-cloud recovery, Staging rollback, accessibility/visual evidence, and 24-hour/7-day observation remain gates.
+- Production remains `NO-GO`; historical RPO/RTO values are not presented as current measurements.
+
 ## [0.3.0-alpha.1] - 2026-07-23
 
 ### English
