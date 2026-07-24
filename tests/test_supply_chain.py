@@ -38,6 +38,7 @@ def test_controller_image_uses_hashed_locks_and_separate_wheel_builder() -> None
     ) in dockerfile
     assert 'go mod edit -require="google.golang.org/grpc@$GRPC_GO_VERSION"' in dockerfile
     assert 'go mod download "google.golang.org/grpc@$GRPC_GO_VERSION"' in dockerfile
+    assert "go mod tidy" in dockerfile
     assert "go mod verify" in dockerfile
     assert "go version -m /out/restic" in dockerfile
     assert "COPY --from=restic-build /out/restic /usr/local/bin/restic" in dockerfile

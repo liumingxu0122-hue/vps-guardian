@@ -22,6 +22,8 @@ RUN test "$(cat VERSION)" = '0.19.1' \
     && go mod edit -require="google.golang.org/grpc@$GRPC_GO_VERSION" \
     && go mod download "google.golang.org/grpc@$GRPC_GO_VERSION" \
     && grep -Fx "google.golang.org/grpc $GRPC_GO_VERSION $GRPC_GO_MODULE_SUM" go.sum \
+    && go mod tidy \
+    && grep -Fx "google.golang.org/grpc $GRPC_GO_VERSION $GRPC_GO_MODULE_SUM" go.sum \
     && go mod verify \
     && test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "$GRPC_GO_VERSION" \
     && go run build.go -o /out/restic \
