@@ -55,7 +55,7 @@ flowchart LR
   B --> R[Restic and S3-compatible storage]
 ```
 
-有关信任边界和数据流，请阅读[架构说明](docs/zh-CN/ARCHITECTURE.md)；监控工作流参见 [Phase 4B 运维说明](docs/zh-CN/PHASE4B.md)；CSR Bootstrap 和验收状态参见 [Phase 4C Staging 说明](docs/zh-CN/PHASE4C.md)。
+有关信任边界和数据流，请阅读[架构说明](docs/zh-CN/ARCHITECTURE.md)；监控工作流参见 [Phase 4B 运维说明](docs/zh-CN/PHASE4B.md)；CSR Bootstrap 和验收状态参见 [Phase 4C Staging 说明](docs/zh-CN/PHASE4C.md)；可选公开边界参见[公开只读 Staging 面板](docs/zh-CN/STAGING_PUBLIC_READ_ONLY.md)。
 
 ## 快速安装
 
@@ -88,6 +88,9 @@ docker compose exec -it controller controller-entrypoint guardian-admin create-u
 ## 安全设计
 
 TLS 1.3 mTLS、签名任务、防重放、RBAC、TOTP、CSRF 防护、限流、审批和审计用于缩小影响范围，但不能替代主机加固。参见[安全模型](docs/zh-CN/SECURITY_MODEL.md)与[安全策略](SECURITY.md)。
+
+匿名访问默认关闭。只有独立的 Staging 部署可以显式启用专用、字段白名单化的 Public API；
+生产和受保护面板始终禁止启用。
 
 ## 路线图
 

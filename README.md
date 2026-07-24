@@ -55,7 +55,7 @@ flowchart LR
   B --> R[Restic and S3-compatible storage]
 ```
 
-Read the [architecture guide](docs/en/ARCHITECTURE.md) for trust boundaries and data flow, the [Phase 4B operations guide](docs/en/PHASE4B.md) for monitoring workflows, and the [Phase 4C staging guide](docs/en/PHASE4C.md) for CSR bootstrap and validation status.
+Read the [architecture guide](docs/en/ARCHITECTURE.md) for trust boundaries and data flow, the [Phase 4B operations guide](docs/en/PHASE4B.md) for monitoring workflows, the [Phase 4C staging guide](docs/en/PHASE4C.md) for CSR bootstrap and validation status, and the [public read-only staging guide](docs/en/STAGING_PUBLIC_READ_ONLY.md) for the optional public boundary.
 
 ## Quick install
 
@@ -88,6 +88,10 @@ Use restricted secret files, a bucket-scoped identity, Restic checks, and isolat
 ## Security design
 
 TLS 1.3 mTLS, signed tasks, replay defense, RBAC, TOTP, CSRF protection, rate limiting, approvals, and audit reduce blast radius but do not replace host hardening. See the [security model](docs/en/SECURITY_MODEL.md) and [security policy](SECURITY.md).
+
+Anonymous access is disabled by default. When explicitly enabled for a separate staging
+deployment, only dedicated field-allowlisted public APIs are reachable; it remains forbidden
+for production and protected panels.
 
 ## Roadmap
 

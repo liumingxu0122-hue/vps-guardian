@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import secrets
 import shlex
 import uuid
@@ -107,6 +108,11 @@ from guardian.schemas import (
     LoginResponse,
     NotificationChannelCreate,
     NotificationChannelView,
+    PublicHostCounts,
+    PublicHostResources,
+    PublicHostView,
+    PublicOverviewView,
+    PublicSessionView,
     RecoveryPointPromotionView,
     RecoveryPointVerifyRequest,
     RecoveryPointView,
@@ -118,6 +124,7 @@ from guardian.security import (
     create_access_token,
     generate_csrf_token,
     login_limiter,
+    require_public_read,
     require_role,
     verify_password,
     verify_totp,
@@ -125,6 +132,7 @@ from guardian.security import (
 from guardian.tasking import create_agent_task, serialize_agent_task
 
 router = APIRouter()
+PUBLIC_HOST_LIMIT = 500
 
 
 def approval_is_expired(approval: Approval, now: datetime) -> bool:
@@ -160,6 +168,7 @@ def expire_pending_approvals(db: Session, *, now: datetime | None = None) -> int
     return expired
 DB = Annotated[Session, Depends(get_db)]
 Config = Annotated[Settings, Depends(get_settings)]
+PublicRead = Annotated[None, Depends(require_public_read)]
 
 
 @router.get("/health", response_model=HealthResponse, tags=["system"])
@@ -244,6 +253,118 @@ def logout(response: Response, user: Annotated[User, Depends(require_role(Role.v
 @router.get("/api/v1/auth/me", response_model=UserView, tags=["auth"])
 def me(user: Annotated[User, Depends(require_role(Role.viewer))]) -> User:
     return user
+
+
+def _public_metric(payload: dict[str, object], key: str) -> float | None:
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    normalized = float(value)
+    return normalized if math.isfinite(normalized) and 0 <= normalized <= 100 else None
+
+
+def _public_host_view(db: Session, host: Host) -> PublicHostView:
+    snapshot = db.scalar(
+        select(MetricSnapshot)
+        .where(MetricSnapshot.host_id == host.id)
+        .order_by(desc(MetricSnapshot.collected_at))
+        .limit(1)
+    )
+    payload = snapshot.payload if snapshot is not None else {}
+    return PublicHostView(
+        name=host.name,
+        location=host.location,
+        status=host.status,
+        data_state=host.data_state,
+        last_seen_at=host.last_seen_at,
+        resources=PublicHostResources(
+            cpu_percent=_public_metric(payload, "cpu_percent"),
+            memory_percent=_public_metric(payload, "memory_percent"),
+            disk_percent=_public_metric(payload, "disk_percent"),
+            collected_at=snapshot.collected_at if snapshot is not None else None,
+        ),
+    )
+
+
+@router.api_route(
+    "/api/v1/public/session",
+    methods=["GET", "HEAD"],
+    response_model=PublicSessionView,
+    tags=["public-staging"],
+)
+def public_session(response: Response, _: PublicRead) -> PublicSessionView:
+    response.headers["Cache-Control"] = "no-store"
+    return PublicSessionView()
+
+
+@router.options("/api/v1/public/session", status_code=204, tags=["public-staging"])
+def public_session_options(response: Response, _: PublicRead) -> None:
+    response.headers["Cache-Control"] = "no-store"
+
+
+@router.api_route(
+    "/api/v1/public/hosts",
+    methods=["GET", "HEAD"],
+    response_model=list[PublicHostView],
+    tags=["public-staging"],
+)
+def public_hosts(response: Response, db: DB, _: PublicRead) -> list[PublicHostView]:
+    response.headers["Cache-Control"] = "no-store"
+    hosts = db.scalars(
+        select(Host)
+        .where(Host.enabled.is_(True))
+        .order_by(Host.name)
+        .limit(PUBLIC_HOST_LIMIT)
+    ).all()
+    return [_public_host_view(db, host) for host in hosts]
+
+
+@router.options("/api/v1/public/hosts", status_code=204, tags=["public-staging"])
+def public_hosts_options(response: Response, _: PublicRead) -> None:
+    response.headers["Cache-Control"] = "no-store"
+
+
+@router.api_route(
+    "/api/v1/public/overview",
+    methods=["GET", "HEAD"],
+    response_model=PublicOverviewView,
+    tags=["public-staging"],
+)
+def public_overview(response: Response, db: DB, _: PublicRead) -> PublicOverviewView:
+    response.headers["Cache-Control"] = "no-store"
+    rows = [
+        _public_host_view(db, host)
+        for host in db.scalars(
+            select(Host).where(Host.enabled.is_(True)).order_by(Host.name)
+            .limit(PUBLIC_HOST_LIMIT)
+        ).all()
+    ]
+    statuses = [row.status for row in rows]
+    counts = PublicHostCounts(
+        total=len(rows),
+        healthy=statuses.count("healthy"),
+        degraded=statuses.count("degraded"),
+        offline=statuses.count("offline"),
+        unknown=sum(status not in {"healthy", "degraded", "offline"} for status in statuses),
+    )
+    global_health: Literal["healthy", "degraded", "critical"]
+    if counts.offline:
+        global_health = "critical"
+    elif counts.degraded or counts.unknown:
+        global_health = "degraded"
+    else:
+        global_health = "healthy"
+    return PublicOverviewView(
+        generated_at=datetime.now(UTC),
+        global_health=global_health,
+        hosts=counts,
+        host_rows=rows,
+    )
+
+
+@router.options("/api/v1/public/overview", status_code=204, tags=["public-staging"])
+def public_overview_options(response: Response, _: PublicRead) -> None:
+    response.headers["Cache-Control"] = "no-store"
 
 
 def _snapshot_metric(snapshot: MetricSnapshot | None, key: str) -> float:

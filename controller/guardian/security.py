@@ -26,6 +26,19 @@ from guardian.models import Role, User
 
 password_hasher = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2)
 bearer = HTTPBearer(auto_error=False)
+PUBLIC_ANONYMOUS_ROUTES = frozenset(
+    {
+        ("GET", "/api/v1/public/session"),
+        ("HEAD", "/api/v1/public/session"),
+        ("OPTIONS", "/api/v1/public/session"),
+        ("GET", "/api/v1/public/overview"),
+        ("HEAD", "/api/v1/public/overview"),
+        ("OPTIONS", "/api/v1/public/overview"),
+        ("GET", "/api/v1/public/hosts"),
+        ("HEAD", "/api/v1/public/hosts"),
+        ("OPTIONS", "/api/v1/public/hosts"),
+    }
+)
 
 
 class LoginRateLimiter:
@@ -140,21 +153,54 @@ def enforce_csrf(request: Request) -> None:
         raise HTTPException(status_code=403, detail="CSRF validation failed")
 
 
+def _request_access_token(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None,
+) -> tuple[str | None, bool]:
+    if credentials is not None:
+        return credentials.credentials, True
+    if "guardian_session" in request.cookies:
+        return request.cookies["guardian_session"], True
+    return None, False
+
+
+def _authenticated_user(token: str, db: Session, settings: Settings) -> User:
+    payload = decode_access_token(token, settings)
+    user = db.scalar(select(User).where(User.id == str(payload["sub"])))
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="account disabled")
+    return user
+
+
 def get_current_user(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
     db: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> User:
-    token = credentials.credentials if credentials else request.cookies.get("guardian_session")
-    if not token:
+    token, credential_present = _request_access_token(request, credentials)
+    if not credential_present or token is None:
         raise HTTPException(status_code=401, detail="authentication required")
-    payload = decode_access_token(token, settings)
-    user = db.scalar(select(User).where(User.id == str(payload["sub"])))
-    if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="account disabled")
+    user = _authenticated_user(token, db, settings)
     enforce_csrf(request)
     return user
+
+
+def require_public_read(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    if not settings.anonymous_read_only:
+        raise HTTPException(status_code=404, detail="not found")
+    if (request.method, request.url.path) not in PUBLIC_ANONYMOUS_ROUTES:
+        raise HTTPException(status_code=404, detail="not found")
+    token, credential_present = _request_access_token(request, credentials)
+    if credential_present:
+        if token is None:
+            raise HTTPException(status_code=401, detail="invalid token")
+        _authenticated_user(token, db, settings)
 
 
 ROLE_ORDER = {

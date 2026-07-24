@@ -9,6 +9,7 @@ import {
   ClipboardCheck,
   FileClock,
   LayoutDashboard,
+  LogIn,
   LogOut,
   Menu,
   Moon,
@@ -48,8 +49,9 @@ const navItems = [
 const visibleItems = computed(() =>
   navItems.filter(
     (item) =>
-      !('minimumRole' in item) ||
-      roleOrder[session.user?.role ?? 'viewer'] >= roleOrder[item.minimumRole],
+      (!session.publicReadOnly || ['/overview', '/hosts'].includes(item.to)) &&
+      (!('minimumRole' in item) ||
+        roleOrder[session.user?.role ?? 'viewer'] >= roleOrder[item.minimumRole]),
   ),
 )
 
@@ -105,7 +107,7 @@ async function logout(): Promise<void> {
       </div>
       <div class="controller-state">
         <Activity :size="16" />
-        <div><span>{{ t('nav.currentSession') }}</span><strong>{{ t('nav.authenticated') }}</strong></div>
+        <div><span>{{ t('nav.currentSession') }}</span><strong>{{ session.publicReadOnly ? t('nav.publicReadOnly') : t('nav.authenticated') }}</strong></div>
         <span class="live-dot"></span>
       </div>
       <nav class="primary-nav" :aria-label="t('nav.main')">
@@ -132,8 +134,15 @@ async function logout(): Promise<void> {
           <Sun v-if="theme === 'dark'" :size="16" /><Moon v-else :size="16" />
           <span>{{ theme === 'dark' ? t('nav.light') : t('nav.dark') }}</span>
         </button>
-        <a href="/docs" target="_blank" rel="noreferrer"><BookOpenCheck :size="16" />{{ t('nav.apiDocs') }}</a>
-        <div class="user-row">
+        <a v-if="!session.publicReadOnly" href="/docs" target="_blank" rel="noreferrer"><BookOpenCheck :size="16" />{{ t('nav.apiDocs') }}</a>
+        <div v-if="session.publicReadOnly" class="user-row">
+          <div class="user-avatar"><ShieldCheck :size="16" /></div>
+          <div><strong>{{ t('nav.publicVisitor') }}</strong><span>{{ t('nav.publicReadOnly') }}</span></div>
+          <RouterLink class="icon-button" to="/login" :title="t('login.submit')" :aria-label="t('login.submit')">
+            <LogIn :size="17" />
+          </RouterLink>
+        </div>
+        <div v-else class="user-row">
           <div class="user-avatar">{{ session.user?.email.slice(0, 1).toUpperCase() }}</div>
           <div><strong>{{ session.user?.email }}</strong><span>{{ session.user?.role }}</span></div>
           <button class="icon-button" type="button" :title="t('nav.logout')" :aria-label="t('nav.logout')" @click="logout">

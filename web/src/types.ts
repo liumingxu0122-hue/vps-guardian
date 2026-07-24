@@ -5,6 +5,38 @@ export interface User {
   totp_enabled: boolean
 }
 
+export interface PublicSession {
+  mode: 'anonymous_read_only'
+  deployment_stage: 'staging'
+}
+
+export interface PublicHost {
+  name: string
+  location: string | null
+  status: Host['status']
+  data_state: Host['data_state']
+  last_seen_at: string | null
+  resources: {
+    cpu_percent: number | null
+    memory_percent: number | null
+    disk_percent: number | null
+    collected_at: string | null
+  }
+}
+
+export interface PublicOverview {
+  generated_at: string
+  global_health: 'healthy' | 'degraded' | 'critical'
+  hosts: {
+    total: number
+    healthy: number
+    degraded: number
+    offline: number
+    unknown: number
+  }
+  host_rows: PublicHost[]
+}
+
 export interface Host {
   id: string
   name: string

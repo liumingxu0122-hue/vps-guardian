@@ -4,6 +4,16 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ## [Unreleased]
 
+### Added
+
+- Added an opt-in public read-only staging view backed by dedicated allowlisted APIs and
+  field-allowlisted response models. Existing authenticated APIs, protected panels, repair,
+  recovery, audit, security, Agent identity, and configuration data remain private.
+- Added fail-closed startup validation that rejects anonymous mode outside staging or when
+  production is marked deployed, plus explicit Compose defaults that keep anonymous mode off.
+- Added separate public and authenticated Web flows. Invalid Bearer or Guardian session
+  credentials never fall back to anonymous access, while unrelated preference cookies are ignored.
+
 ## [0.3.0-alpha.1] - 2026-07-23
 
 ### English

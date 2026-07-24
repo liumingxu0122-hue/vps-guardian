@@ -18,7 +18,12 @@ const router = createRouter({
       component: OperationsLayout,
       children: [
         { path: '', redirect: '/overview' },
-        { path: 'overview', name: 'overview', component: () => import('./views/OverviewView.vue') },
+        {
+          path: 'overview',
+          name: 'overview',
+          component: () => import('./views/OverviewEntryView.vue'),
+          meta: { publicReadOnly: true },
+        },
         ...hostRoutes,
         { path: 'services', name: 'services', component: () => import('./views/ServicesView.vue') },
         { path: 'alerts', name: 'alerts', component: () => import('./views/AlertsView.vue') },
@@ -63,6 +68,10 @@ const roleOrder = { viewer: 0, operator: 1, admin: 2, owner: 3 }
 router.beforeEach(async (to) => {
   await session.restore()
   if (to.meta.public) return session.user ? { name: 'overview' } : true
+  if (session.publicReadOnly) {
+    if (to.name === 'host-detail') return { name: 'hosts' }
+    return to.meta.publicReadOnly ? true : { name: 'overview' }
+  }
   if (!session.user) return { name: 'login', query: { redirect: to.fullPath } }
   const minimum = to.meta.minimumRole as keyof typeof roleOrder | undefined
   if (minimum && roleOrder[session.user.role] < roleOrder[minimum]) return { name: 'overview' }

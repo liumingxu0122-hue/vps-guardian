@@ -2494,6 +2494,10 @@ a:focus-visible {
   font-size: 9px;
 }
 
+.public-host-row {
+  grid-template-columns: minmax(150px, 1.4fr) 88px repeat(3, 62px) 92px;
+}
+
 .operations-host-row:hover {
   background: var(--panel-raised);
 }

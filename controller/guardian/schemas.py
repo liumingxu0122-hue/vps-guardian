@@ -35,6 +35,42 @@ class UserView(ORMModel):
     totp_enabled: bool
 
 
+class PublicSessionView(BaseModel):
+    mode: Literal["anonymous_read_only"] = "anonymous_read_only"
+    deployment_stage: Literal["staging"] = "staging"
+
+
+class PublicHostResources(BaseModel):
+    cpu_percent: float | None = Field(default=None, ge=0, le=100)
+    memory_percent: float | None = Field(default=None, ge=0, le=100)
+    disk_percent: float | None = Field(default=None, ge=0, le=100)
+    collected_at: datetime | None
+
+
+class PublicHostView(BaseModel):
+    name: str
+    location: str | None
+    status: str
+    data_state: str
+    last_seen_at: datetime | None
+    resources: PublicHostResources
+
+
+class PublicHostCounts(BaseModel):
+    total: int
+    healthy: int
+    degraded: int
+    offline: int
+    unknown: int
+
+
+class PublicOverviewView(BaseModel):
+    generated_at: datetime
+    global_health: Literal["healthy", "degraded", "critical"]
+    hosts: PublicHostCounts
+    host_rows: list[PublicHostView]
+
+
 class HostCreate(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,119}$")
     address: str = Field(min_length=1, max_length=255)

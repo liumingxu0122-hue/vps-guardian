@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     trusted_proxy_cert_header_secret: SecretStr = SecretStr("")
     auto_create_schema: bool = True
     secure_cookies: bool = False
+    anonymous_read_only: bool = False
     log_level: str = "INFO"
     max_incident_log_bytes: int = Field(default=2_000_000, ge=10_000, le=20_000_000)
     login_attempts_per_10m: int = Field(default=5, ge=2, le=20)
@@ -76,6 +77,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> Settings:
+        if self.anonymous_read_only:
+            if self.deployment_stage != "staging":
+                raise ValueError("GUARDIAN_ANONYMOUS_READ_ONLY is restricted to staging")
+            if self.production_deployed:
+                raise ValueError(
+                    "GUARDIAN_ANONYMOUS_READ_ONLY is forbidden when production is deployed"
+                )
         if self.environment == "production":
             if self.database_url_file is None:
                 raise ValueError("GUARDIAN_DATABASE_URL_FILE is required in production")

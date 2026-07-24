@@ -11,4 +11,14 @@ VPS Guardian assumes that managed hosts, networks, operators, and external stora
 - Secrets stay server-side in restricted files or secret stores; the Web bundle must contain none.
 - Backup credentials should be bucket-scoped and restores must be isolated and verified.
 
+## Public staging boundary
+
+Optional anonymous staging access uses a separate public API namespace and explicit response
+models. It does not grant the viewer role or reuse authenticated inventory, snapshot, incident,
+repair, recovery, audit, Agent identity, notification, or settings responses. Missing
+credentials may enter only the fixed public method/path allowlist. A Bearer token or
+`guardian_session` cookie is always validated when present and never falls back to anonymous
+access. Preference and unrelated cookies are not credentials. See
+[Public read-only staging panel](STAGING_PUBLIC_READ_ONLY.md).
+
 Report vulnerabilities privately according to the repository `SECURITY.md`. Do not include live credentials, private keys, personal data, or production evidence in an issue.

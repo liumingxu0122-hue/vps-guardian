@@ -5,12 +5,13 @@ export const hostRoutes: RouteRecordRaw[] = [
     path: 'hosts',
     alias: 'vps',
     name: 'hosts',
-    component: () => import('./views/HostsView.vue'),
+    component: () => import('./views/HostsEntryView.vue'),
+    meta: { publicReadOnly: true },
   },
   {
     path: 'hosts/:hostId',
     alias: 'vps/:hostId',
     name: 'host-detail',
-    component: () => import('./views/HostsView.vue'),
+    component: () => import('./views/HostsEntryView.vue'),
   },
 ]
