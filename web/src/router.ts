@@ -19,8 +19,10 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/overview' },
         { path: 'overview', name: 'overview', component: () => import('./views/OverviewView.vue') },
+        { path: 'attention', name: 'attention', component: () => import('./views/AttentionView.vue') },
         ...hostRoutes,
         { path: 'services', name: 'services', component: () => import('./views/ServicesView.vue') },
+        { path: 'topology', name: 'topology', component: () => import('./views/TopologyView.vue') },
         { path: 'alerts', name: 'alerts', component: () => import('./views/AlertsView.vue') },
         {
           path: 'incidents',
@@ -44,6 +46,30 @@ const router = createRouter({
           path: 'audit',
           name: 'audit',
           component: () => import('./views/AuditView.vue'),
+          meta: { minimumRole: 'admin' },
+        },
+        {
+          path: 'security',
+          name: 'security',
+          component: () => import('./views/SecurityView.vue'),
+          meta: { minimumRole: 'admin' },
+        },
+        {
+          path: 'users',
+          name: 'users',
+          component: () => import('./views/UsersView.vue'),
+          meta: { minimumRole: 'admin' },
+        },
+        {
+          path: 'agents',
+          name: 'agents',
+          component: () => import('./views/AgentsView.vue'),
+          meta: { minimumRole: 'admin' },
+        },
+        {
+          path: 'notifications',
+          name: 'notifications',
+          component: () => import('./views/NotificationsView.vue'),
           meta: { minimumRole: 'admin' },
         },
         {

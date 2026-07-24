@@ -27,17 +27,18 @@ import EmptyState from '../components/EmptyState.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import TrendChart from '../components/TrendChart.vue'
-import type { OperationsHost, Overview, ResourcePoint } from '../types'
+import type { OperationsHost, Overview, ResourcePoint, StabilityReport } from '../types'
 import { formatTime, relativeTime, titleize } from '../utils'
 
 const data = ref<Overview | null>(null)
+const stability = ref<StabilityReport | null>(null)
 const { t } = useI18n()
 const loading = ref(true)
 const refreshing = ref(false)
 const error = ref('')
 const permissionDenied = ref(false)
 const online = ref(navigator.onLine)
-const windowRange = ref<'24h' | '7d'>('24h')
+const windowRange = ref<'1h' | '24h' | '7d' | '30d'>('24h')
 const hostFilter = ref('all')
 const timelineHost = ref('all')
 const timelineLevel = ref('all')
@@ -50,7 +51,14 @@ const selectedSeries = computed<ResourcePoint[]>(() => {
   if (!data.value) return []
   if (hostFilter.value !== 'all') return data.value.resource_series[hostFilter.value] ?? []
   const buckets = new Map<number, ResourcePoint[]>()
-  const interval = windowRange.value === '24h' ? 15 * 60_000 : 60 * 60_000
+  const interval =
+    windowRange.value === '1h'
+      ? 5 * 60_000
+      : windowRange.value === '24h'
+        ? 15 * 60_000
+        : windowRange.value === '7d'
+          ? 60 * 60_000
+          : 4 * 60 * 60_000
   for (const point of Object.values(data.value.resource_series).flat()) {
     const bucket = Math.floor(new Date(point.at).getTime() / interval) * interval
     buckets.set(bucket, [...(buckets.get(bucket) ?? []), point])
@@ -119,7 +127,10 @@ async function load(background = false): Promise<void> {
   try {
     const params = new URLSearchParams({ window: windowRange.value })
     if (hostFilter.value !== 'all') params.set('host_id', hostFilter.value)
-    data.value = await request<Overview>(`/api/v1/overview?${params}`)
+    ;[data.value, stability.value] = await Promise.all([
+      request<Overview>(`/api/v1/overview?${params}`),
+      request<StabilityReport>(`/api/v1/stability?window=${windowRange.value}`),
+    ])
   } catch (caught) {
     permissionDenied.value = caught instanceof ApiError && caught.status === 403
     error.value = caught instanceof ApiError ? t(apiErrorKey(caught.status), { status: caught.status }) : t('overview.fetchFailed')
@@ -154,7 +165,8 @@ onBeforeUnmount(() => {
   <PageHeader :title="t('overview.title')" :description="t('overview.description')">
     <template #actions>
       <div class="overview-context" :aria-label="t('overview.environment')">
-        <span class="context-pill staging">Staging</span>
+        <span class="context-pill staging">{{ data?.environment.current ?? 'Staging' }}</span>
+        <span v-if="data" class="context-pill mono">v{{ data.environment.version }} · {{ data.environment.deployment_commit.slice(0, 8) }}</span>
         <span class="context-pill production">{{ t('overview.production') }} · {{ t('overview.notDeployed') }}</span>
       </div>
       <button class="icon-button bordered" type="button" :title="t('common.refresh')" :aria-label="t('common.refresh')" :disabled="refreshing" @click="load(true)">
@@ -186,6 +198,16 @@ onBeforeUnmount(() => {
       <div class="status-metric production-state"><ShieldCheck :size="18" /><span>{{ t('overview.production') }}</span><strong>{{ t('overview.notDeployed') }}</strong><small>{{ t('overview.planningOnly') }}</small></div>
     </section>
 
+    <section class="overview-section overview-attention">
+      <header class="overview-section-heading"><div><h2>{{ t('overview.needsAttention') }}</h2><span>{{ t('overview.healthWhy') }}</span></div><RouterLink to="/attention">{{ t('overview.fullList') }} <ArrowRight :size="14" /></RouterLink></header>
+      <div v-if="data.attention.length" class="overview-attention-grid">
+        <RouterLink v-for="item in data.attention.slice(0, 5)" :key="item.id" :to="item.href">
+          <StatusBadge :status="item.severity" /><div><strong>{{ item.object }}</strong><span>{{ item.reason }}</span></div><ArrowRight :size="14" />
+        </RouterLink>
+      </div>
+      <EmptyState v-else :title="t('attention.empty')" :detail="data.health_reasons[0]?.reason" />
+    </section>
+
     <section class="overview-section resource-section">
       <header class="overview-section-heading">
         <div><h2>{{ t('overview.resources') }}</h2><span>{{ selectedHost?.name ?? t('overview.aggregatedHosts') }}</span></div>
@@ -195,8 +217,10 @@ onBeforeUnmount(() => {
             <option v-for="host in data.host_rows" :key="host.id" :value="host.id">{{ host.name }}</option>
           </select>
           <div class="segmented-control" :aria-label="t('overview.range')">
+            <button type="button" :class="{ active: windowRange === '1h' }" @click="windowRange = '1h'">1h</button>
             <button type="button" :class="{ active: windowRange === '24h' }" @click="windowRange = '24h'">{{ t('overview.hours24') }}</button>
             <button type="button" :class="{ active: windowRange === '7d' }" @click="windowRange = '7d'">{{ t('overview.days7') }}</button>
+            <button type="button" :class="{ active: windowRange === '30d' }" @click="windowRange = '30d'">30d</button>
           </div>
         </div>
       </header>
@@ -208,6 +232,24 @@ onBeforeUnmount(() => {
       </div>
       <EmptyState v-else :title="t('overview.noSamples')" :detail="t('overview.waitingSamples')" />
       <div class="threshold-legend"><span><i class="warning"></i>{{ t('overview.warning80') }}</span><span><i class="critical"></i>{{ t('overview.critical90') }}</span><span v-if="data.resource_series_truncated">{{ t('overview.truncated') }}</span></div>
+    </section>
+
+    <section v-if="stability" class="overview-section stability-section">
+      <header class="overview-section-heading">
+        <div><h2>{{ t('overview.stability') }}</h2><span>{{ t('overview.stabilityDetail') }}</span></div>
+        <RouterLink to="/hosts">{{ t('overview.fullList') }} <ArrowRight :size="14" /></RouterLink>
+      </header>
+      <div class="stability-table">
+        <div class="stability-head"><span>{{ t('overview.host') }}</span><span>{{ t('overview.score') }}</span><span>Uptime</span><span>Heartbeat</span><span>Checks</span><span>{{ t('overview.confidence') }}</span></div>
+        <RouterLink v-for="host in stability.hosts.slice(0, 8)" :key="host.host_id" :to="`/hosts/${host.host_id}`" class="stability-row">
+          <span><strong>{{ host.host_name }}</strong><small>{{ host.reason }}</small></span>
+          <strong>{{ host.stability_score ?? '—' }}</strong>
+          <span>{{ host.uptime_score ?? '—' }}</span>
+          <span>{{ host.heartbeat_score ?? '—' }}</span>
+          <span>{{ host.check_success_score ?? '—' }}</span>
+          <span>{{ Math.round(host.confidence * 100) }}%</span>
+        </RouterLink>
+      </div>
     </section>
 
     <section class="overview-section hosts-section">

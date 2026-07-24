@@ -11,9 +11,28 @@ export class ApiError extends Error {
 
 interface RequestOptions extends RequestInit {
   body?: string
+  dedupe?: boolean
 }
 
+const inFlightGets = new Map<string, Promise<unknown>>()
+
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const method = (options.method ?? 'GET').toUpperCase()
+  const shouldDedupe = method === 'GET' && options.dedupe !== false && !options.signal
+  const requestKey = `${method}:${path}:${sessionStorage.getItem('guardian_token') ?? ''}`
+  const existing = inFlightGets.get(requestKey)
+  if (shouldDedupe && existing) return existing as Promise<T>
+
+  const operation = performRequest<T>(path, options)
+  if (shouldDedupe) {
+    inFlightGets.set(requestKey, operation)
+    void operation.finally(() => inFlightGets.delete(requestKey))
+  }
+  return operation
+}
+
+async function performRequest<T>(path: string, options: RequestOptions): Promise<T> {
+  const { dedupe: _dedupe, ...fetchOptions } = options
   const headers = new Headers(options.headers)
   const token = sessionStorage.getItem('guardian_token')
   const csrf = sessionStorage.getItem('guardian_csrf')
@@ -23,7 +42,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
   if (options.body) headers.set('Content-Type', 'application/json')
   const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
+    ...fetchOptions,
     headers,
     credentials: 'include',
   })

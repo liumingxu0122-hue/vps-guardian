@@ -1,0 +1,151 @@
+<script setup lang="ts">
+import { KeyRound, Pencil, Plus, RefreshCw, ShieldCheck, X } from '@lucide/vue'
+import { computed, onMounted, ref } from 'vue'
+
+import { jsonBody, request } from '../api'
+import PageHeader from '../components/PageHeader.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import { session } from '../session'
+import type { User } from '../types'
+import { formatTime } from '../utils'
+
+const users = ref<User[]>([])
+const dialog = ref<HTMLDialogElement | null>(null)
+const editDialog = ref<HTMLDialogElement | null>(null)
+const passwordDialog = ref<HTMLDialogElement | null>(null)
+const submitting = ref(false)
+const form = ref({ email: '', password: '', role: 'viewer' as User['role'], scopes: '' })
+const selected = ref<User | null>(null)
+const editForm = ref({ role: 'viewer' as User['role'], is_active: true, scopes: '', current_password: '' })
+const passwordForm = ref({ current_password: '', new_password: '' })
+const isOwner = computed(() => session.user?.role === 'owner')
+async function load(): Promise<void> {
+  users.value = await request<User[]>('/api/v1/users')
+}
+async function createUser(): Promise<void> {
+  submitting.value = true
+  try {
+    await request<User>('/api/v1/users', {
+      method: 'POST',
+      ...jsonBody({
+        email: form.value.email,
+        password: form.value.password,
+        role: form.value.role,
+        scopes: form.value.scopes.split(',').map((value) => value.trim()).filter(Boolean),
+      }),
+    })
+    dialog.value?.close()
+    form.value = { email: '', password: '', role: 'viewer', scopes: '' }
+    await load()
+  } finally {
+    submitting.value = false
+  }
+}
+async function revokeSessions(user: User): Promise<void> {
+  await request<void>(`/api/v1/users/${user.id}/revoke-sessions`, { method: 'POST' })
+}
+function openEdit(user: User): void {
+  selected.value = user
+  editForm.value = {
+    role: user.role,
+    is_active: user.is_active,
+    scopes: user.scopes.join(', '),
+    current_password: '',
+  }
+  editDialog.value?.showModal()
+}
+async function saveUser(): Promise<void> {
+  if (!selected.value) return
+  submitting.value = true
+  try {
+    await request<User>(`/api/v1/users/${selected.value.id}`, {
+      method: 'PATCH',
+      ...jsonBody({
+        role: editForm.value.role,
+        is_active: editForm.value.is_active,
+        scopes: editForm.value.scopes.split(',').map((value) => value.trim()).filter(Boolean),
+        current_password: editForm.value.current_password,
+      }),
+    })
+    editDialog.value?.close()
+    await load()
+  } finally {
+    submitting.value = false
+  }
+}
+function openPassword(user: User): void {
+  selected.value = user
+  passwordForm.value = { current_password: '', new_password: '' }
+  passwordDialog.value?.showModal()
+}
+async function rotatePassword(): Promise<void> {
+  if (!selected.value) return
+  submitting.value = true
+  try {
+    await request<void>(`/api/v1/users/${selected.value.id}/rotate-password`, {
+      method: 'POST',
+      ...jsonBody({
+        ...passwordForm.value,
+        confirmation: 'ROTATE USER CREDENTIAL',
+      }),
+    })
+    passwordDialog.value?.close()
+  } finally {
+    submitting.value = false
+  }
+}
+onMounted(load)
+</script>
+
+<template>
+  <PageHeader :title="$t('users.title')" :description="$t('users.description')">
+    <template #actions>
+      <button class="icon-button bordered" type="button" :aria-label="$t('common.refresh')" @click="load"><RefreshCw :size="17" /></button>
+      <button v-if="isOwner" class="primary-button" type="button" @click="dialog?.showModal()"><Plus :size="15" />{{ $t('users.add') }}</button>
+    </template>
+  </PageHeader>
+  <section class="data-table users-table">
+    <div class="data-table-head"><span>{{ $t('users.account') }}</span><span>{{ $t('users.role') }}</span><span>TOTP</span><span>{{ $t('users.lastLogin') }}</span><span>{{ $t('common.actions') }}</span></div>
+    <div v-for="user in users" :key="user.id" class="data-table-row">
+      <span><strong>{{ user.email }}</strong><small>{{ user.scopes.join(', ') || $t('users.roleDefault') }}</small></span>
+      <StatusBadge :status="user.is_active ? user.role : 'disabled'" />
+      <span><ShieldCheck :size="14" />{{ user.totp_enabled ? $t('common.enabled') : $t('common.disabled') }}</span>
+      <span>{{ formatTime(user.last_login_at) }}</span>
+      <span class="row-actions">
+        <button v-if="isOwner" class="icon-button bordered" type="button" :aria-label="$t('users.manage')" @click="openEdit(user)"><Pencil :size="14" /></button>
+        <button v-if="isOwner" class="icon-button bordered" type="button" :aria-label="$t('users.rotatePassword')" @click="openPassword(user)"><KeyRound :size="14" /></button>
+        <button class="secondary-button" type="button" @click="revokeSessions(user)">{{ $t('users.revokeSessions') }}</button>
+      </span>
+    </div>
+  </section>
+  <dialog ref="dialog" class="modal-dialog compact">
+    <form method="dialog" class="dialog-header"><div><h2>{{ $t('users.add') }}</h2><p>{{ $t('users.ownerOnly') }}</p></div><button class="icon-button"><X :size="18" /></button></form>
+    <form class="dialog-form" @submit.prevent="createUser">
+      <label><span>Email</span><input v-model="form.email" type="email" required /></label>
+      <label><span>{{ $t('login.password') }}</span><input v-model="form.password" type="password" minlength="14" required /></label>
+      <label><span>{{ $t('users.role') }}</span><select v-model="form.role"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="admin">Admin</option><option value="owner">Owner</option></select></label>
+      <label><span>{{ $t('users.scopes') }}</span><input v-model="form.scopes" placeholder="hosts:read, alerts:read" /></label>
+      <div class="dialog-actions"><button class="secondary-button" type="button" @click="dialog?.close()">{{ $t('common.cancel') }}</button><button class="primary-button" type="submit" :disabled="submitting">{{ $t('users.create') }}</button></div>
+    </form>
+  </dialog>
+  <dialog ref="editDialog" class="modal-dialog compact">
+    <form method="dialog" class="dialog-header"><div><h2>{{ $t('users.manage') }}</h2><p>{{ selected?.email }}</p></div><button class="icon-button"><X :size="18" /></button></form>
+    <form class="dialog-form" @submit.prevent="saveUser">
+      <label><span>{{ $t('users.role') }}</span><select v-model="editForm.role"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="admin">Admin</option><option value="owner">Owner</option></select></label>
+      <label class="toggle-line"><input v-model="editForm.is_active" type="checkbox" /><span>{{ $t('users.activeAccount') }}</span></label>
+      <label><span>{{ $t('users.scopes') }}</span><input v-model="editForm.scopes" /></label>
+      <label><span>{{ $t('users.currentPassword') }}</span><input v-model="editForm.current_password" type="password" minlength="12" required /></label>
+      <p class="permission-note">{{ $t('users.lastOwnerGuard') }}</p>
+      <div class="dialog-actions"><button class="secondary-button" type="button" @click="editDialog?.close()">{{ $t('common.cancel') }}</button><button class="primary-button" type="submit" :disabled="submitting">{{ $t('common.submit') }}</button></div>
+    </form>
+  </dialog>
+  <dialog ref="passwordDialog" class="modal-dialog compact">
+    <form method="dialog" class="dialog-header"><div><h2>{{ $t('users.rotatePassword') }}</h2><p>{{ selected?.email }}</p></div><button class="icon-button"><X :size="18" /></button></form>
+    <form class="dialog-form" @submit.prevent="rotatePassword">
+      <label><span>{{ $t('users.currentPassword') }}</span><input v-model="passwordForm.current_password" type="password" minlength="12" required /></label>
+      <label><span>{{ $t('users.newPassword') }}</span><input v-model="passwordForm.new_password" type="password" minlength="14" required /></label>
+      <p class="permission-note">{{ $t('users.rotationWarning') }}</p>
+      <div class="dialog-actions"><button class="secondary-button" type="button" @click="passwordDialog?.close()">{{ $t('common.cancel') }}</button><button class="danger-button" type="submit" :disabled="submitting">{{ $t('users.rotatePassword') }}</button></div>
+    </form>
+  </dialog>
+</template>

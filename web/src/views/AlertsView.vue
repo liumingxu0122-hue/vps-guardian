@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BellRing, CheckCheck, Clock3, RefreshCw, VolumeX, X } from '@lucide/vue'
+import { BellRing, CheckCheck, CircleX, Clock3, RefreshCw, UserCheck, VolumeX, X } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -84,6 +84,33 @@ async function silence(): Promise<void> {
   }
 }
 
+async function assignToMe(alert: Alert): Promise<void> {
+  if (!session.user) return
+  submitting.value = true
+  try {
+    await request<Alert>(`/api/v1/alerts/${alert.id}`, {
+      method: 'PATCH',
+      ...jsonBody({ assigned_to: session.user.id, note: 'assigned from alert center' }),
+    })
+    await load()
+  } finally {
+    submitting.value = false
+  }
+}
+
+async function closeAlert(alert: Alert): Promise<void> {
+  submitting.value = true
+  try {
+    await request<Alert>(`/api/v1/alerts/${alert.id}`, {
+      method: 'PATCH',
+      ...jsonBody({ assigned_to: alert.assigned_to, close: true, note: 'verified and closed' }),
+    })
+    await load()
+  } finally {
+    submitting.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -107,10 +134,13 @@ onMounted(load)
         <p>{{ alert.summary }}</p>
         <span><Clock3 :size="13" />{{ t('alerts.updated', { time: relativeTime(alert.last_observed_at) }) }} · {{ titleize(ruleMap[alert.rule_id]?.severity || 'warning') }}</span>
       </div>
-      <div v-if="canOperate && ['pending', 'firing'].includes(alert.state)" class="alert-actions">
-        <button class="secondary-button" type="button" :disabled="submitting" @click="acknowledge(alert)"><CheckCheck :size="15" />{{ t('alerts.acknowledge') }}</button>
-        <button class="secondary-button" type="button" :disabled="submitting" @click="openSilence(alert)"><VolumeX :size="15" />{{ t('alerts.silence') }}</button>
+      <div v-if="canOperate && alert.state !== 'closed'" class="alert-actions">
+        <button v-if="!alert.assigned_to" class="secondary-button" type="button" :disabled="submitting" @click="assignToMe(alert)"><UserCheck :size="15" />{{ t('alerts.assignMe') }}</button>
+        <button v-if="['pending', 'firing'].includes(alert.state)" class="secondary-button" type="button" :disabled="submitting" @click="acknowledge(alert)"><CheckCheck :size="15" />{{ t('alerts.acknowledge') }}</button>
+        <button v-if="['pending', 'firing', 'acknowledged'].includes(alert.state)" class="secondary-button" type="button" :disabled="submitting" @click="openSilence(alert)"><VolumeX :size="15" />{{ t('alerts.silence') }}</button>
+        <button v-if="['acknowledged', 'resolved'].includes(alert.state)" class="secondary-button" type="button" :disabled="submitting" @click="closeAlert(alert)"><CircleX :size="15" />{{ t('alerts.closeAlert') }}</button>
       </div>
+      <small v-if="alert.assigned_to">{{ t('alerts.assigned', { id: alert.assigned_to.slice(0, 8) }) }}</small>
       <small v-if="alert.silenced_until">{{ t('alerts.silencedUntil', { time: formatTime(alert.silenced_until) }) }}</small>
     </article>
   </section>

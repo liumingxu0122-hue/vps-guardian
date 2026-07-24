@@ -3,6 +3,11 @@ export interface User {
   email: string
   role: 'viewer' | 'operator' | 'admin' | 'owner'
   totp_enabled: boolean
+  is_active: boolean
+  scopes: string[]
+  last_login_at: string | null
+  disabled_at: string | null
+  created_at: string
 }
 
 export interface Host {
@@ -34,7 +39,9 @@ export interface Incident {
   title: string
   fault_type: string
   severity: number
-  status: 'open' | 'investigating' | 'mitigated' | 'resolved'
+  status: 'open' | 'acknowledged' | 'investigating' | 'mitigating' | 'resolved'
+  assigned_to: string | null
+  acknowledged_at: string | null
   confidence: number
   affected_hosts: string[]
   affected_services: string[]
@@ -45,7 +52,10 @@ export interface Incident {
   risk: string
   verification_plan: string[]
   first_seen_at: string
+  updated_at: string
   resolved_at: string | null
+  resolution_summary: string | null
+  postmortem: string | null
   timeline: Record<string, unknown>[]
 }
 
@@ -123,7 +133,7 @@ export interface Alert {
   id: string
   rule_id: string
   fingerprint: string
-  state: 'ok' | 'pending' | 'firing' | 'acknowledged' | 'silenced' | 'resolved'
+  state: 'ok' | 'pending' | 'firing' | 'acknowledged' | 'silenced' | 'resolved' | 'closed'
   consecutive_failures: number
   consecutive_successes: number
   first_observed_at: string
@@ -131,8 +141,10 @@ export interface Alert {
   fired_at: string | null
   acknowledged_at: string | null
   acknowledged_by: string | null
+  assigned_to: string | null
   silenced_until: string | null
   resolved_at: string | null
+  closed_at: string | null
   last_notified_at: string | null
   notification_count: number
   summary: string
@@ -142,11 +154,58 @@ export interface Alert {
 export interface NotificationChannel {
   id: string
   name: string
-  kind: 'telegram' | 'smtp' | 'webhook'
+  kind: 'telegram' | 'smtp' | 'discord' | 'webhook'
   enabled: boolean
   configuration: Record<string, string>
+  event_scope: string[]
+  severity_filter: string[]
+  retry_policy: Record<string, number>
   rate_limit_per_minute: number
   created_at: string
+}
+
+export interface NotificationDelivery {
+  id: string
+  channel_id: string
+  alert_id: string
+  event_type: string
+  status: 'pending' | 'delivered' | 'failed' | 'dead_letter'
+  attempt_count: number
+  next_attempt_at: string
+  delivered_at: string | null
+  response_code: number | null
+  error_summary: string | null
+  created_at: string
+}
+
+export interface AgentIdentity {
+  id: string
+  agent_id: string
+  generation: number
+  rotation_id: string | null
+  state: 'pending' | 'active' | 'retiring' | 'revoked' | 'retired'
+  certificate_fingerprint: string
+  certificate_serial: string | null
+  expires_at: string | null
+  verified_at: string | null
+  successful_heartbeats: number
+  last_pending_heartbeat_at: string | null
+  activated_at: string | null
+  retiring_at: string | null
+  revoked_at: string | null
+  retired_at: string | null
+  created_at: string
+}
+
+export interface ServiceCheckResult {
+  id: number
+  check_id: string
+  status: string
+  checked_at: string
+  latency_ms: number | null
+  status_code: number | null
+  message: string | null
+  details: Record<string, unknown>
 }
 
 export interface RecoveryPoint {
@@ -189,19 +248,31 @@ export interface Overview {
     production_deployed: boolean
     production_status: 'deployed' | 'not_deployed'
     gate_decision: string
+    version: string
+    deployment_commit: string
+    deployed_at: string | null
   }
-  global_health: 'healthy' | 'degraded' | 'critical'
+  global_health: 'healthy' | 'degraded' | 'critical' | 'unknown'
+  health_reasons: Array<{ severity: string; reason: string; object: string }>
+  attention: AttentionItem[]
   hosts: {
     total: number
+    inventory_total: number
+    unregistered: number
+    disabled: number
     healthy: number
     degraded: number
     offline: number
     unknown: number
   }
+  checks: { total: number; enabled: number; healthy: number; failed: number; unknown: number }
+  agent_versions: Record<string, number>
+  expiring_certificates: number
   incidents: { open: number; critical: number }
   alerts: { active: number; critical: number; warning: number }
   pending_approvals: number
   verified_recovery_points: number
+  notification_failures: number
   recent_incidents: Array<
     Pick<Incident, 'id' | 'title' | 'status' | 'severity' | 'fault_type' | 'first_seen_at'>
   >
@@ -237,7 +308,7 @@ export interface Overview {
     can_approve: boolean
     dangerous_actions: 'approval_required'
   }
-  resource_window: '24h' | '7d'
+  resource_window: '1h' | '24h' | '7d' | '30d'
   resource_series: Record<string, ResourcePoint[]>
   resource_series_truncated: boolean
   host_rows: OperationsHost[]
@@ -258,10 +329,16 @@ export interface OperationsHost {
   id: string
   name: string
   location: string | null
+  group: string | null
+  tags: string[]
+  data_state: Host['data_state']
+  enabled: boolean
   status: Host['status']
   last_heartbeat_at: string | null
   agent_serial: string | null
   certificate_status: 'valid' | 'expiring' | 'revoked' | 'missing'
+  certificate_expires_at: string | null
+  agent_version: string | null
   offline_queue: number
   failed_tasks: number
   queued_tasks: number
@@ -294,6 +371,10 @@ export interface TimelineEntry {
 
 export interface PublicSettings {
   environment: string
+  deployment_stage: string
+  release_version: string
+  deployment_commit: string
+  deployed_at: string | null
   secure_cookies: boolean
   auto_create_schema: boolean
   allowed_origins: string[]
@@ -308,7 +389,74 @@ export interface PublicSettings {
   max_metric_rows_per_host: number
   max_results_per_check: number
   external_notifications_enabled: boolean
+  settings_catalog: SettingCatalogItem[]
+  secret_status: Record<string, boolean>
   features: Record<string, boolean>
+}
+
+export interface SettingCatalogItem {
+  key: string
+  value: unknown
+  source: string
+  restart_required: boolean
+  risk: 'low' | 'medium' | 'high'
+}
+
+export interface AttentionItem {
+  id: string
+  type: string
+  severity: 'critical' | 'warning' | 'info'
+  object: string
+  reason: string
+  observed_at: string | null
+  duration_seconds: number | null
+  suggested_action: string
+  href: string
+}
+
+export interface AttentionResponse {
+  generated_at: string
+  global_health: Overview['global_health']
+  health_reasons: Overview['health_reasons']
+  items: AttentionItem[]
+}
+
+export interface StabilityHost {
+  host_id: string
+  host_name: string
+  group: string | null
+  location: string | null
+  status: 'scored' | 'no_data' | 'excluded'
+  reason: string
+  stability_score: number | null
+  uptime_score: number | null
+  heartbeat_score: number | null
+  check_success_score: number | null
+  failure_rate: number | null
+  mean_recovery_time: number | null
+  stale_ratio: number | null
+  alert_frequency: number | null
+  confidence: number
+  sample_count: number
+  check_count: number
+  is_new: boolean
+}
+
+export interface StabilityReport {
+  generated_at: string
+  window: '1h' | '24h' | '7d' | '30d'
+  formula_version: number
+  expected_heartbeat_interval_seconds: number
+  hosts: StabilityHost[]
+  aggregates: Array<{
+    group: string
+    location: string
+    host_count: number
+    scored_count: number
+    stability_score: number | null
+    uptime_score: number | null
+    check_success_score: number | null
+  }>
 }
 
 export interface LatestSnapshot {
