@@ -8,7 +8,7 @@ does not change this decision.
 | Phase 3 security | live CRL handshake rejection, fail-closed reload, rotation | NO-GO |
 | Phase 3 disaster recovery | current off-site backup and isolated restore | NO-GO |
 | Current RPO/RTO | measured current exercise, not historical values | NO-GO |
-| UI V2 and core pages | automated, accessibility, and visual evidence | In progress |
+| UI V2 and core pages | automated, accessibility, and visual evidence | GO in code; Staging pending |
 | Stability model | formula, API, tests, UI components | Code complete |
 | Alert/incident workflow | durable transitions, assignment, audit | Code complete |
 | Restricted repair/approval | allowlisted actions and staged verification | Existing preview; Staging revalidation pending |
@@ -21,8 +21,8 @@ does not change this decision.
 | Nezha 2.3.0 comparison | official-source study plus isolated runtime measurements | Study complete; benchmark pending |
 | Cross-cloud restore | recovery in a different failure domain | NO-GO |
 | Staging rollback | measured database/application rollback exercise | NO-GO |
-| Security scans | Critical 0; remediated/accepted High; Gitleaks; SBOM | CI pending |
-| Documentation/runbooks | reviewed bilingual operations set | In progress |
+| Security scans | Critical 0; remediated/accepted High; Gitleaks; SBOM | GO on PR checks |
+| Documentation/runbooks | reviewed bilingual operations set | Complete in branch; review pending |
 | Human authorization | signed production authorization table | Not granted |
 
 The historical Phase 3E `RPO ≈ 16s` and `RTO ≈ 50s` are accepted historical snapshots only.
@@ -46,9 +46,9 @@ No field may be auto-filled from CI. Approval is an external human decision.
 
 - Phase 3 Security: **NO-GO**
 - Phase 3 DR: **NO-GO**
-- Phase 4 Code: **pending final CI**
+- Phase 4 Code: **GO**
 - Phase 4 Feature: **NO-GO** until real notifications, fleet, and recovery gates
-- Phase 4 UI: **pending visual/accessibility evidence**
+- Phase 4 UI: **GO** for automated visual/accessibility evidence; Staging acceptance pending
 - Phase 4 Staging: **NO-GO**
 - Phase 4 Observation: **PENDING**
 - Production: **NO-GO**
