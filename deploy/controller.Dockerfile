@@ -20,7 +20,7 @@ RUN test "$(cat VERSION)" = '0.19.1' \
     && go run build.go -o /out/restic \
     && /out/restic version | grep -Eq '^restic 0\.19\.1 compiled with go1\.26\.5 '
 
-FROM python:3.13.14-slim-trixie@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 AS build
+FROM python:3.13.14-alpine3.24@sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0 AS build
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /src
@@ -30,61 +30,30 @@ COPY pyproject.toml README.md LICENSE ./
 COPY controller ./controller
 RUN python -m build --wheel --no-isolation
 
-FROM python:3.13.14-slim-trixie@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 AS database-client-build
-
-ARG DEBIAN_SNAPSHOT=20260720T000000Z
-RUN rm -f /etc/apt/sources.list.d/debian.sources \
-    && printf '%s\n' \
-      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT trixie main" \
-      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT trixie-updates main" \
-      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/$DEBIAN_SNAPSHOT trixie-security main" \
-      > /etc/apt/sources.list.d/vps-guardian-snapshot.list \
-    && apt-get -o Acquire::Check-Valid-Until=false update \
-    && apt-get install --no-install-recommends -y mariadb-client postgresql-client-17 \
-    && install -D -m 0555 /usr/bin/mariadb-dump /out/mysqldump \
-    && install -m 0555 /usr/lib/postgresql/17/bin/pg_dump /out/pg_dump \
-    && install -m 0555 /usr/lib/postgresql/17/bin/pg_restore /out/pg_restore \
-    && install -m 0555 /usr/lib/postgresql/17/bin/psql /out/psql \
-    && /out/mysqldump --version | grep -Eq '11\.8\.6-MariaDB' \
-    && /out/pg_dump --version | grep -Eq '^pg_dump \(PostgreSQL\) 17\.' \
-    && /out/pg_restore --version | grep -Eq '^pg_restore \(PostgreSQL\) 17\.' \
-    && /out/psql --version | grep -Eq '^psql \(PostgreSQL\) 17\.'
-
-FROM python:3.13.14-slim-trixie@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 AS runtime
+FROM python:3.13.14-alpine3.24@sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0 AS runtime
 
 ARG GUARDIAN_SOURCE_COMMIT=0000000000000000000000000000000000000000
-ARG DEBIAN_SNAPSHOT=20260720T000000Z
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PATH=/opt/guardian/bin:$PATH
 
-RUN rm -f /etc/apt/sources.list.d/debian.sources \
-    && printf '%s\n' \
-      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT trixie main" \
-      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT trixie-updates main" \
-      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/$DEBIAN_SNAPSHOT trixie-security main" \
-      > /etc/apt/sources.list.d/vps-guardian-snapshot.list \
-    && apt-get -o Acquire::Check-Valid-Until=false update \
-    && apt-get install --no-install-recommends -y \
+RUN apk add --no-cache \
       ca-certificates \
-      libpq5 \
-      mariadb-client-core \
-    && rm -rf /var/lib/apt/lists/* \
-    && rm -f /etc/apt/sources.list.d/vps-guardian-snapshot.list \
-    && groupadd --gid 10001 guardian \
-    && useradd --uid 10001 --gid guardian --home-dir /var/lib/vps-guardian --shell /usr/sbin/nologin guardian \
-    && groupadd --gid 10002 guardian-backup \
-    && useradd --uid 10002 --gid guardian-backup \
-      --home-dir /var/lib/vps-guardian-backup --shell /usr/sbin/nologin guardian-backup
-
-COPY --from=database-client-build /out/mysqldump /out/pg_dump /out/pg_restore /out/psql /usr/local/bin/
-RUN pg_dump --version | grep -Eq '^pg_dump \(PostgreSQL\) 17\.' \
+      mariadb-client=11.8.8-r0 \
+      postgresql17-client=17.10-r0 \
+    && addgroup -g 10001 -S guardian \
+    && adduser -u 10001 -S -D -H -h /var/lib/vps-guardian \
+      -s /sbin/nologin -G guardian guardian \
+    && addgroup -g 10002 -S guardian-backup \
+    && adduser -u 10002 -S -D -H -h /var/lib/vps-guardian-backup \
+      -s /sbin/nologin -G guardian-backup guardian-backup \
+    && pg_dump --version | grep -Eq '^pg_dump \(PostgreSQL\) 17\.' \
     && pg_restore --version | grep -Eq '^pg_restore \(PostgreSQL\) 17\.' \
     && psql --version | grep -Eq '^psql \(PostgreSQL\) 17\.' \
-    && mysql --version | grep -Eq '11\.8\.6-MariaDB' \
-    && mysqldump --version | grep -Eq '11\.8\.6-MariaDB'
+    && mysql --version | grep -Eq '11\.8\.8-MariaDB' \
+    && mysqldump --version | grep -Eq '11\.8\.8-MariaDB'
 COPY --from=restic-build /out/restic /usr/local/bin/restic
 COPY --from=restic-build /out/html-parser.py /usr/local/lib/python3.13/html/parser.py
 RUN echo '4274e9112adf3fa57c7f9afa7c9b5c631456b18b7403cc627cc5027d02cdd2ae  /usr/local/lib/python3.13/html/parser.py' \

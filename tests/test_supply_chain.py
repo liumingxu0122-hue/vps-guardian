@@ -36,29 +36,23 @@ def test_controller_image_uses_hashed_locks_and_separate_wheel_builder() -> None
     assert "USER guardian:guardian" in dockerfile
 
 
-def test_controller_runtime_apt_inputs_use_a_fixed_snapshot_and_explicit_packages() -> None:
+def test_controller_runtime_uses_a_pinned_alpine_base_and_explicit_packages() -> None:
     dockerfile = (ROOT / "deploy" / "controller.Dockerfile").read_text(encoding="utf-8")
-    assert "ARG DEBIAN_SNAPSHOT=20260720T000000Z" in dockerfile
-    assert "trixie main" in dockerfile
-    assert "trixie-security main" in dockerfile
-    assert "snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT" in dockerfile
-    assert "snapshot.debian.org/archive/debian-security/$DEBIAN_SNAPSHOT" in dockerfile
-    assert "Acquire::Check-Valid-Until=false" in dockerfile
-    for package in (
-        "ca-certificates",
-        "libpq5",
-        "mariadb-client-core",
-    ):
-        assert f"      {package}" in dockerfile
-    assert "AS database-client-build" in dockerfile
-    assert "install -D -m 0555 /usr/bin/mariadb-dump /out/mysqldump" in dockerfile
-    assert "install -m 0555 /usr/lib/postgresql/17/bin/pg_dump /out/pg_dump" in dockerfile
-    assert "COPY --from=database-client-build" in dockerfile
+    pinned_alpine = (
+        "python:3.13.14-alpine3.24@"
+        "sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0"
+    )
+    assert dockerfile.count(pinned_alpine) == 2
+    assert "mariadb-client=11.8.8-r0" in dockerfile
+    assert "postgresql17-client=17.10-r0" in dockerfile
+    assert "AS database-client-build" not in dockerfile
+    assert "apt-get" not in dockerfile
     runtime = dockerfile.split(" AS runtime", maxsplit=1)[1]
     assert "      curl" not in runtime
     assert "default-mysql-client" not in runtime
-    assert "      postgresql-client" not in runtime
-    assert "apt-get update " not in dockerfile
+    assert "mariadb-client-perl" not in runtime
+    assert "pg_dump --version" in runtime
+    assert "mysqldump --version" in runtime
 
 
 def test_postgres_image_rebuilds_gosu_with_the_fixed_go_toolchain() -> None:
