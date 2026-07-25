@@ -8,7 +8,7 @@ import EmptyState from '../components/EmptyState.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import { session } from '../session'
-import type { Agent, Host, ServiceCheck, ServiceSummary } from '../types'
+import type { Agent, Host, ServiceCheck, ServiceCheckResult, ServiceSummary } from '../types'
 import { formatTime, relativeTime, titleize } from '../utils'
 
 const { t } = useI18n()
@@ -16,6 +16,7 @@ const checks = ref<ServiceCheck[]>([])
 const observations = ref<ServiceSummary[]>([])
 const hosts = ref<Host[]>([])
 const agents = ref<Agent[]>([])
+const results = ref<ServiceCheckResult[]>([])
 const query = ref('')
 const loading = ref(true)
 const error = ref('')
@@ -52,11 +53,12 @@ async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const requests: [Promise<ServiceCheck[]>, Promise<ServiceSummary[]>] = [
+    const requests: [Promise<ServiceCheck[]>, Promise<ServiceSummary[]>, Promise<ServiceCheckResult[]>] = [
       request<ServiceCheck[]>('/api/v1/service-checks'),
       request<ServiceSummary[]>('/api/v1/services'),
+      request<ServiceCheckResult[]>('/api/v1/service-check-results?limit=100'),
     ]
-    ;[checks.value, observations.value] = await Promise.all(requests)
+    ;[checks.value, observations.value, results.value] = await Promise.all(requests)
     if (canManage.value) {
       ;[hosts.value, agents.value] = await Promise.all([
         request<Host[]>('/api/v1/hosts'),
@@ -76,6 +78,11 @@ function configuration(): Record<string, unknown> {
   if (newCheck.value.kind === 'tcp') return { target: newCheck.value.target, port: newCheck.value.port }
   if (newCheck.value.kind === 'icmp') return { target: newCheck.value.target }
   return { target: newCheck.value.target, expected_statuses: [200], max_response_bytes: 65536 }
+}
+
+function resultDetails(result: ServiceCheckResult): string {
+  const text = JSON.stringify(result.details, null, 2)
+  return text.length > 2000 ? `${text.slice(0, 2000)}…` : text
 }
 
 async function createCheck(): Promise<void> {
@@ -144,6 +151,16 @@ onMounted(load)
         </article>
       </div>
       <EmptyState v-else :title="t('services.noServices')" />
+    </section>
+    <section class="section-block">
+      <div class="section-heading"><div><h2>{{ t('services.history') }}</h2><span>{{ t('services.historyDetail') }}</span></div></div>
+      <div v-if="results.length" class="check-result-list">
+        <details v-for="result in results" :key="result.id">
+          <summary><StatusBadge :status="result.status" /><strong>{{ checks.find((check) => check.id === result.check_id)?.name ?? result.check_id }}</strong><span>{{ result.latency_ms === null ? '—' : `${result.latency_ms.toFixed(1)} ms` }}</span><time>{{ formatTime(result.checked_at) }}</time></summary>
+          <div><p>{{ result.message ?? t('services.noResultMessage') }}</p><pre v-if="Object.keys(result.details).length">{{ resultDetails(result) }}</pre></div>
+        </details>
+      </div>
+      <EmptyState v-else :title="t('services.noHistory')" />
     </section>
   </template>
 

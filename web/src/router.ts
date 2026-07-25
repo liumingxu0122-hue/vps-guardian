@@ -14,13 +14,20 @@ const router = createRouter({
       meta: { public: true },
     },
     {
+      path: '/identity-setup',
+      name: 'identity-setup',
+      component: () => import('./views/IdentitySetupView.vue'),
+    },
+    {
       path: '/',
       component: OperationsLayout,
       children: [
         { path: '', redirect: '/overview' },
         { path: 'overview', name: 'overview', component: () => import('./views/OverviewView.vue') },
+        { path: 'attention', name: 'attention', component: () => import('./views/AttentionView.vue') },
         ...hostRoutes,
         { path: 'services', name: 'services', component: () => import('./views/ServicesView.vue') },
+        { path: 'topology', name: 'topology', component: () => import('./views/TopologyView.vue') },
         { path: 'alerts', name: 'alerts', component: () => import('./views/AlertsView.vue') },
         {
           path: 'incidents',
@@ -28,6 +35,11 @@ const router = createRouter({
           component: () => import('./views/IncidentsView.vue'),
         },
         { path: 'repairs', name: 'repairs', component: () => import('./views/RepairsView.vue') },
+        {
+          path: 'account-security',
+          name: 'account-security',
+          component: () => import('./views/AccountSecurityView.vue'),
+        },
         {
           path: 'recovery',
           name: 'recovery',
@@ -47,6 +59,30 @@ const router = createRouter({
           meta: { minimumRole: 'admin' },
         },
         {
+          path: 'security',
+          name: 'security',
+          component: () => import('./views/SecurityView.vue'),
+          meta: { minimumRole: 'admin' },
+        },
+        {
+          path: 'users',
+          name: 'users',
+          component: () => import('./views/UsersView.vue'),
+          meta: { minimumRole: 'admin' },
+        },
+        {
+          path: 'agents',
+          name: 'agents',
+          component: () => import('./views/AgentsView.vue'),
+          meta: { minimumRole: 'admin' },
+        },
+        {
+          path: 'notifications',
+          name: 'notifications',
+          component: () => import('./views/NotificationsView.vue'),
+          meta: { minimumRole: 'admin' },
+        },
+        {
           path: 'settings',
           name: 'settings',
           component: () => import('./views/SettingsView.vue'),
@@ -62,8 +98,17 @@ const roleOrder = { viewer: 0, operator: 1, admin: 2, owner: 3 }
 
 router.beforeEach(async (to) => {
   await session.restore()
-  if (to.meta.public) return session.user ? { name: 'overview' } : true
+  if (to.meta.public) {
+    if (!session.user) return true
+    return session.user.identity_setup_required ? { name: 'identity-setup' } : { name: 'overview' }
+  }
   if (!session.user) return { name: 'login', query: { redirect: to.fullPath } }
+  if (session.user.identity_setup_required && to.name !== 'identity-setup') {
+    return { name: 'identity-setup' }
+  }
+  if (!session.user.identity_setup_required && to.name === 'identity-setup') {
+    return { name: 'overview' }
+  }
   const minimum = to.meta.minimumRole as keyof typeof roleOrder | undefined
   if (minimum && roleOrder[session.user.role] < roleOrder[minimum]) return { name: 'overview' }
   return true

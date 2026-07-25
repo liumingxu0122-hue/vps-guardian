@@ -73,10 +73,13 @@ def test_dashboard_overview_services_and_latest_snapshot(
 
     assert overview.status_code == 200
     assert overview.json()["hosts"] == {
-        "total": 2,
-        "healthy": 1,
+        "total": 0,
+        "inventory_total": 2,
+        "unregistered": 2,
+        "disabled": 0,
+        "healthy": 0,
         "degraded": 0,
-        "offline": 1,
+        "offline": 0,
         "unknown": 0,
     }
     assert overview.json()["incidents"]["critical"] == 1
@@ -96,10 +99,11 @@ def test_operations_overview_validates_window_and_host(
     seed_dashboard()
     headers = {"Authorization": f"Bearer {owner_token}"}
 
-    invalid_window = client.get("/api/v1/overview?window=30d", headers=headers)
+    long_window = client.get("/api/v1/overview?window=30d", headers=headers)
     missing_host = client.get("/api/v1/overview?host_id=missing", headers=headers)
 
-    assert invalid_window.status_code == 422
+    assert long_window.status_code == 200
+    assert long_window.json()["resource_window"] == "30d"
     assert missing_host.status_code == 404
 
 

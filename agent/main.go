@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -11,7 +13,7 @@ import (
 	"time"
 )
 
-func run(config Config) error {
+func run(config Config, build BuildInfo) error {
 	queue := NewDiskQueue(config.QueueFile, config.MaxQueueBytes)
 	client, err := NewControllerClient(config)
 	if err != nil {
@@ -25,7 +27,13 @@ func run(config Config) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	for {
-		snapshot, err := collectSnapshot(config, queue, pendingChecks, registry.RestartCount())
+		snapshot, err := collectSnapshot(
+			config,
+			queue,
+			pendingChecks,
+			registry.RestartCount(),
+			build,
+		)
 		if err != nil {
 			log.Printf("snapshot collection failed: %v", err)
 		} else {
@@ -71,14 +79,67 @@ func run(config Config) error {
 	}
 }
 
-func main() {
-	configPath := flag.String("config", "/etc/vps-guardian-agent/config.json", "absolute config path")
-	flag.Parse()
-	config, err := loadConfig(*configPath)
+type cliDependencies struct {
+	buildInfo  func() (BuildInfo, error)
+	loadConfig func(string) (Config, error)
+	run        func(Config, BuildInfo) error
+}
+
+func executeCLI(
+	arguments []string,
+	stdout io.Writer,
+	stderr io.Writer,
+	dependencies cliDependencies,
+) int {
+	if len(arguments) == 1 && (arguments[0] == "version" || arguments[0] == "--version") {
+		info, err := dependencies.buildInfo()
+		if err != nil {
+			fmt.Fprintf(stderr, "version error: %v\n", err)
+			return 1
+		}
+		printBuildInfo(stdout, info)
+		return 0
+	}
+	flags := flag.NewFlagSet("guardian-agent", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String(
+		"config",
+		"/etc/vps-guardian-agent/config.json",
+		"absolute config path",
+	)
+	if err := flags.Parse(arguments); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "unexpected positional arguments")
+		return 2
+	}
+	build, err := dependencies.buildInfo()
 	if err != nil {
-		log.Fatalf("configuration error: %v", err)
+		fmt.Fprintf(stderr, "build metadata error: %v\n", err)
+		return 1
 	}
-	if err := run(config); err != nil {
-		log.Fatalf("agent stopped: %v", err)
+	config, err := dependencies.loadConfig(*configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
 	}
+	if err := dependencies.run(config, build); err != nil {
+		fmt.Fprintf(stderr, "agent stopped: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func main() {
+	os.Exit(executeCLI(
+		os.Args[1:],
+		os.Stdout,
+		os.Stderr,
+		cliDependencies{
+			buildInfo:  currentBuildInfo,
+			loadConfig: loadConfig,
+			run:        run,
+		},
+	))
 }

@@ -11,16 +11,11 @@ import (
 type Snapshot struct {
 	CollectedAt string            `json:"collected_at"`
 	Version     string            `json:"version"`
+	Build       BuildInfo         `json:"build"`
 	Metrics     map[string]any    `json:"metrics"`
 	Services    []map[string]any  `json:"services"`
 	Events      []json.RawMessage `json:"events"`
 }
-
-var (
-	agentVersion = "0.3.0-alpha.1"
-	buildCommit  = "unknown"
-	buildTime    = "unknown"
-)
 
 func collectCommand(ctx context.Context, name string, arguments ...string) string {
 	output, err := exec.CommandContext(ctx, name, arguments...).CombinedOutput()
@@ -71,7 +66,13 @@ func collectServices(ctx context.Context, config Config) []map[string]any {
 	return services
 }
 
-func collectSnapshot(config Config, queue *DiskQueue, checks []RemoteCheck, restartCount int64) (Snapshot, error) {
+func collectSnapshot(
+	config Config,
+	queue *DiskQueue,
+	checks []RemoteCheck,
+	restartCount int64,
+	build BuildInfo,
+) (Snapshot, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.CommandTimeout))
 	defer cancel()
 	metrics, err := collectHostMetrics(config.DiskPath)
@@ -87,12 +88,24 @@ func collectSnapshot(config Config, queue *DiskQueue, checks []RemoteCheck, rest
 		return Snapshot{}, err
 	}
 	metrics["offline_queue_depth"] = queueDepth
-	metrics["agent_version"] = agentVersion
-	metrics["agent_build_commit"] = buildCommit
-	metrics["agent_build_time"] = buildTime
+	metrics["agent_version"] = build.Version
+	metrics["agent_build_commit"] = build.GitSHA
+	metrics["agent_build_time"] = build.BuildTime
+	metrics["agent_build_id"] = build.BuildID
+	metrics["agent_binary_sha256"] = build.BinarySHA256
+	metrics["agent_target_os"] = build.TargetOS
+	metrics["agent_target_arch"] = build.TargetArch
+	metrics["agent_build_dirty"] = build.Dirty
 	metrics["agent_restart_count"] = restartCount
 	metrics["probes"] = collectProbes(ctx, config)
 	services := collectServices(ctx, config)
 	services = append(services, runRemoteChecks(ctx, config, checks)...)
-	return Snapshot{time.Now().UTC().Format(time.RFC3339Nano), agentVersion, metrics, services, events}, nil
+	return Snapshot{
+		time.Now().UTC().Format(time.RFC3339Nano),
+		build.Version,
+		build,
+		metrics,
+		services,
+		events,
+	}, nil
 }

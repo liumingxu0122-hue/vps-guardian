@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -73,9 +74,27 @@ class Settings(BaseSettings):
     operations_security_scan_at: datetime | None = None
     operations_uncovered_critical: int | None = Field(default=None, ge=0, le=1_000_000)
     operations_uncovered_high: int | None = Field(default=None, ge=0, le=1_000_000)
+    release_version: str = Field(default="0.3.0-alpha.1", max_length=64)
+    deployment_commit: str = Field(default="unknown", max_length=64)
+    deployed_at: datetime | None = None
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> Settings:
+        if self.production_deployed:
+            if self.environment != "production" or self.deployment_stage != "production":
+                raise ValueError(
+                    "production deployment requires both secure runtime and production stage"
+                )
+            if self.operations_gate_decision != "approved_for_production":
+                raise ValueError(
+                    "production deployment requires an explicit approved production gate"
+                )
+            if not re.fullmatch(
+                r"[0-9a-f]{40}", self.deployment_commit
+            ) or self.deployment_commit == "0" * 40:
+                raise ValueError(
+                    "production deployment requires an immutable 40-character commit"
+                )
         if self.environment == "production":
             if self.database_url_file is None:
                 raise ValueError("GUARDIAN_DATABASE_URL_FILE is required in production")

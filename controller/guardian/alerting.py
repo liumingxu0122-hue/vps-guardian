@@ -94,11 +94,20 @@ def _record_transition(
 def _schedule_notifications(
     db: Session, alert: AlertInstance, event_type: str, now: datetime
 ) -> bool:
+    rule = db.get(AlertRule, alert.rule_id)
     channels = db.scalars(
         select(NotificationChannel).where(NotificationChannel.enabled.is_(True))
     )
     scheduled = False
     for channel in channels:
+        if channel.event_scope and event_type not in channel.event_scope:
+            continue
+        if (
+            channel.severity_filter
+            and rule is not None
+            and rule.severity not in channel.severity_filter
+        ):
+            continue
         db.add(
             NotificationDelivery(
                 channel_id=channel.id,

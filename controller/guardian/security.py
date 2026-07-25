@@ -22,9 +22,11 @@ from sqlalchemy.orm import Session
 
 from guardian.config import Settings, get_settings
 from guardian.database import get_db
-from guardian.models import Role, User
+from guardian.identity import as_utc, forced_setup_required
+from guardian.models import Role, User, UserSession
 
 password_hasher = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2)
+dummy_password_hash = password_hasher.hash("vps-guardian-dummy-login-equalizer")
 bearer = HTTPBearer(auto_error=False)
 
 
@@ -62,12 +64,21 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_access_token(user: User, settings: Settings) -> tuple[str, int]:
+def verify_user_password(password: str, user: User | None) -> bool:
+    """Run the same Argon2 verification path even when the identifier is unknown."""
+    return verify_password(password, user.password_hash if user else dummy_password_hash)
+
+
+def create_access_token(
+    user: User, settings: Settings, *, session_id: str
+) -> tuple[str, int]:
     now = datetime.now(UTC)
     ttl = settings.jwt_ttl_minutes * 60
     payload = {
         "sub": user.id,
         "role": user.role,
+        "sv": user.session_version,
+        "sid": session_id,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(seconds=ttl)).timestamp()),
         "jti": secrets.token_urlsafe(16),
@@ -112,13 +123,30 @@ def decrypt_sensitive(value: str, settings: Settings) -> str:
         raise ValueError("encrypted value cannot be decrypted") from exc
 
 
+def totp_counter_for_code(
+    secret: str, code: str | None, *, now: datetime | None = None
+) -> int | None:
+    if not code:
+        return None
+    checked_at = now or datetime.now(UTC)
+    totp = pyotp.TOTP(secret)
+    current_counter = int(checked_at.timestamp()) // totp.interval
+    for counter in range(current_counter - 1, current_counter + 2):
+        if secrets.compare_digest(totp.generate_otp(counter), code):
+            return counter
+    return None
+
+
 def verify_totp(user: User, code: str | None, settings: Settings) -> bool:
     if not user.totp_enabled:
         return True
     if not code or not user.totp_secret_encrypted:
         return False
     secret = decrypt_sensitive(user.totp_secret_encrypted, settings)
-    return bool(pyotp.TOTP(secret).verify(code, valid_window=1))
+    counter = totp_counter_for_code(secret, code)
+    return counter is not None and (
+        user.last_totp_counter is None or counter > user.last_totp_counter
+    )
 
 
 def canonical_json(data: object) -> bytes:
@@ -140,6 +168,50 @@ def enforce_csrf(request: Request) -> None:
         raise HTTPException(status_code=403, detail="CSRF validation failed")
 
 
+SCOPE_PREFIXES = {
+    "/api/v1/overview": "operations",
+    "/api/v1/attention": "operations",
+    "/api/v1/stability": "operations",
+    "/api/v1/hosts": "hosts",
+    "/api/v1/services": "services",
+    "/api/v1/service-checks": "services",
+    "/api/v1/service-check-results": "services",
+    "/api/v1/alerts": "alerts",
+    "/api/v1/alert-rules": "alerts",
+    "/api/v1/incidents": "incidents",
+    "/api/v1/repairs": "repairs",
+    "/api/v1/approvals": "approvals",
+    "/api/v1/recovery-points": "recovery",
+    "/api/v1/audit": "audit",
+    "/api/v1/users": "users",
+    "/api/v1/agents": "agents",
+    "/api/v1/notification": "notifications",
+    "/api/v1/settings": "settings",
+}
+
+
+def enforce_explicit_scopes(request: Request, user: User) -> None:
+    """Treat non-empty scopes as an additional least-privilege restriction."""
+    if not user.scopes or request.url.path.startswith("/api/v1/auth/"):
+        return
+    resource = next(
+        (
+            scope_resource
+            for prefix, scope_resource in SCOPE_PREFIXES.items()
+            if request.url.path.startswith(prefix)
+        ),
+        "system",
+    )
+    action = "read" if request.method in {"GET", "HEAD", "OPTIONS"} else "write"
+    allowed = {
+        "*:*",
+        f"{resource}:*",
+        f"{resource}:{action}",
+    }
+    if not allowed.intersection(user.scopes):
+        raise HTTPException(status_code=403, detail="explicit scope denied")
+
+
 def get_current_user(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
@@ -153,7 +225,42 @@ def get_current_user(
     user = db.scalar(select(User).where(User.id == str(payload["sub"])))
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="account disabled")
+    if payload.get("sv") != user.session_version:
+        raise HTTPException(status_code=401, detail="session revoked")
+    session_id = payload.get("sid")
+    if not isinstance(session_id, str):
+        raise HTTPException(status_code=401, detail="server session required")
+    auth_session = db.scalar(
+        select(UserSession).where(
+            UserSession.id == session_id,
+            UserSession.user_id == user.id,
+        )
+    )
+    now = datetime.now(UTC)
+    if (
+        auth_session is None
+        or auth_session.revoked_at is not None
+        or as_utc(auth_session.expires_at) <= now
+        or auth_session.session_version != user.session_version
+    ):
+        raise HTTPException(status_code=401, detail="session revoked or expired")
+    request.state.auth_session = auth_session
     enforce_csrf(request)
+    forced_paths = {
+        "/api/v1/auth/me",
+        "/api/v1/auth/logout",
+        "/api/v1/auth/change-password",
+        "/api/v1/auth/totp/setup",
+        "/api/v1/auth/totp/enable",
+        "/api/v1/auth/recovery-codes/confirm",
+        "/api/v1/auth/recovery-codes/regenerate",
+    }
+    if forced_setup_required(user) and request.url.path not in forced_paths:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "identity_setup_required"},
+        )
+    enforce_explicit_scopes(request, user)
     return user
 
 

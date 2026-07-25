@@ -35,6 +35,12 @@ function openDecision(value: typeof decision.value): void {
   decisionDialog.value?.showModal()
 }
 
+function formatValue(value: unknown): string {
+  if (value === null || value === undefined) return '—'
+  if (typeof value === 'object') return JSON.stringify(value, null, 2)
+  return String(value)
+}
+
 async function submitDecision(): Promise<void> {
   if (!selected.value) return
   submitting.value = true
@@ -70,8 +76,8 @@ onMounted(load)
       <header><div><span class="mono">{{ selected.id }}</span><h2>{{ titleize(selected.action_name) }}</h2></div><StatusBadge :status="selected.status" /></header>
       <div class="risk-banner"><ShieldAlert :size="20" /><div><strong>{{ t('approvals.risk', { level: selected.risk_level }) }}</strong><span>{{ t('approvals.incident', { id: selected.incident_id }) }}</span></div></div>
       <div class="approval-columns">
-        <section><h3>{{ t('approvals.parameters') }}</h3><dl class="key-values"><div v-for="(value, key) in selected.parameters" :key="key"><dt>{{ titleize(String(key)) }}</dt><dd>{{ String(value) }}</dd></div></dl></section>
-        <section><h3>{{ t('approvals.impact') }}</h3><dl class="key-values"><div v-for="(value, key) in selected.impact" :key="key"><dt>{{ titleize(String(key)) }}</dt><dd>{{ String(value) }}</dd></div></dl></section>
+        <section><h3>{{ t('approvals.parameters') }}</h3><dl class="key-values"><div v-for="(value, key) in selected.parameters" :key="key"><dt>{{ titleize(String(key)) }}</dt><dd><pre v-if="typeof value === 'object'">{{ formatValue(value) }}</pre><template v-else>{{ formatValue(value) }}</template></dd></div></dl></section>
+        <section><h3>{{ t('approvals.impact') }}</h3><dl class="key-values"><div v-for="(value, key) in selected.impact" :key="key"><dt>{{ titleize(String(key)) }}</dt><dd><pre v-if="typeof value === 'object'">{{ formatValue(value) }}</pre><template v-else>{{ formatValue(value) }}</template></dd></div></dl></section>
       </div>
       <section><h3>{{ t('approvals.rollback') }}</h3><div class="recovery-reference"><FileCheck2 :size="18" /><div><strong>{{ selected.recovery_point_id || t('approvals.noRecovery') }}</strong><span>{{ selected.rollback_plan.join(' · ') || t('approvals.noRollback') }}</span></div></div></section>
       <div v-if="selected.status === 'pending' && canDecide" class="approval-actions">

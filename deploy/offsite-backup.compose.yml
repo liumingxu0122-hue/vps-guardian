@@ -1,0 +1,28 @@
+services:
+  backup:
+    environment:
+      RESTIC_REPOSITORY: ""
+      RESTIC_REPOSITORY_FILE: /run/secrets/offsite_restic_repository
+      RESTIC_PASSWORD_FILE: /run/secrets/offsite_restic_password
+      RESTIC_LOCAL_REPOSITORY_ROOT: ""
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/offsite_aws_access_key_id
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/offsite_aws_secret_access_key
+      AWS_DEFAULT_REGION_FILE: /run/secrets/offsite_aws_default_region
+    secrets:
+      - offsite_restic_repository
+      - offsite_restic_password
+      - offsite_aws_access_key_id
+      - offsite_aws_secret_access_key
+      - offsite_aws_default_region
+
+secrets:
+  offsite_restic_repository:
+    file: ${GUARDIAN_OFFSITE_SECRETS_DIR:?set GUARDIAN_OFFSITE_SECRETS_DIR}/restic-repository
+  offsite_restic_password:
+    file: ${GUARDIAN_OFFSITE_SECRETS_DIR:?set GUARDIAN_OFFSITE_SECRETS_DIR}/restic-password
+  offsite_aws_access_key_id:
+    file: ${GUARDIAN_OFFSITE_SECRETS_DIR:?set GUARDIAN_OFFSITE_SECRETS_DIR}/aws-access-key-id
+  offsite_aws_secret_access_key:
+    file: ${GUARDIAN_OFFSITE_SECRETS_DIR:?set GUARDIAN_OFFSITE_SECRETS_DIR}/aws-secret-access-key
+  offsite_aws_default_region:
+    file: ${GUARDIAN_OFFSITE_SECRETS_DIR:?set GUARDIAN_OFFSITE_SECRETS_DIR}/aws-default-region

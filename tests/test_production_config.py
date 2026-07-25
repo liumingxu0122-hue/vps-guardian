@@ -62,6 +62,30 @@ def test_secure_production_configuration_is_accepted(tmp_path: Path) -> None:
     assert settings.environment == "production"
 
 
+def test_production_deployed_requires_stage_gate_and_immutable_commit(
+    tmp_path: Path,
+) -> None:
+    values = production_values(tmp_path)
+    values["production_deployed"] = True
+    with pytest.raises(ValidationError, match="production stage"):
+        Settings(**values)  # type: ignore[arg-type]
+
+    values["deployment_stage"] = "production"
+    with pytest.raises(ValidationError, match="approved production gate"):
+        Settings(**values)  # type: ignore[arg-type]
+
+    values["operations_gate_decision"] = "approved_for_production"
+    with pytest.raises(ValidationError, match="immutable 40-character commit"):
+        Settings(**values)  # type: ignore[arg-type]
+
+    values["deployment_commit"] = "0" * 40
+    with pytest.raises(ValidationError, match="immutable 40-character commit"):
+        Settings(**values)  # type: ignore[arg-type]
+
+    values["deployment_commit"] = "a" * 40
+    assert Settings(**values).production_deployed is True  # type: ignore[arg-type]
+
+
 def test_production_model_import_has_no_pki_import_cycle(tmp_path: Path) -> None:
     values = production_values(tmp_path)
     environment = os.environ.copy()

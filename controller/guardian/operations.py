@@ -9,6 +9,7 @@ from typing import Literal
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from guardian import __version__
 from guardian.config import Settings
 from guardian.models import (
     Agent,
@@ -22,13 +23,16 @@ from guardian.models import (
     Host,
     Incident,
     MetricSnapshot,
+    NotificationDelivery,
     RecoveryPoint,
     RepairAttempt,
     Role,
+    ServiceCheck,
+    ServiceCheckResult,
     User,
 )
 
-Window = Literal["24h", "7d"]
+Window = Literal["1h", "24h", "7d", "30d"]
 ROLE_ORDER = {
     Role.viewer.value: 0,
     Role.operator.value: 1,
@@ -88,7 +92,13 @@ def _resource_series(
     window: Window,
     host_id: str | None,
 ) -> tuple[dict[str, list[dict[str, object]]], bool]:
-    cutoff = datetime.now(UTC) - (timedelta(hours=24) if window == "24h" else timedelta(days=7))
+    durations = {
+        "1h": timedelta(hours=1),
+        "24h": timedelta(hours=24),
+        "7d": timedelta(days=7),
+        "30d": timedelta(days=30),
+    }
+    cutoff = datetime.now(UTC) - durations[window]
     statement = select(
         MetricSnapshot.host_id,
         MetricSnapshot.collected_at,
@@ -247,10 +257,16 @@ def build_operations_overview(
                 "id": host.id,
                 "name": host.name,
                 "location": host.location,
+                "group": host.group_name,
+                "tags": host.tags,
                 "status": host.status,
+                "data_state": host.data_state,
+                "enabled": host.enabled,
                 "last_heartbeat_at": _iso(agent.last_heartbeat_at if agent else host.last_seen_at),
+                "agent_version": agent.version if agent else None,
                 "agent_serial": agent.certificate_serial if agent else None,
                 "certificate_status": certificate_status,
+                "certificate_expires_at": _iso(identity.expires_at if identity else None),
                 "offline_queue": offline_depth,
                 "failed_tasks": task_counts[agent.id]["failed"] if agent else 0,
                 "queued_tasks": task_counts[agent.id]["queued"] if agent else 0,
@@ -294,6 +310,21 @@ def build_operations_overview(
             select(RecoveryPoint).order_by(desc(RecoveryPoint.created_at)).limit(500)
         ).all()
     )
+    checks = list(database.scalars(select(ServiceCheck).order_by(ServiceCheck.name)).all())
+    latest_check_results: dict[str, ServiceCheckResult] = {}
+    for result in database.scalars(
+        select(ServiceCheckResult)
+        .order_by(desc(ServiceCheckResult.checked_at))
+        .limit(5_000)
+    ).all():
+        latest_check_results.setdefault(result.check_id, result)
+    deliveries = list(
+        database.scalars(
+            select(NotificationDelivery)
+            .order_by(desc(NotificationDelivery.created_at))
+            .limit(500)
+        ).all()
+    )
     verified_points = [point for point in recovery_points if point.verified]
     accepted = verified_points[0] if verified_points else None
     accepted_value = settings.operations_accepted_snapshot or (
@@ -306,14 +337,15 @@ def build_operations_overview(
     if backup_status == "unknown" and accepted:
         backup_status = "healthy"
 
+    eligible_hosts = [host for host in hosts if host.enabled and host.id in agent_by_host]
+    unregistered_hosts = [host for host in hosts if host.enabled and host.id not in agent_by_host]
+    disabled_hosts = [host for host in hosts if not host.enabled]
     host_statuses = {name: 0 for name in ("healthy", "degraded", "offline", "unknown")}
-    for host in hosts:
+    for host in eligible_hosts:
         host_statuses[host.status if host.status in host_statuses else "unknown"] += 1
     active_incidents = [incident for incident in incidents if incident.status != "resolved"]
     critical_incidents = [incident for incident in active_incidents if incident.severity >= 4]
-    active_alerts = [
-        alert for alert in alerts if alert.state not in {"ok", "resolved"}
-    ]
+    active_alerts = [alert for alert in alerts if alert.state not in {"ok", "resolved", "closed"}]
     critical_alerts = [
         alert
         for alert in active_alerts
@@ -326,16 +358,207 @@ def build_operations_overview(
         if alert_rules.get(alert.rule_id) is not None
         and alert_rules[alert.rule_id].severity == "warning"
     ]
-    global_health = "healthy"
-    if critical_incidents or critical_alerts or host_statuses["offline"]:
-        global_health = "critical"
-    elif (
-        active_incidents
-        or warning_alerts
-        or host_statuses["degraded"]
-        or host_statuses["unknown"]
-    ):
-        global_health = "degraded"
+    attention: list[dict[str, object]] = []
+
+    def add_attention(
+        *,
+        key: str,
+        kind: str,
+        severity: str,
+        target: str,
+        reason: str,
+        observed_at: datetime | None,
+        action: str,
+        href: str,
+    ) -> None:
+        aware = _aware(observed_at)
+        attention.append(
+            {
+                "id": key,
+                "type": kind,
+                "severity": severity,
+                "object": target,
+                "reason": reason,
+                "observed_at": _iso(aware),
+                "duration_seconds": (
+                    max(0, int((now - aware).total_seconds())) if aware else None
+                ),
+                "suggested_action": action,
+                "href": href,
+            }
+        )
+
+    for host in eligible_hosts:
+        agent = agent_by_host[host.id]
+        if host.status == "offline":
+            add_attention(
+                key=f"host-offline-{host.id}",
+                kind="host_offline",
+                severity="critical",
+                target=host.name,
+                reason="an enrolled Agent is outside the heartbeat window",
+                observed_at=agent.last_heartbeat_at or host.last_seen_at,
+                action="inspect heartbeat, Agent service, and recent network changes",
+                href=f"/hosts/{host.id}",
+            )
+        elif host.data_state in {"stale", "no_data", "agent_error"}:
+            add_attention(
+                key=f"host-data-{host.id}",
+                kind="host_data",
+                severity="warning",
+                target=host.name,
+                reason=f"host data state is {host.data_state}",
+                observed_at=host.last_seen_at,
+                action="inspect collection errors and sample freshness",
+                href=f"/hosts/{host.id}",
+            )
+        identity = identity_by_agent.get(agent.id)
+        expires_at = _aware(identity.expires_at if identity else None)
+        if expires_at and expires_at <= now + timedelta(days=30):
+            add_attention(
+                key=f"certificate-{host.id}",
+                kind="certificate_expiry",
+                severity="warning",
+                target=host.name,
+                reason="the active Agent certificate expires within 30 days",
+                observed_at=identity.created_at if identity else None,
+                action="review and schedule the bounded certificate rotation",
+                href="/agents",
+            )
+        if task_counts[agent.id]["failed"]:
+            add_attention(
+                key=f"task-failed-{agent.id}",
+                kind="repair_failure",
+                severity="warning",
+                target=host.name,
+                reason=f"{task_counts[agent.id]['failed']} Agent task(s) failed",
+                observed_at=agent.last_heartbeat_at,
+                action="review the repair result and verification evidence",
+                href="/repairs",
+            )
+    for host in unregistered_hosts:
+        add_attention(
+            key=f"host-unregistered-{host.id}",
+            kind="unregistered",
+            severity="warning",
+            target=host.name,
+            reason="inventory exists but no Agent identity is enrolled",
+            observed_at=host.created_at,
+            action="enroll the host or disable the inventory row",
+            href=f"/hosts/{host.id}",
+        )
+    for alert in critical_alerts + warning_alerts:
+        rule = alert_rules.get(alert.rule_id)
+        add_attention(
+            key=f"alert-{alert.id}",
+            kind="alert",
+            severity=rule.severity if rule else "warning",
+            target=alert.summary or alert.id,
+            reason=f"alert state is {alert.state}",
+            observed_at=alert.fired_at or alert.first_observed_at,
+            action="acknowledge, assign, or create an incident",
+            href="/alerts",
+        )
+    for incident in active_incidents:
+        add_attention(
+            key=f"incident-{incident.id}",
+            kind="incident",
+            severity="critical" if incident.severity >= 4 else "warning",
+            target=incident.title,
+            reason=f"incident is {incident.status}",
+            observed_at=incident.first_seen_at,
+            action="assign an owner and advance the incident workflow",
+            href="/incidents",
+        )
+    for approval in approvals:
+        if approval.status != "pending":
+            continue
+        add_attention(
+            key=f"approval-{approval.id}",
+            kind="approval",
+            severity="warning",
+            target=approval.action_name,
+            reason="a bounded repair is waiting for an independent decision",
+            observed_at=approval.requested_at,
+            action="review impact, dry run, rollback, and expiry",
+            href="/approvals",
+        )
+    for check in checks:
+        check_result = latest_check_results.get(check.id)
+        if (
+            check.enabled
+            and check_result
+            and check_result.status in {"failed", "error"}
+        ):
+            add_attention(
+                key=f"check-{check.id}",
+                kind="service_check",
+                severity=check.severity,
+                target=check.name,
+                reason=check_result.message
+                or f"latest check result is {check_result.status}",
+                observed_at=check_result.checked_at,
+                action="inspect structured evidence and the associated alert",
+                href="/services",
+            )
+    for delivery in deliveries:
+        if delivery.status not in {"failed", "dead_letter"}:
+            continue
+        add_attention(
+            key=f"delivery-{delivery.id}",
+            kind="notification",
+            severity="warning",
+            target=delivery.event_type,
+            reason=f"notification delivery is {delivery.status}",
+            observed_at=delivery.created_at,
+            action="inspect the channel reference and retry history",
+            href="/notifications",
+        )
+    if backup_status != "healthy":
+        add_attention(
+            key="backup-status",
+            kind="backup",
+            severity="warning",
+            target="backup and restore",
+            reason=f"backup verification status is {backup_status}",
+            observed_at=backup_checked_at,
+            action="run an isolated verification before accepting a recovery point",
+            href="/recovery",
+        )
+    severity_order = {"critical": 0, "warning": 1, "info": 2}
+    attention.sort(
+        key=lambda item: (
+            severity_order.get(str(item["severity"]), 9),
+            str(item.get("observed_at") or ""),
+        )
+    )
+    critical_reasons = [item for item in attention if item["severity"] == "critical"]
+    warning_reasons = [item for item in attention if item["severity"] == "warning"]
+    global_health = (
+        "critical"
+        if critical_reasons
+        else "unknown"
+        if not eligible_hosts
+        else "degraded"
+        if warning_reasons
+        else "healthy"
+    )
+    health_reasons = [
+        {
+            "severity": item["severity"],
+            "reason": item["reason"],
+            "object": item["object"],
+        }
+        for item in attention[:5]
+    ]
+    if not health_reasons and global_health == "healthy":
+        health_reasons = [
+            {
+                "severity": "info",
+                "reason": "no active critical or warning condition matched",
+                "object": "staging",
+            }
+        ]
 
     role = ROLE_ORDER.get(user.role, 0)
     can_recover = role >= ROLE_ORDER[Role.operator.value]
@@ -419,6 +642,33 @@ def build_operations_overview(
             for host in hosts
         ],
     ]
+    agent_versions: dict[str, int] = defaultdict(int)
+    for agent in agents:
+        agent_versions[agent.version or "unknown"] += 1
+    expiring_certificates = 0
+    for identity in identities:
+        expires_at = _aware(identity.expires_at)
+        if expires_at and expires_at <= now + timedelta(days=30):
+            expiring_certificates += 1
+    check_summary = {
+        "total": len(checks),
+        "enabled": sum(check.enabled for check in checks),
+        "healthy": sum(
+            latest_check_results.get(check.id) is not None
+            and latest_check_results[check.id].status in {"ok", "unsupported"}
+            for check in checks
+            if check.enabled
+        ),
+        "failed": sum(
+            latest_check_results.get(check.id) is not None
+            and latest_check_results[check.id].status in {"failed", "error"}
+            for check in checks
+            if check.enabled
+        ),
+        "unknown": sum(
+            latest_check_results.get(check.id) is None for check in checks if check.enabled
+        ),
+    }
 
     return {
         "generated_at": _iso(now),
@@ -427,9 +677,23 @@ def build_operations_overview(
             "production_deployed": settings.production_deployed,
             "production_status": "deployed" if settings.production_deployed else "not_deployed",
             "gate_decision": settings.operations_gate_decision,
+            "version": settings.release_version or __version__,
+            "deployment_commit": settings.deployment_commit,
+            "deployed_at": _iso(settings.deployed_at),
         },
         "global_health": global_health,
-        "hosts": {"total": len(hosts), **host_statuses},
+        "health_reasons": health_reasons,
+        "attention": attention,
+        "hosts": {
+            "total": len(eligible_hosts),
+            "inventory_total": len(hosts),
+            "unregistered": len(unregistered_hosts),
+            "disabled": len(disabled_hosts),
+            **host_statuses,
+        },
+        "checks": check_summary,
+        "agent_versions": dict(sorted(agent_versions.items())),
+        "expiring_certificates": expiring_certificates,
         "incidents": {"open": len(active_incidents), "critical": len(critical_incidents)},
         "alerts": {
             "active": len(active_alerts),
@@ -438,6 +702,9 @@ def build_operations_overview(
         },
         "pending_approvals": sum(approval.status == "pending" for approval in approvals),
         "verified_recovery_points": len(verified_points),
+        "notification_failures": sum(
+            delivery.status in {"failed", "dead_letter"} for delivery in deliveries
+        ),
         "recent_incidents": [
             {
                 "id": incident.id,

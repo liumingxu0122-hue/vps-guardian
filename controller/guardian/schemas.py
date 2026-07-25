@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from guardian.agent_security import normalize_certificate_fingerprint
 
@@ -15,10 +15,24 @@ class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+def validate_password_strength(value: str) -> str:
+    if len(set(value)) < 8 or value.casefold() in {
+        "passwordpassword",
+        "correcthorsebatterystaple",
+    }:
+        raise ValueError("password does not meet the passphrase strength policy")
+    if any(ord(character) < 32 for character in value):
+        raise ValueError("password contains control characters")
+    return value
+
+
 class LoginRequest(BaseModel):
     email: str = Field(min_length=3, max_length=255)
     password: str = Field(min_length=12, max_length=256)
     totp_code: str | None = Field(default=None, pattern=r"^\d{6}$")
+    recovery_code: str | None = Field(
+        default=None, min_length=16, max_length=32, pattern=r"^[A-Za-z0-9-]+$"
+    )
 
 
 class LoginResponse(BaseModel):
@@ -26,6 +40,8 @@ class LoginResponse(BaseModel):
     token_type: Literal["bearer"] = "bearer"  # noqa: S105 - OAuth token type, not a secret.
     csrf_token: str
     expires_in: int
+    identity_setup_required: bool
+    recovery_codes_remaining: int | None = None
 
 
 class UserView(ORMModel):
@@ -33,6 +49,119 @@ class UserView(ORMModel):
     email: str
     role: str
     totp_enabled: bool
+    is_active: bool
+    scopes: list[str]
+    last_login_at: datetime | None
+    password_changed_at: datetime | None
+    totp_enabled_at: datetime | None
+    disabled_at: datetime | None
+    must_change_password: bool
+    identity_setup_required: bool
+    created_by: str | None
+    disabled_by: str | None
+    created_at: datetime
+
+
+class UserCreate(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=14, max_length=256)
+    role: Literal["viewer", "operator", "admin", "owner"] = "viewer"
+    scopes: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if "@" not in normalized:
+            raise ValueError("email address is invalid")
+        return normalized
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return validate_password_strength(value)
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, value: list[str]) -> list[str]:
+        normalized = sorted({scope.strip() for scope in value if scope.strip()})
+        if len(normalized) != len(value) or any(len(scope) > 80 for scope in normalized):
+            raise ValueError("scopes must be unique non-empty values")
+        return normalized
+
+
+class UserUpdate(BaseModel):
+    role: Literal["viewer", "operator", "admin", "owner"] | None = None
+    is_active: bool | None = None
+    scopes: list[str] | None = Field(default=None, max_length=32)
+    current_password: str = Field(min_length=12, max_length=256)
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, value: list[str] | None) -> list[str] | None:
+        return UserCreate.validate_scopes(value) if value is not None else None
+
+
+class UserPasswordReset(BaseModel):
+    current_password: str = Field(min_length=12, max_length=256)
+    new_password: str = Field(min_length=14, max_length=256)
+    confirmation: Literal["ROTATE USER CREDENTIAL"]
+
+    _validate_password = field_validator("new_password")(validate_password_strength)
+
+
+class UserDeleteRequest(BaseModel):
+    current_password: str = Field(min_length=12, max_length=256)
+    confirmation: Literal["DELETE USER"]
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=12, max_length=256)
+    new_password: str = Field(min_length=14, max_length=256)
+    retain_current_session: Literal[True] = True
+
+    _validate_password = field_validator("new_password")(validate_password_strength)
+
+
+class ReauthenticationRequest(BaseModel):
+    current_password: str = Field(min_length=12, max_length=256)
+
+
+class TotpConfirmRequest(ReauthenticationRequest):
+    totp_code: str = Field(pattern=r"^\d{6}$")
+
+
+class RecoveryCodesConfirmRequest(BaseModel):
+    confirmation: Literal["I SAVED MY RECOVERY CODES"]
+
+
+class RecoveryCodeBatchView(BaseModel):
+    codes: list[str]
+    remaining: int
+    displayed_once: Literal[True] = True
+
+
+class TotpSetupView(BaseModel):
+    secret: str
+    provisioning_uri: str
+    displayed_once: Literal[True] = True
+
+
+class RecoveryCodeStatusView(BaseModel):
+    remaining: int
+    low: bool
+
+
+class UserSessionView(ORMModel):
+    id: str
+    user_id: str
+    issued_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None
+    revoke_reason: str | None
+    user_agent_digest: str
+    ip_digest: str
+    current: bool = False
 
 
 class HostCreate(BaseModel):
@@ -161,6 +290,17 @@ class ServiceCheckView(ORMModel):
     updated_at: datetime
 
 
+class ServiceCheckResultView(ORMModel):
+    id: int
+    check_id: str
+    status: str
+    checked_at: datetime
+    latency_ms: float | None
+    status_code: int | None
+    message: str | None
+    details: dict[str, Any]
+
+
 class AlertRuleCreate(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,119}$")
     source_type: Literal["service_check", "host_liveness", "agent_error"]
@@ -202,8 +342,10 @@ class AlertView(ORMModel):
     fired_at: datetime | None
     acknowledged_at: datetime | None
     acknowledged_by: str | None
+    assigned_to: str | None
     silenced_until: datetime | None
     resolved_at: datetime | None
+    closed_at: datetime | None
     last_notified_at: datetime | None
     notification_count: int
     summary: str
@@ -222,11 +364,22 @@ class AlertSilenceRequest(BaseModel):
         return value.astimezone(UTC)
 
 
+class AlertUpdateRequest(BaseModel):
+    assigned_to: str | None = Field(default=None, max_length=36)
+    close: bool = False
+    note: str = Field(default="", max_length=500)
+
+
 class NotificationChannelCreate(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,119}$")
-    kind: Literal["telegram", "smtp", "webhook"]
+    kind: Literal["telegram", "smtp", "discord", "webhook"]
     enabled: bool = True
     configuration: dict[str, str]
+    event_scope: list[str] = Field(default_factory=list, max_length=32)
+    severity_filter: list[Literal["info", "warning", "critical"]] = Field(
+        default_factory=list
+    )
+    retry_policy: dict[str, int] = Field(default_factory=dict)
     rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
 
     @field_validator("configuration")
@@ -247,7 +400,24 @@ class NotificationChannelView(ORMModel):
     kind: str
     enabled: bool
     configuration: dict[str, Any]
+    event_scope: list[str]
+    severity_filter: list[str]
+    retry_policy: dict[str, Any]
     rate_limit_per_minute: int
+    created_at: datetime
+
+
+class NotificationDeliveryView(ORMModel):
+    id: str
+    channel_id: str
+    alert_id: str
+    event_type: str
+    status: str
+    attempt_count: int
+    next_attempt_at: datetime
+    delivered_at: datetime | None
+    response_code: int | None
+    error_summary: str | None
     created_at: datetime
 
 
@@ -257,6 +427,8 @@ class IncidentView(ORMModel):
     fault_type: str
     severity: int
     status: str
+    assigned_to: str | None
+    acknowledged_at: datetime | None
     confidence: float
     affected_hosts: list[str]
     affected_services: list[str]
@@ -267,8 +439,21 @@ class IncidentView(ORMModel):
     risk: str
     verification_plan: list[str]
     first_seen_at: datetime
+    updated_at: datetime
     resolved_at: datetime | None
+    resolution_summary: str | None
+    postmortem: str | None
     timeline: list[dict[str, Any]]
+
+
+class IncidentUpdateRequest(BaseModel):
+    status: Literal[
+        "open", "acknowledged", "investigating", "mitigating", "resolved"
+    ] | None = None
+    assigned_to: str | None = Field(default=None, max_length=36)
+    note: str = Field(default="", max_length=1000)
+    resolution_summary: str | None = Field(default=None, max_length=4000)
+    postmortem: str | None = Field(default=None, max_length=20_000)
 
 
 class ApprovalView(ORMModel):
@@ -446,6 +631,14 @@ class AgentView(ORMModel):
     revoked_at: datetime | None
     last_heartbeat_at: datetime | None
     version: str | None
+    build_git_sha: str | None
+    build_id: str | None
+    build_time: str | None
+    go_version: str | None
+    platform_os: str | None
+    platform_arch: str | None
+    build_dirty: bool | None
+    binary_sha256: str | None
 
 
 class AgentRotateRequest(BaseModel):
@@ -506,12 +699,38 @@ class AgentIdentityValidateRequest(BaseModel):
     expected_version: int = Field(ge=1)
 
 
+class AgentBuildMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: str = Field(min_length=1, max_length=64)
+    git_sha: str = Field(pattern=r"^(?:unknown|[A-Fa-f0-9]{40})$")
+    build_id: str = Field(min_length=1, max_length=128)
+    build_time: str = Field(min_length=1, max_length=64)
+    go_version: str = Field(pattern=r"^go[0-9A-Za-z.+_-]{1,61}$")
+    os: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,31}$")
+    arch: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,31}$")
+    dirty: bool
+    binary_sha256: str = Field(pattern=r"^[A-Fa-f0-9]{64}$")
+
+    @field_validator("git_sha", "binary_sha256")
+    @classmethod
+    def normalize_digest(cls, value: str) -> str:
+        return value.lower()
+
+
 class AgentHeartbeat(BaseModel):
     collected_at: datetime
-    version: str = Field(max_length=64)
+    version: str = Field(min_length=1, max_length=64)
+    build: AgentBuildMetadata | None = None
     metrics: dict[str, Any]
     services: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
     events: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
+
+    @model_validator(mode="after")
+    def require_consistent_build_version(self) -> AgentHeartbeat:
+        if self.build is not None and self.build.version != self.version:
+            raise ValueError("Agent build version must match heartbeat version")
+        return self
 
 
 class HealthResponse(BaseModel):

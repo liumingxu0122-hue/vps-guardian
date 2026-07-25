@@ -51,8 +51,17 @@ services:
       dockerfile: deploy/postgres.Dockerfile
       args:
         GUARDIAN_SOURCE_COMMIT: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+        GUARDIAN_RELEASE_VERSION: ${VPS_GUARDIAN_RELEASE_VERSION:-0.0.0-development}
+        GUARDIAN_BUILD_TIME: ${VPS_GUARDIAN_BUILD_TIME:-1970-01-01T00:00:00Z}
+        GUARDIAN_SOURCE_URL: ${VPS_GUARDIAN_SOURCE_URL:-https://github.com/liumingxu0122-hue/vps-guardian}
+        GUARDIAN_LICENSE: ${VPS_GUARDIAN_LICENSE:-Apache-2.0}
       labels:
         org.vps-guardian.source-commit: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+        org.opencontainers.image.version: ${VPS_GUARDIAN_RELEASE_VERSION:-0.0.0-development}
+        org.opencontainers.image.revision: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+        org.opencontainers.image.created: ${VPS_GUARDIAN_BUILD_TIME:-1970-01-01T00:00:00Z}
+        org.opencontainers.image.source: ${VPS_GUARDIAN_SOURCE_URL:-https://github.com/liumingxu0122-hue/vps-guardian}
+        org.opencontainers.image.licenses: ${VPS_GUARDIAN_LICENSE:-Apache-2.0}
     restart: unless-stopped
     depends_on:
       database-volume-init:
@@ -122,8 +131,17 @@ services:
       dockerfile: deploy/controller.Dockerfile
       args:
         GUARDIAN_SOURCE_COMMIT: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+        GUARDIAN_RELEASE_VERSION: ${VPS_GUARDIAN_RELEASE_VERSION:-0.0.0-development}
+        GUARDIAN_BUILD_TIME: ${VPS_GUARDIAN_BUILD_TIME:-1970-01-01T00:00:00Z}
+        GUARDIAN_SOURCE_URL: ${VPS_GUARDIAN_SOURCE_URL:-https://github.com/liumingxu0122-hue/vps-guardian}
+        GUARDIAN_LICENSE: ${VPS_GUARDIAN_LICENSE:-Apache-2.0}
       labels:
         org.vps-guardian.source-commit: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+        org.opencontainers.image.version: ${VPS_GUARDIAN_RELEASE_VERSION:-0.0.0-development}
+        org.opencontainers.image.revision: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+        org.opencontainers.image.created: ${VPS_GUARDIAN_BUILD_TIME:-1970-01-01T00:00:00Z}
+        org.opencontainers.image.source: ${VPS_GUARDIAN_SOURCE_URL:-https://github.com/liumingxu0122-hue/vps-guardian}
+        org.opencontainers.image.licenses: ${VPS_GUARDIAN_LICENSE:-Apache-2.0}
     restart: unless-stopped
     depends_on:
       database:
@@ -142,6 +160,16 @@ services:
       GUARDIAN_AGENT_GATEWAY_URL: ${GUARDIAN_AGENT_GATEWAY_URL:-https://${GUARDIAN_AGENT_DOMAIN}:${GUARDIAN_AGENT_PORT:-8444}}
       GUARDIAN_AGENT_CERTIFICATE_TTL_HOURS: ${GUARDIAN_AGENT_CERTIFICATE_TTL_HOURS:-720}
       GUARDIAN_ENROLLMENT_ATTEMPTS_PER_10M: ${GUARDIAN_ENROLLMENT_ATTEMPTS_PER_10M:-10}
+      GUARDIAN_METRIC_RETENTION_DAYS: ${GUARDIAN_METRIC_RETENTION_DAYS:-7}
+      GUARDIAN_SERVICE_RESULT_RETENTION_DAYS: ${GUARDIAN_SERVICE_RESULT_RETENTION_DAYS:-30}
+      GUARDIAN_MAX_METRIC_ROWS_PER_HOST: ${GUARDIAN_MAX_METRIC_ROWS_PER_HOST:-10080}
+      GUARDIAN_MAX_RESULTS_PER_CHECK: ${GUARDIAN_MAX_RESULTS_PER_CHECK:-43200}
+      GUARDIAN_EXTERNAL_NOTIFICATIONS_ENABLED: ${GUARDIAN_EXTERNAL_NOTIFICATIONS_ENABLED:-false}
+      GUARDIAN_DEPLOYMENT_STAGE: ${GUARDIAN_DEPLOYMENT_STAGE:-staging}
+      GUARDIAN_PRODUCTION_DEPLOYED: ${GUARDIAN_PRODUCTION_DEPLOYED:-false}
+      GUARDIAN_OPERATIONS_GATE_DECISION: ${GUARDIAN_OPERATIONS_GATE_DECISION:-no_go_phase4_observation_pending}
+      GUARDIAN_RELEASE_VERSION: ${GUARDIAN_RELEASE_VERSION:-0.4.0-phase4-preview}
+      GUARDIAN_DEPLOYMENT_COMMIT: ${GUARDIAN_DEPLOYMENT_COMMIT:-unknown}
     secrets:
       - database_url
       - jwt_secret
@@ -223,8 +251,17 @@ services:
       dockerfile: deploy/controller.Dockerfile
       args:
         GUARDIAN_SOURCE_COMMIT: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+        GUARDIAN_RELEASE_VERSION: ${VPS_GUARDIAN_RELEASE_VERSION:-0.0.0-development}
+        GUARDIAN_BUILD_TIME: ${VPS_GUARDIAN_BUILD_TIME:-1970-01-01T00:00:00Z}
+        GUARDIAN_SOURCE_URL: ${VPS_GUARDIAN_SOURCE_URL:-https://github.com/liumingxu0122-hue/vps-guardian}
+        GUARDIAN_LICENSE: ${VPS_GUARDIAN_LICENSE:-Apache-2.0}
       labels:
         org.vps-guardian.source-commit: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+        org.opencontainers.image.version: ${VPS_GUARDIAN_RELEASE_VERSION:-0.0.0-development}
+        org.opencontainers.image.revision: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+        org.opencontainers.image.created: ${VPS_GUARDIAN_BUILD_TIME:-1970-01-01T00:00:00Z}
+        org.opencontainers.image.source: ${VPS_GUARDIAN_SOURCE_URL:-https://github.com/liumingxu0122-hue/vps-guardian}
+        org.opencontainers.image.licenses: ${VPS_GUARDIAN_LICENSE:-Apache-2.0}
     profiles:
       - backup
     depends_on:
@@ -277,8 +314,19 @@ services:
     build:
       context: .
       dockerfile: deploy/web.Dockerfile
+      args:
+        GUARDIAN_SOURCE_COMMIT: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+        GUARDIAN_RELEASE_VERSION: ${VPS_GUARDIAN_RELEASE_VERSION:-0.0.0-development}
+        GUARDIAN_BUILD_TIME: ${VPS_GUARDIAN_BUILD_TIME:-1970-01-01T00:00:00Z}
+        GUARDIAN_SOURCE_URL: ${VPS_GUARDIAN_SOURCE_URL:-https://github.com/liumingxu0122-hue/vps-guardian}
+        GUARDIAN_LICENSE: ${VPS_GUARDIAN_LICENSE:-Apache-2.0}
       labels:
         org.vps-guardian.source-commit: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+        org.opencontainers.image.version: ${VPS_GUARDIAN_RELEASE_VERSION:-0.0.0-development}
+        org.opencontainers.image.revision: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+        org.opencontainers.image.created: ${VPS_GUARDIAN_BUILD_TIME:-1970-01-01T00:00:00Z}
+        org.opencontainers.image.source: ${VPS_GUARDIAN_SOURCE_URL:-https://github.com/liumingxu0122-hue/vps-guardian}
+        org.opencontainers.image.licenses: ${VPS_GUARDIAN_LICENSE:-Apache-2.0}
     restart: unless-stopped
     depends_on:
       controller:

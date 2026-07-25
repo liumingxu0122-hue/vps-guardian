@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -48,8 +49,15 @@ def create_user(
 ) -> None:
     if len(password) < 14:
         raise typer.BadParameter("password must contain at least 14 characters")
+    if role == Role.owner and not enable_totp:
+        raise typer.BadParameter("Owner bootstrap requires a confirmed TOTP setup flow")
     settings = get_settings()
     with SessionLocal() as db:
+        if db.scalar(select(User.id).limit(1)):
+            raise typer.BadParameter(
+                "create-user is bootstrap-only once an identity exists; "
+                "an authenticated Owner must use the users API"
+            )
         if db.scalar(select(User).where(User.email == email.lower())):
             raise typer.BadParameter("user already exists")
         secret = pyotp.random_base32() if enable_totp else None
@@ -57,14 +65,35 @@ def create_user(
             email=email.lower(),
             password_hash=hash_password(password),
             role=role.value,
-            totp_enabled=enable_totp,
-            totp_secret_encrypted=encrypt_sensitive(secret, settings) if secret else None,
+            totp_enabled=False,
+            totp_pending_secret_encrypted=(
+                encrypt_sensitive(secret, settings) if secret else None
+            ),
+            totp_pending_created_at=datetime.now(UTC) if secret else None,
+            must_change_password=True,
+            identity_setup_enforced=enable_totp,
         )
         db.add(user)
+        db.flush()
+        write_audit(
+            db,
+            actor=None,
+            action="user.bootstrap_create",
+            resource_type="user",
+            resource_id=user.id,
+            outcome="success",
+            details={
+                "identifier": user.email,
+                "role": user.role,
+                "source": "bootstrap_cli",
+                "totp_setup_pending": enable_totp,
+                "must_change_password": True,
+            },
+        )
         db.commit()
         typer.echo(f"created user {user.email} with role {user.role}")
         if secret:
-            typer.echo("TOTP setup URI (displayed once):")
+            typer.echo("Pending TOTP setup URI (displayed once; confirmation required):")
             typer.echo(
                 pyotp.TOTP(secret).provisioning_uri(name=user.email, issuer_name="VPS Guardian")
             )

@@ -18,7 +18,7 @@ VPS Guardian is a security-first control plane for monitoring, diagnosing, and r
 | --- | --- | --- |
 | Control plane | FastAPI Controller and PostgreSQL state | Available |
 | Managed hosts | Go Agent, multi-host inventory, service checks, metrics, and offline queue | Available |
-| Operations UI | Responsive Overview with English and Simplified Chinese | Available |
+| Operations UI | Phase 4 grouped console, Attention queue, workflows, English and Simplified Chinese | Preview |
 | Disaster recovery | Restic with S3-compatible storage and isolated restore validation | Preview |
 | Production readiness | Public deployment and sustained multi-VPS validation | Not complete |
 
@@ -29,16 +29,19 @@ VPS Guardian is a security-first control plane for monitoring, diagnosing, and r
 - Signed tasks, nonce replay protection, approvals, and append-only audit events
 - Agent heartbeat, CPU and network metrics, and a durable offline queue
 - Restic backup and restore with S3-compatible storage, including Cloudflare R2
-- Operations Overview with hosts, topology, disaster recovery, security, alerts, and audit data
+- Decision-oriented Overview and Attention queue with explainable health, stability components, and deployment provenance
+- Grouped responsive operations console for hosts, services, topology, alerts, incidents, repairs, approvals, recovery, security, users, Agents, notifications, audit, and settings
 - Phase 4B multi-host inventory, service checks, persistent alert state, opt-in notifications, and approval-backed repairs
+- Persistent alert assignment/closure, audited incident workflow, notification retry/dead-letter records, and structured check history
+- Owner/Admin/Operator/Viewer role ceilings, optional narrowing scopes, reauthentication, and session revocation
 - Host-bound CSR bootstrap with locally generated Agent keys and bounded certificate renewal
 - English and Simplified Chinese UI, documentation, dates, numbers, durations, statuses, and errors
 
 ## Current limitations
 
 - No sustained validation across a large multi-VPS fleet
-- External Telegram, SMTP, and webhook delivery is opt-in; default tests use local mocks
-- CSR bootstrap is implemented, but two-host staging validation and sustained rotation observation remain pending
+- External Telegram, SMTP, Discord, and webhook delivery is opt-in; real two-channel closure remains pending
+- Two-host CSR staging evidence is historical; current CRL handshake, rotation, and larger-fleet observation must be revalidated
 - No automatic cross-cloud rebuilding or production-grade public deployment
 - Experimental Windows SSH dashboard launcher
 
@@ -55,7 +58,7 @@ flowchart LR
   B --> R[Restic and S3-compatible storage]
 ```
 
-Read the [architecture guide](docs/en/ARCHITECTURE.md) for trust boundaries and data flow, the [Phase 4B operations guide](docs/en/PHASE4B.md) for monitoring workflows, and the [Phase 4C staging guide](docs/en/PHASE4C.md) for CSR bootstrap and validation status.
+Read the [architecture guide](docs/en/ARCHITECTURE.md) for trust boundaries and data flow, the [Phase 4 completion guide](docs/en/PHASE4_COMPLETION.md) for the operational workflows and gates, and the [Phase 4C staging guide](docs/en/PHASE4C.md) for CSR bootstrap and validation status.
 
 ## Quick install
 
@@ -79,7 +82,7 @@ Create the host inventory entry, generate a short-lived enrollment bundle throug
 
 ## Dashboard access
 
-Open `https://<GUARDIAN_DOMAIN>/overview`. Chinese browser locales select Simplified Chinese on first visit; other locales use English. The language selector persists an explicit choice. The Windows SSH launcher remains Experimental.
+Open `https://<GUARDIAN_DOMAIN>/overview` and authenticate. The management dashboard and APIs do not provide anonymous fallback. Chinese browser locales select Simplified Chinese on first visit; other locales use English. The language selector persists an explicit choice. The Windows SSH launcher remains Experimental.
 
 ## Backup and restore
 
@@ -89,6 +92,10 @@ Use restricted secret files, a bucket-scoped identity, Restic checks, and isolat
 
 TLS 1.3 mTLS, signed tasks, replay defense, RBAC, TOTP, CSRF protection, rate limiting, approvals, and audit reduce blast radius but do not replace host hardening. See the [security model](docs/en/SECURITY_MODEL.md) and [security policy](SECURITY.md).
 
+The candidate identity recovery lifecycle is documented in
+[Identity recovery](docs/en/IDENTITY_RECOVERY.md). It is not authorization to migrate
+or deploy an online environment.
+
 ## Roadmap
 
 - Validate long-running operation across a larger multi-VPS fleet
@@ -97,7 +104,7 @@ TLS 1.3 mTLS, signed tasks, replay defense, RBAC, TOTP, CSRF protection, rate li
 - Add cross-cloud recovery workflows and production deployment guidance
 - Stabilize the `v0.3.0-alpha.1` certificate lifecycle, service checks, and approval workflow before beta
 
-See the [Nezha study](docs/en/comparisons/NEZHA_STUDY.md) and [benchmark plan](docs/en/comparisons/NEZHA_BENCHMARK.md).
+See the [Nezha 2.3.0 comparison](docs/comparison/nezha-2.3.0.md), [observation plan](docs/phase4/observation-run.md), and [production gate](docs/phase4/production-gate.md). Unmeasured values remain `Pending`; production is `NO-GO`.
 
 ## Contributing
 

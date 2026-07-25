@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    false,
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
@@ -83,6 +84,7 @@ class AlertState(StrEnum):
     acknowledged = "acknowledged"
     silenced = "silenced"
     resolved = "resolved"
+    closed = "closed"
 
 
 class AlertSeverity(StrEnum):
@@ -94,13 +96,15 @@ class AlertSeverity(StrEnum):
 class NotificationKind(StrEnum):
     telegram = "telegram"
     smtp = "smtp"
+    discord = "discord"
     webhook = "webhook"
 
 
 class IncidentStatus(StrEnum):
     open = "open"
+    acknowledged = "acknowledged"
     investigating = "investigating"
-    mitigated = "mitigated"
+    mitigating = "mitigating"
     resolved = "resolved"
 
 
@@ -131,7 +135,88 @@ class User(Base):
     totp_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    scopes: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    session_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    identity_setup_enforced: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    password_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    totp_enabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    totp_pending_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    totp_pending_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_totp_counter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recovery_codes_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    @property
+    def identity_setup_required(self) -> bool:
+        return bool(
+            self.must_change_password
+            or (
+                self.identity_setup_enforced
+                and (not self.totp_enabled or self.recovery_codes_confirmed_at is None)
+            )
+        )
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+    __table_args__ = (
+        CheckConstraint("session_version >= 1", name="ck_user_session_version"),
+        CheckConstraint("expires_at > issued_at", name="ck_user_session_expiry"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    revoke_reason: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    user_agent_digest: Mapped[str] = mapped_column(String(64))
+    ip_digest: Mapped[str] = mapped_column(String(64))
+    session_version: Mapped[int] = mapped_column(Integer)
+
+
+class RecoveryCode(Base):
+    __tablename__ = "recovery_codes"
+    __table_args__ = (
+        UniqueConstraint("user_id", "code_hash", name="uq_recovery_code_user_hash"),
+        Index("ix_recovery_codes_user_batch", "user_id", "batch_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    code_hash: Mapped[str] = mapped_column(String(64))
+    batch_id: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Host(Base):
@@ -173,6 +258,14 @@ class Agent(Base):
         DateTime(timezone=True), nullable=True
     )
     version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    build_git_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    build_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    build_time: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    go_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    platform_os: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    platform_arch: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    build_dirty: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    binary_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     host: Mapped[Host] = relationship(back_populates="agent")
     identities: Mapped[list[AgentIdentity]] = relationship(
         back_populates="agent",
@@ -340,8 +433,10 @@ class AlertInstance(Base):
     fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     acknowledged_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    assigned_to: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     silenced_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_notified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -400,6 +495,9 @@ class NotificationChannel(Base):
     kind: Mapped[str] = mapped_column(String(24), index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     configuration: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    event_scope: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    severity_filter: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    retry_policy: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, server_default="{}")
     rate_limit_per_minute: Mapped[int] = mapped_column(Integer, default=30)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -434,6 +532,8 @@ class Incident(Base):
     fault_type: Mapped[str] = mapped_column(String(120), index=True)
     severity: Mapped[int] = mapped_column(Integer, default=2)
     status: Mapped[str] = mapped_column(String(32), default=IncidentStatus.open.value, index=True)
+    assigned_to: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     affected_hosts: Mapped[list[str]] = mapped_column(JSON, default=list)
     affected_services: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -444,7 +544,10 @@ class Incident(Base):
     risk: Mapped[str] = mapped_column(String(255), default="unknown")
     verification_plan: Mapped[list[str]] = mapped_column(JSON, default=list)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    postmortem: Mapped[str | None] = mapped_column(Text, nullable=True)
     timeline: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
 
 

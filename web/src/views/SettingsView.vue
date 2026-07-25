@@ -14,7 +14,7 @@ const channels = ref<NotificationChannel[]>([])
 const dialog = ref<HTMLDialogElement | null>(null)
 const creating = ref(false)
 const testResult = ref('')
-const newChannel = ref({ name: '', kind: 'webhook' as NotificationChannel['kind'], endpointRef: '', tokenFile: '', chatRef: '', hostRef: '', portRef: '', fromRef: '', toRef: '', usernameRef: '', passwordFile: '' })
+const newChannel = ref({ name: '', kind: 'webhook' as NotificationChannel['kind'], endpointRef: '', tokenFile: '', chatRef: '', hostRef: '', portRef: '', fromRef: '', toRef: '', usernameRef: '', passwordFile: '', eventScope: 'firing,resolved,reminder', severityFilter: 'warning,critical', maxAttempts: 5, baseDelaySeconds: 30 })
 async function load(): Promise<void> {
   ;[settings.value, channels.value] = await Promise.all([
     request<PublicSettings>('/api/v1/settings/public'),
@@ -24,7 +24,7 @@ async function load(): Promise<void> {
 
 function channelConfiguration(): Record<string, string> {
   const channel = newChannel.value
-  if (channel.kind === 'webhook') return { endpoint_env: channel.endpointRef }
+  if (channel.kind === 'webhook' || channel.kind === 'discord') return { endpoint_env: channel.endpointRef }
   if (channel.kind === 'telegram') return { token_file: channel.tokenFile, chat_id_env: channel.chatRef, api_base_env: channel.endpointRef }
   const configuration: Record<string, string> = {
     host_env: channel.hostRef, port_env: channel.portRef, from_env: channel.fromRef, to_env: channel.toRef,
@@ -39,7 +39,17 @@ async function createChannel(): Promise<void> {
   try {
     await request<NotificationChannel>('/api/v1/notification-channels', {
       method: 'POST',
-      ...jsonBody({ name: newChannel.value.name, kind: newChannel.value.kind, configuration: channelConfiguration() }),
+      ...jsonBody({
+        name: newChannel.value.name,
+        kind: newChannel.value.kind,
+        configuration: channelConfiguration(),
+        event_scope: newChannel.value.eventScope.split(',').map((value) => value.trim()).filter(Boolean),
+        severity_filter: newChannel.value.severityFilter.split(',').map((value) => value.trim()).filter(Boolean),
+        retry_policy: {
+          max_attempts: newChannel.value.maxAttempts,
+          base_delay_seconds: newChannel.value.baseDelaySeconds,
+        },
+      }),
     })
     dialog.value?.close()
     await load()
@@ -85,6 +95,20 @@ onMounted(load)
         <div v-for="(enabled, name) in settings.features" :key="name" :class="{ disabled: !enabled }"><span><LockKeyhole :size="16" />{{ titleize(String(name)) }}</span><strong>{{ enabled ? $t('common.enabled') : $t('common.disabled') }}</strong></div>
       </div>
     </section>
+    <section class="settings-section">
+      <div class="section-heading"><div><h2>{{ $t('settings.effectiveConfiguration') }}</h2><span>{{ $t('settings.configurationDetail') }}</span></div></div>
+      <div class="configuration-catalog">
+        <div v-for="item in settings.settings_catalog" :key="item.key">
+          <span><strong>{{ titleize(item.key) }}</strong><small>{{ item.source }}</small></span>
+          <code>{{ Array.isArray(item.value) ? item.value.join(', ') : String(item.value) }}</code>
+          <span>{{ item.restart_required ? $t('settings.restartRequired') : $t('settings.liveChange') }}</span>
+          <span :class="`risk-${item.risk}`">{{ titleize(item.risk) }}</span>
+        </div>
+      </div>
+      <div class="secret-status-grid">
+        <div v-for="(configured, name) in settings.secret_status" :key="name"><LockKeyhole :size="14" /><span>{{ titleize(String(name)) }}</span><strong>{{ configured ? $t('settings.configured') : $t('settings.notConfigured') }}</strong></div>
+      </div>
+    </section>
     <section class="settings-section notification-settings">
       <div class="section-heading"><div><h2>{{ $t('settings.notifications') }}</h2><span>{{ $t('settings.notificationReferences') }}</span></div><button class="primary-button" type="button" @click="dialog?.showModal()"><Plus :size="15" />{{ $t('settings.addChannel') }}</button></div>
       <div v-if="channels.length" class="channel-list">
@@ -97,10 +121,12 @@ onMounted(load)
   <dialog ref="dialog" class="modal-dialog">
     <form method="dialog" class="dialog-header"><div><h2>{{ $t('settings.addChannel') }}</h2><p>{{ $t('settings.notificationReferences') }}</p></div><button class="icon-button" :aria-label="$t('common.close')"><X :size="18" /></button></form>
     <form class="dialog-form" @submit.prevent="createChannel">
-      <div class="form-grid"><label><span>{{ $t('settings.channelName') }}</span><input v-model="newChannel.name" required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{1,119}" /></label><label><span>{{ $t('settings.channelKind') }}</span><select v-model="newChannel.kind"><option value="webhook">Webhook</option><option value="telegram">Telegram</option><option value="smtp">SMTP</option></select></label></div>
-      <template v-if="newChannel.kind === 'webhook'"><label><span>{{ $t('settings.endpointEnv') }}</span><input v-model="newChannel.endpointRef" required /></label></template>
+      <div class="form-grid"><label><span>{{ $t('settings.channelName') }}</span><input v-model="newChannel.name" required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{1,119}" /></label><label><span>{{ $t('settings.channelKind') }}</span><select v-model="newChannel.kind"><option value="webhook">Webhook</option><option value="discord">Discord</option><option value="telegram">Telegram</option><option value="smtp">SMTP</option></select></label></div>
+      <template v-if="newChannel.kind === 'webhook' || newChannel.kind === 'discord'"><label><span>{{ $t('settings.endpointEnv') }}</span><input v-model="newChannel.endpointRef" required /></label></template>
       <template v-else-if="newChannel.kind === 'telegram'"><label><span>{{ $t('settings.tokenFile') }}</span><input v-model="newChannel.tokenFile" required /></label><label><span>{{ $t('settings.chatEnv') }}</span><input v-model="newChannel.chatRef" required /></label><label><span>{{ $t('settings.apiBaseEnv') }}</span><input v-model="newChannel.endpointRef" required /></label></template>
       <template v-else><div class="form-grid"><label><span>{{ $t('settings.hostEnv') }}</span><input v-model="newChannel.hostRef" required /></label><label><span>{{ $t('settings.portEnv') }}</span><input v-model="newChannel.portRef" required /></label></div><div class="form-grid"><label><span>{{ $t('settings.fromEnv') }}</span><input v-model="newChannel.fromRef" required /></label><label><span>{{ $t('settings.toEnv') }}</span><input v-model="newChannel.toRef" required /></label></div><div class="form-grid"><label><span>{{ $t('settings.usernameEnv') }}</span><input v-model="newChannel.usernameRef" /></label><label><span>{{ $t('settings.passwordFile') }}</span><input v-model="newChannel.passwordFile" /></label></div></template>
+      <div class="form-grid"><label><span>{{ $t('settings.eventScope') }}</span><input v-model="newChannel.eventScope" /></label><label><span>{{ $t('settings.severityFilter') }}</span><input v-model="newChannel.severityFilter" /></label></div>
+      <div class="form-grid"><label><span>{{ $t('settings.maxAttempts') }}</span><input v-model.number="newChannel.maxAttempts" type="number" min="1" max="10" /></label><label><span>{{ $t('settings.baseDelay') }}</span><input v-model.number="newChannel.baseDelaySeconds" type="number" min="5" max="3600" /></label></div>
       <div class="dialog-actions"><button class="secondary-button" type="button" @click="dialog?.close()">{{ $t('common.cancel') }}</button><button class="primary-button" type="submit" :disabled="creating">{{ $t('settings.createChannel') }}</button></div>
     </form>
   </dialog>
