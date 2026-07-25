@@ -117,8 +117,23 @@ no-network tmpfs passed. The first isolated PostgreSQL attempt trusted
 and the retry waited for an actual SQL query before restore. Neither correction
 connected to or changed the active database or Agent.
 
-Decision: **GO in code after green CI; real installed-Agent validation pending
-approved Staging deployment**.
+Gate-closure implementation commit
+`7a4a89349505ec44e890031f163a6036aead881c` passed both CI executions:
+
+- push run `30165806427`;
+- pull-request run `30165807963`.
+
+Both runs passed Agent formatting/tests/release artifact generation, Python
+lint/type/full tests/dependency audit/wheel verification, Web type/unit/build/audit,
+14 browser visual cases, Gitleaks, Compose overlays, four-image builds, OCI label
+checks, source/image SBOM generation, Critical-zero gates, and fixable-High-zero
+gates. A local Playwright invocation reached all 14 cases but did not exit during
+runner teardown; no test failure was reported. The independent CI browser job
+completed normally, so the local teardown hang is retained as a tooling anomaly,
+not used as the passing evidence.
+
+Decision: **GO in code; real installed-Agent validation pending approved Staging
+deployment**.
 
 ## C. Off-site Restic requirement check
 
@@ -217,7 +232,7 @@ Decision: **HUMAN ACTION REQUIRED**.
 | Gate | Decision | Blocking evidence |
 | --- | --- | --- |
 | Identity Recovery | HUMAN ACTION REQUIRED / NO-GO | One Owner, no TOTP, no recovery-code lifecycle or safe delivery |
-| Agent Provenance | GO in code after CI | Real installed binary not changed |
+| Agent Provenance | GO in code | Real installed binary not changed |
 | Off-site DR | HUMAN ACTION REQUIRED / NO-GO | No remote backend Secret or isolated restore |
 | Notification | HUMAN ACTION REQUIRED / NO-GO | No two real credential sets or event closure |
 | Test Agent Selection | HUMAN ACTION REQUIRED | Candidate not approved |
