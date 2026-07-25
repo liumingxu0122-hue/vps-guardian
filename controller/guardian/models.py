@@ -180,6 +180,14 @@ class Agent(Base):
         DateTime(timezone=True), nullable=True
     )
     version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    build_git_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    build_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    build_time: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    go_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    platform_os: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    platform_arch: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    build_dirty: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    binary_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     host: Mapped[Host] = relationship(back_populates="agent")
     identities: Mapped[list[AgentIdentity]] = relationship(
         back_populates="agent",

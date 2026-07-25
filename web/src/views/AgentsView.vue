@@ -35,7 +35,14 @@ onMounted(load)
     <section class="agent-list">
       <button v-for="agent in agents" :key="agent.id" type="button" class="agent-row" @click="inspect(agent)">
         <Server :size="18" />
-        <span><strong>{{ hostMap[agent.host_id]?.name ?? agent.host_id }}</strong><small>{{ agent.version ?? $t('common.unknown') }}</small></span>
+        <span>
+          <strong>{{ hostMap[agent.host_id]?.name ?? agent.host_id }}</strong>
+          <small>
+            {{ agent.version ?? $t('common.unknown') }}
+            <template v-if="agent.build_git_sha"> · {{ agent.build_git_sha.slice(0, 12) }}</template>
+            <template v-if="agent.platform_os && agent.platform_arch"> · {{ agent.platform_os }}/{{ agent.platform_arch }}</template>
+          </small>
+        </span>
         <StatusBadge :status="agent.revoked_at ? 'revoked' : 'active'" />
         <span>{{ relativeTime(agent.last_heartbeat_at) }}</span>
         <code>v{{ agent.identity_version }}</code>

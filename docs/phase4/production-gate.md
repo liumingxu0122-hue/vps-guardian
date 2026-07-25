@@ -6,7 +6,9 @@ does not change this decision.
 Current evidence:
 
 - [pre-deployment Staging drift](staging-drift-before.md);
-- [Phase 4 Staging acceptance report](staging-acceptance-report.md).
+- [Phase 4 Staging acceptance report](staging-acceptance-report.md);
+- [Gate Closure Sprint](gate-closure-sprint.md);
+- [sanitized node candidate inventory](node-candidate-inventory.md).
 
 | Gate | Evidence required | Current status |
 | --- | --- | --- |
@@ -17,7 +19,7 @@ Current evidence:
 | Stability model | formula, API, tests, UI components | Code complete |
 | Alert/incident workflow | durable transitions, assignment, audit | Code complete |
 | Restricted repair/approval | allowlisted actions and staged verification | Existing preview; Staging revalidation pending |
-| Agent lifecycle | CSR, renewal, revocation, update/rollback | Two-Agent historical evidence only |
+| Agent lifecycle | CSR, renewal, revocation, update/rollback | Version/provenance code complete; real rollout and security exercise pending |
 | Multi-user/RBAC | role ceiling, scopes, reauth, session revocation | Disposable Owner/Viewer tests passed; real Staging pending |
 | External notifications | two real channels through event/retry/recovery/dead-letter | NO-GO |
 | Multi-VPS Staging | phased fleet across platforms without Komari removal | NO-GO |
@@ -38,6 +40,12 @@ unchanged because it has only one active Owner, no TOTP-enabled recovery Owner,
 no secure replacement-password delivery path, and no off-site Restic backend.
 The validated same-host snapshot and restore do not satisfy the cross-cloud
 recovery gate.
+
+The Gate Closure Sprint adds side-effect-free Agent version commands, authenticated
+build provenance, a reversible provenance migration, Agent artifact manifests and
+SBOM metadata, and CI-enforced OCI labels. It does not close the runtime gates:
+identity recovery, off-site Restic, two external notification channels, and node
+selection still require protected human input or approval.
 
 The historical Phase 3E `RPO ≈ 16s` and `RTO ≈ 50s` are accepted historical snapshots only.
 
@@ -62,6 +70,7 @@ No field may be auto-filled from CI. Approval is an external human decision.
 - Phase 3 DR: **NO-GO**
 - Phase 4 Code: **GO**
 - Phase 4 Feature: **NO-GO** until real notifications, fleet, and recovery gates
+- Agent Provenance: **GO in code; installed Staging Agent pending**
 - Phase 4 UI: **GO** for code and disposable-environment evidence; real-browser
   Staging acceptance pending
 - Phase 4 Staging: **NO-GO**

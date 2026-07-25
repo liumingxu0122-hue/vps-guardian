@@ -92,6 +92,14 @@ export interface Agent {
   revoked_at: string | null
   last_heartbeat_at: string | null
   version: string | null
+  build_git_sha: string | null
+  build_id: string | null
+  build_time: string | null
+  go_version: string | null
+  platform_os: string | null
+  platform_arch: string | null
+  build_dirty: boolean | null
+  binary_sha256: string | null
 }
 
 export interface ServiceCheck {

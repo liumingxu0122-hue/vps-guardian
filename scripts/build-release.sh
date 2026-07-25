@@ -9,6 +9,7 @@ version="${release_version#v}"
 python_version="${VPS_GUARDIAN_PYTHON_VERSION:-0.3.0a1}"
 release_commit="$(git rev-parse HEAD)"
 build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+build_id_prefix="${version}+$(printf '%s' "$release_commit" | cut -c1-12)"
 for command in python3 npm go tar sha256sum git; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing build command: $command" >&2; exit 69; }
 done
@@ -28,12 +29,16 @@ python3 -m pip wheel --no-deps --wheel-dir "$output/dist" .
 (cd "$output/dist" && test -n "$(find . -maxdepth 1 -name 'vps_guardian-*.whl' -print -quit)")
 (cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
   -buildvcs=false -trimpath \
-  -ldflags="-s -w -buildid= -X main.agentVersion=${version} -X main.buildCommit=${release_commit} -X main.buildTime=${build_time}" \
+  -ldflags="-s -w -buildid= -X main.agentVersion=${version} -X main.buildCommit=${release_commit} -X main.buildTime=${build_time} -X main.buildID=${build_id_prefix}-linux-amd64 -X main.buildDirty=false" \
   -o "$output/dist/vps-guardian-agent-linux-amd64" .)
 (cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
   -buildvcs=false -trimpath \
-  -ldflags="-s -w -buildid= -X main.agentVersion=${version} -X main.buildCommit=${release_commit} -X main.buildTime=${build_time}" \
+  -ldflags="-s -w -buildid= -X main.agentVersion=${version} -X main.buildCommit=${release_commit} -X main.buildTime=${build_time} -X main.buildID=${build_id_prefix}-linux-arm64 -X main.buildDirty=false" \
   -o "$output/dist/vps-guardian-agent-linux-arm64" .)
+"$output/dist/vps-guardian-agent-linux-amd64" version \
+  | grep -Fx "git_sha=${release_commit}"
+"$output/dist/vps-guardian-agent-linux-amd64" --version \
+  | grep -Eq '^artifact_sha256=[a-f0-9]{64}$'
 (cd web && npm ci --ignore-scripts && npm run build)
 tar -C web/dist -czf "$output/dist/vps-guardian-web-${release_version}.tar.gz" .
 git archive --format=tar.gz \
@@ -52,6 +57,17 @@ go version -m "$output/dist/vps-guardian-agent-linux-amd64" \
   > "$output/sbom/agent-build-info.txt"
 go version -m "$output/dist/vps-guardian-agent-linux-arm64" \
   > "$output/sbom/agent-arm64-build-info.txt"
+python3 scripts/agent-release-metadata.py \
+  --output "$output/agent-release-manifest.json" \
+  --sbom-output "$output/sbom/agent.cdx.json" \
+  --version "$version" \
+  --git-sha "$release_commit" \
+  --build-time "$build_time" \
+  --build-id-prefix "$build_id_prefix" \
+  --go-version "$(go version | awk '{print $3}')" \
+  --dirty false \
+  --artifact linux amd64 "$output/dist/vps-guardian-agent-linux-amd64" \
+  --artifact linux arm64 "$output/dist/vps-guardian-agent-linux-arm64"
 
 if command -v pip-audit >/dev/null 2>&1; then
   pip-audit --requirement requirements.lock --disable-pip \
@@ -66,7 +82,13 @@ else
   exit 69
 fi
 if command -v docker >/dev/null 2>&1; then
+  VPS_GUARDIAN_RELEASE_VERSION="$version" \
+  VPS_GUARDIAN_SOURCE_COMMIT="$release_commit" \
+  VPS_GUARDIAN_BUILD_TIME="$build_time" \
   docker compose config --quiet
+  VPS_GUARDIAN_RELEASE_VERSION="$version" \
+  VPS_GUARDIAN_SOURCE_COMMIT="$release_commit" \
+  VPS_GUARDIAN_BUILD_TIME="$build_time" \
   docker compose build database controller web
   docker image inspect vps-guardian-postgres vps-guardian-controller vps-guardian-web \
     --format '{{.Id}} user={{.Config.User}} healthcheck={{json .Config.Healthcheck}}' \
@@ -98,6 +120,6 @@ cp RELEASE_NOTES_v0.3.0-alpha.1.md \
 cp RELEASE_NOTES_v0.3.0-alpha.1.zh-CN.md \
   "$output/dist/vps-guardian-release-notes-zh-CN-${release_version}.md"
 (cd "$output" && \
-  { sha256sum BUILD_INFO; find dist sbom -type f -exec sha256sum {} \;; } | \
+  { sha256sum BUILD_INFO agent-release-manifest.json; find dist sbom -type f -exec sha256sum {} \;; } | \
   sort > checksums.sha256)
 printf 'built artifacts under %s\n' "$output"

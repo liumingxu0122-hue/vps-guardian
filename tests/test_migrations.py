@@ -117,6 +117,17 @@ def test_migrations_enforce_audit_append_only(tmp_path: Path) -> None:
     } <= task_columns
     user_columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
     assert {"scopes", "session_version", "last_login_at", "disabled_at"} <= user_columns
+    agent_columns = {row[1] for row in connection.execute("PRAGMA table_info(agents)")}
+    assert {
+        "build_git_sha",
+        "build_id",
+        "build_time",
+        "go_version",
+        "platform_os",
+        "platform_arch",
+        "build_dirty",
+        "binary_sha256",
+    } <= agent_columns
     alert_columns = {
         row[1] for row in connection.execute("PRAGMA table_info(alert_instances)")
     }

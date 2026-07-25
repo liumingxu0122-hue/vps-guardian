@@ -44,6 +44,15 @@ RUN python -m build --wheel --no-isolation
 FROM python:3.13.14-alpine3.24@sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0 AS runtime
 
 ARG GUARDIAN_SOURCE_COMMIT=0000000000000000000000000000000000000000
+ARG GUARDIAN_RELEASE_VERSION=0.0.0-development
+ARG GUARDIAN_BUILD_TIME=1970-01-01T00:00:00Z
+ARG GUARDIAN_SOURCE_URL=https://github.com/liumingxu0122-hue/vps-guardian
+ARG GUARDIAN_LICENSE=Apache-2.0
+LABEL org.opencontainers.image.version=$GUARDIAN_RELEASE_VERSION \
+      org.opencontainers.image.revision=$GUARDIAN_SOURCE_COMMIT \
+      org.opencontainers.image.created=$GUARDIAN_BUILD_TIME \
+      org.opencontainers.image.source=$GUARDIAN_SOURCE_URL \
+      org.opencontainers.image.licenses=$GUARDIAN_LICENSE
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

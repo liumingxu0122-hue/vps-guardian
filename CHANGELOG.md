@@ -11,6 +11,9 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 - Added persistent alert assignment/closure, audited incident transitions, resolution/postmortem fields, notification scope/severity filters, retry history, and dead-letter handling.
 - Added Owner/Admin/Operator/Viewer management, optional narrowing scopes, high-risk reauthentication, last-Owner protection, password rotation, and session-version revocation.
 - Added reversible migration `0008_phase4_completion` and production startup guards requiring an explicit production gate and immutable commit.
+- Added reversible migration `0009_agent_provenance`, side-effect-free Agent
+  `version`/`--version` commands, authenticated heartbeat build metadata, Agent
+  artifact manifests, and CycloneDX release metadata.
 - Added bilingual Phase 4 workflows plus security, observation, production-gate, Staging/rollback, Komari coexistence, disk migration, and Nezha 2.3.0 comparison documentation.
 
 ### Changed
@@ -18,12 +21,16 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 - Reworked Overview, Services, Alerts, Incidents, Approvals, and Settings around structured actions instead of raw operational data.
 - Added API pagination to fleet/history collections, GET request deduplication, and request cancellation support without increasing Agent sampling frequency.
 - Kept the dashboard authenticated and excluded the cancelled anonymous-read-only experiment.
+- Added immutable OCI version/revision/created/source labels to every first-party
+  container image and CI enforcement for those labels.
 
 ### Security
 
 - Explicit scopes now narrow role permissions at the API for separate read/write resources.
 - Notification routing enforces event-scope and severity filters before enqueueing.
 - Settings expose Secret configuration state and source only, never Secret values.
+- Agent version commands exit before configuration loading and main-loop startup,
+  preventing version probes from creating heartbeats or duplicate metrics.
 
 ### Known limitations
 

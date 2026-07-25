@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from guardian.agent_security import normalize_certificate_fingerprint
 
@@ -548,6 +548,14 @@ class AgentView(ORMModel):
     revoked_at: datetime | None
     last_heartbeat_at: datetime | None
     version: str | None
+    build_git_sha: str | None
+    build_id: str | None
+    build_time: str | None
+    go_version: str | None
+    platform_os: str | None
+    platform_arch: str | None
+    build_dirty: bool | None
+    binary_sha256: str | None
 
 
 class AgentRotateRequest(BaseModel):
@@ -608,12 +616,38 @@ class AgentIdentityValidateRequest(BaseModel):
     expected_version: int = Field(ge=1)
 
 
+class AgentBuildMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: str = Field(min_length=1, max_length=64)
+    git_sha: str = Field(pattern=r"^(?:unknown|[A-Fa-f0-9]{40})$")
+    build_id: str = Field(min_length=1, max_length=128)
+    build_time: str = Field(min_length=1, max_length=64)
+    go_version: str = Field(pattern=r"^go[0-9A-Za-z.+_-]{1,61}$")
+    os: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,31}$")
+    arch: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,31}$")
+    dirty: bool
+    binary_sha256: str = Field(pattern=r"^[A-Fa-f0-9]{64}$")
+
+    @field_validator("git_sha", "binary_sha256")
+    @classmethod
+    def normalize_digest(cls, value: str) -> str:
+        return value.lower()
+
+
 class AgentHeartbeat(BaseModel):
     collected_at: datetime
-    version: str = Field(max_length=64)
+    version: str = Field(min_length=1, max_length=64)
+    build: AgentBuildMetadata | None = None
     metrics: dict[str, Any]
     services: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
     events: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
+
+    @model_validator(mode="after")
+    def require_consistent_build_version(self) -> AgentHeartbeat:
+        if self.build is not None and self.build.version != self.version:
+            raise ValueError("Agent build version must match heartbeat version")
+        return self
 
 
 class HealthResponse(BaseModel):

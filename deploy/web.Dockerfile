@@ -36,6 +36,16 @@ RUN test "$(grep '^module ' go.mod | awk '{print $2}')" = 'github.com/caddyserve
 RUN /out/caddy version | grep -Eq '^v2\.11\.4( |$)'
 
 FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS runtime
+ARG GUARDIAN_SOURCE_COMMIT=0000000000000000000000000000000000000000
+ARG GUARDIAN_RELEASE_VERSION=0.0.0-development
+ARG GUARDIAN_BUILD_TIME=1970-01-01T00:00:00Z
+ARG GUARDIAN_SOURCE_URL=https://github.com/liumingxu0122-hue/vps-guardian
+ARG GUARDIAN_LICENSE=Apache-2.0
+LABEL org.opencontainers.image.version=$GUARDIAN_RELEASE_VERSION \
+      org.opencontainers.image.revision=$GUARDIAN_SOURCE_COMMIT \
+      org.opencontainers.image.created=$GUARDIAN_BUILD_TIME \
+      org.opencontainers.image.source=$GUARDIAN_SOURCE_URL \
+      org.opencontainers.image.licenses=$GUARDIAN_LICENSE
 USER root
 COPY --from=caddy-build /out/caddy /usr/bin/caddy
 RUN apk upgrade --no-cache \

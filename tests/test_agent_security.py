@@ -389,6 +389,17 @@ def test_signed_heartbeat_and_replay_rejection(client: TestClient) -> None:
     payload = {
         "collected_at": "2026-07-15T23:03:04.123456789Z",
         "version": "0.1.0",
+        "build": {
+            "version": "0.1.0",
+            "git_sha": "a" * 40,
+            "build_id": "0.1.0+aaaaaaaaaaaa-linux-amd64",
+            "build_time": "2026-07-15T22:00:00Z",
+            "go_version": "go1.24.0",
+            "os": "linux",
+            "arch": "amd64",
+            "dirty": False,
+            "binary_sha256": "b" * 64,
+        },
         "metrics": {"cpu_percent": 12.5, "memory_percent": 33.0},
         "services": [
             {
@@ -433,6 +444,15 @@ def test_signed_heartbeat_and_replay_rejection(client: TestClient) -> None:
     assert response.status_code == 202
     with SessionLocal() as database:
         snapshot = database.query(MetricSnapshot).one()
+        stored_agent = database.get(Agent, agent_id)
+        assert stored_agent is not None
+        assert stored_agent.version == "0.1.0"
+        assert stored_agent.build_git_sha == "a" * 40
+        assert stored_agent.build_id == "0.1.0+aaaaaaaaaaaa-linux-amd64"
+        assert stored_agent.binary_sha256 == "b" * 64
+        assert stored_agent.platform_os == "linux"
+        assert stored_agent.platform_arch == "amd64"
+        assert stored_agent.build_dirty is False
         assert "super-secret-agent-token" not in str(snapshot.payload)
         assert "super-secret-event-password" not in str(snapshot.payload)
         assert "[REDACTED]" in str(snapshot.payload)

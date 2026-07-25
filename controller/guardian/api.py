@@ -2688,6 +2688,15 @@ async def agent_heartbeat(
     was_offline = agent.host.status == "offline"
     agent.last_heartbeat_at = now
     agent.version = payload.version
+    if payload.build is not None:
+        agent.build_git_sha = payload.build.git_sha
+        agent.build_id = payload.build.build_id
+        agent.build_time = payload.build.build_time
+        agent.go_version = payload.build.go_version
+        agent.platform_os = payload.build.os
+        agent.platform_arch = payload.build.arch
+        agent.build_dirty = payload.build.dirty
+        agent.binary_sha256 = payload.build.binary_sha256
     agent.host.last_seen_at = now
     agent.host.status = "healthy"
     agent.host.data_state = (
