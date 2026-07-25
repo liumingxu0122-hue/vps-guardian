@@ -138,6 +138,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Root-owned Secret reader regression
+        run: |
+          bash -n operations/scripts/read-root-secret-file.sh
+          bash -n operations/scripts/tests/read-root-secret-file.test.sh
+          sudo bash operations/scripts/tests/read-root-secret-file.test.sh
       - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -510,6 +510,119 @@ test('VPS aliases require login and preserve deep links after refresh', async ({
   await expect(page).toHaveURL(/\/vps\/host-1$/)
 })
 
+test('anonymous auth restore is quiet, deduplicated, and preserves the protected deep link', async ({ page }) => {
+  const pageErrors: string[] = []
+  let meRequests = 0
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/v1/auth/me') meRequests += 1
+  })
+  await mockUnauthenticated(page)
+
+  await page.goto('/users')
+  await expect(page).toHaveURL(/\/login\?redirect=\/users$/)
+  await expect(page.locator('input[type="email"]')).toBeVisible()
+  await expect(page.locator('input[type="password"]')).toBeVisible()
+  await expect.poll(() => meRequests).toBe(1)
+  expect(pageErrors).toEqual([])
+})
+
+test('an invalid stale session cookie stays logged out without a retry loop', async ({ context, page }) => {
+  const pageErrors: string[] = []
+  let meRequests = 0
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await context.addCookies([{
+    name: 'guardian_session',
+    value: 'stale-browser-test-session',
+    domain: '127.0.0.1',
+    path: '/',
+    httpOnly: true,
+    sameSite: 'Strict',
+  }])
+  await page.route('**/api/v1/**', async (route) => {
+    if (new URL(route.request().url()).pathname === '/api/v1/auth/me') meRequests += 1
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 'not_authenticated' }),
+    })
+  })
+
+  await page.goto('/overview')
+  await expect(page).toHaveURL(/\/login\?redirect=\/overview$/)
+  await expect.poll(() => meRequests).toBe(1)
+  expect(pageErrors).toEqual([])
+})
+
+test('login and logout return to a quiet logged-out state', async ({ page }) => {
+  const pageErrors: string[] = []
+  let authenticated = false
+  let meRequests = 0
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.route('**/api/v1/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/v1/auth/me') {
+      meRequests += 1
+      await route.fulfill({
+        status: authenticated ? 200 : 401,
+        contentType: 'application/json',
+        body: JSON.stringify(authenticated ? user : { code: 'not_authenticated' }),
+      })
+      return
+    }
+    if (path === '/api/v1/auth/login') {
+      authenticated = true
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          access_token: 'browser-login-session',
+          csrf_token: 'browser-login-csrf',
+          identity_setup_required: false,
+          recovery_codes_remaining: null,
+        }),
+      })
+      return
+    }
+    if (path === '/api/v1/auth/logout') {
+      authenticated = false
+      await route.fulfill({ status: 204, body: '' })
+      return
+    }
+    if (path === '/api/v1/overview') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(overview),
+      })
+      return
+    }
+    if (path === '/api/v1/stability') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(stability),
+      })
+      return
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+  })
+
+  await page.goto('/login')
+  await page.locator('input[type="email"]').fill('owner@example.test')
+  await page.locator('input[type="password"]').fill('browser-only-password')
+  await page.locator('button[type="submit"]').click()
+  await expect(page).toHaveURL(/\/overview$/)
+  await expect(page.getByRole('heading', { name: 'Operations Overview' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Sign out' }).click()
+  await expect(page).toHaveURL(/\/login$/)
+  await page.goto('/overview')
+  await expect(page).toHaveURL(/\/login\?redirect=\/overview$/)
+  expect(meRequests).toBeGreaterThanOrEqual(2)
+  expect(pageErrors).toEqual([])
+})
+
 test('VPS list alias is usable on a mobile viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await mockController(page)

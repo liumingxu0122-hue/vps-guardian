@@ -24,11 +24,11 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   if (shouldDedupe && existing) return existing as Promise<T>
 
   const operation = performRequest<T>(path, options)
-  if (shouldDedupe) {
-    inFlightGets.set(requestKey, operation)
-    void operation.finally(() => inFlightGets.delete(requestKey))
-  }
-  return operation
+  if (!shouldDedupe) return operation
+
+  const trackedOperation = operation.finally(() => inFlightGets.delete(requestKey))
+  inFlightGets.set(requestKey, trackedOperation)
+  return trackedOperation
 }
 
 async function performRequest<T>(path: string, options: RequestOptions): Promise<T> {

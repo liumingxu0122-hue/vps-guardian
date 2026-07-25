@@ -23,6 +23,9 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 - Reworked Overview, Services, Alerts, Incidents, Approvals, and Settings around structured actions instead of raw operational data.
 - Added API pagination to fleet/history collections, GET request deduplication, and request cancellation support without increasing Agent sampling frequency.
+- Made the deduplicated GET cleanup Promise the caller-visible Promise so an
+  expected anonymous `/auth/me` `401` no longer emits an unhandled rejection;
+  other client and server failures still propagate.
 - Kept the dashboard authenticated and excluded the cancelled anonymous-read-only experiment.
 - Added immutable OCI version/revision/created/source labels to every first-party
   container image and CI enforcement for those labels.
@@ -38,6 +41,9 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 - Settings expose Secret configuration state and source only, never Secret values.
 - Agent version commands exit before configuration loading and main-loop startup,
   preventing version probes from creating heartbeats or duplicate metrics.
+- Added a reusable, fail-closed root-owned Secret-file reader and CI regression
+  matrix for newline/no-newline files, ownership, permissions, symlinks, NUL
+  bytes, empty values, invalid calls, and mid-read file replacement.
 
 ### Known limitations
 
