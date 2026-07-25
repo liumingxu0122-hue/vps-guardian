@@ -6,8 +6,31 @@ export interface User {
   is_active: boolean
   scopes: string[]
   last_login_at: string | null
+  password_changed_at: string | null
+  totp_enabled_at: string | null
   disabled_at: string | null
+  must_change_password: boolean
+  identity_setup_required: boolean
+  created_by: string | null
+  disabled_by: string | null
   created_at: string
+}
+
+export interface UserSession {
+  id: string
+  user_id: string
+  issued_at: string
+  expires_at: string
+  revoked_at: string | null
+  revoke_reason: string | null
+  user_agent_digest: string
+  ip_digest: string
+  current: boolean
+}
+
+export interface RecoveryCodeStatus {
+  remaining: number
+  low: boolean
 }
 
 export interface Host {

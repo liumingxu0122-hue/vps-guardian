@@ -92,6 +92,10 @@ Use restricted secret files, a bucket-scoped identity, Restic checks, and isolat
 
 TLS 1.3 mTLS, signed tasks, replay defense, RBAC, TOTP, CSRF protection, rate limiting, approvals, and audit reduce blast radius but do not replace host hardening. See the [security model](docs/en/SECURITY_MODEL.md) and [security policy](SECURITY.md).
 
+The candidate identity recovery lifecycle is documented in
+[Identity recovery](docs/en/IDENTITY_RECOVERY.md). It is not authorization to migrate
+or deploy an online environment.
+
 ## Roadmap
 
 - Validate long-running operation across a larger multi-VPS fleet

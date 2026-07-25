@@ -6,6 +6,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, cast
 
+import pyotp
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import desc, select, update
@@ -49,6 +50,14 @@ from guardian.enrollment import (
     token_digest,
 )
 from guardian.events import event_broker
+from guardian.identity import (
+    active_recovery_code_count,
+    consume_recovery_code,
+    create_user_session,
+    forced_setup_required,
+    generate_recovery_code_batch,
+    revoke_sessions,
+)
 from guardian.models import (
     Agent,
     AgentIdentity,
@@ -66,12 +75,14 @@ from guardian.models import (
     MetricSnapshot,
     NotificationChannel,
     NotificationDelivery,
+    RecoveryCode,
     RecoveryPoint,
     RepairAttempt,
     Role,
     ServiceCheck,
     ServiceCheckResult,
     User,
+    UserSession,
 )
 from guardian.monitoring import assigned_agent_checks, record_agent_check_results
 from guardian.notifications import NotificationConfigurationError, send_test_notification
@@ -114,25 +125,38 @@ from guardian.schemas import (
     NotificationChannelCreate,
     NotificationChannelView,
     NotificationDeliveryView,
+    PasswordChangeRequest,
+    ReauthenticationRequest,
+    RecoveryCodeBatchView,
+    RecoveryCodesConfirmRequest,
+    RecoveryCodeStatusView,
     RecoveryPointPromotionView,
     RecoveryPointVerifyRequest,
     RecoveryPointView,
     ServiceCheckCreate,
     ServiceCheckResultView,
     ServiceCheckView,
+    TotpConfirmRequest,
+    TotpSetupView,
     UserCreate,
+    UserDeleteRequest,
     UserPasswordReset,
+    UserSessionView,
     UserUpdate,
     UserView,
 )
 from guardian.security import (
     create_access_token,
+    decrypt_sensitive,
+    encrypt_sensitive,
     generate_csrf_token,
     hash_password,
     login_limiter,
     require_role,
+    totp_counter_for_code,
     verify_password,
     verify_totp,
+    verify_user_password,
 )
 from guardian.stability import StabilityWindow, build_stability_report
 from guardian.tasking import create_agent_task, serialize_agent_task
@@ -197,10 +221,26 @@ def login(
     settings: Config,
 ) -> LoginResponse:
     source_ip = request.client.host if request.client else "unknown"
-    limiter_key = f"{source_ip}:{payload.email.lower()}"
-    login_limiter.check(limiter_key, settings.login_attempts_per_10m)
-    user = db.scalar(select(User).where(User.email == payload.email.lower()))
-    if not user or not user.is_active or not verify_password(payload.password, user.password_hash):
+    email = payload.email.strip().lower()
+    limiter_key = f"{source_ip}:{email}"
+    try:
+        login_limiter.check(limiter_key, settings.login_attempts_per_10m)
+    except HTTPException:
+        write_audit(
+            db,
+            actor=None,
+            action="auth.login",
+            resource_type="user",
+            resource_id=None,
+            outcome="denied",
+            details={"reason": "rate_limited"},
+            source_ip=source_ip,
+        )
+        db.commit()
+        raise
+    user = db.scalar(select(User).where(User.email == email).with_for_update())
+    password_valid = verify_user_password(payload.password, user)
+    if not user or not user.is_active or not password_valid:
         write_audit(
             db,
             actor=user,
@@ -212,10 +252,82 @@ def login(
         )
         db.commit()
         raise HTTPException(status_code=401, detail="invalid credentials")
-    if not verify_totp(user, payload.totp_code, settings):
-        raise HTTPException(status_code=401, detail="TOTP required or invalid")
+    if payload.totp_code and payload.recovery_code:
+        write_audit(
+            db,
+            actor=user,
+            action="auth.login",
+            resource_type="user",
+            resource_id=user.id,
+            outcome="denied",
+            details={"reason": "multiple_second_factors"},
+            source_ip=source_ip,
+        )
+        db.commit()
+        raise HTTPException(status_code=401, detail="invalid credentials")
+
+    recovery_remaining: int | None = None
+    if payload.recovery_code:
+        recovered, recovery_remaining = consume_recovery_code(
+            db,
+            user=user,
+            value=payload.recovery_code,
+            settings=settings,
+        )
+        write_audit(
+            db,
+            actor=user,
+            action="auth.recovery_code",
+            resource_type="user",
+            resource_id=user.id,
+            outcome="success" if recovered else "denied",
+            details={
+                "remaining": recovery_remaining,
+                "security_reminder": recovery_remaining <= 2,
+            },
+            source_ip=source_ip,
+        )
+        if not recovered:
+            db.commit()
+            raise HTTPException(status_code=401, detail="invalid credentials")
+    elif user.totp_enabled:
+        if not verify_totp(user, payload.totp_code, settings):
+            write_audit(
+                db,
+                actor=user,
+                action="auth.login",
+                resource_type="user",
+                resource_id=user.id,
+                outcome="denied",
+                details={"reason": "second_factor_invalid"},
+                source_ip=source_ip,
+            )
+            db.commit()
+            raise HTTPException(status_code=401, detail="invalid credentials")
+        secret = decrypt_sensitive(user.totp_secret_encrypted or "", settings)
+        user.last_totp_counter = totp_counter_for_code(secret, payload.totp_code)
+    elif payload.totp_code:
+        write_audit(
+            db,
+            actor=user,
+            action="auth.login",
+            resource_type="user",
+            resource_id=user.id,
+            outcome="denied",
+            details={"reason": "unexpected_second_factor"},
+            source_ip=source_ip,
+        )
+        db.commit()
+        raise HTTPException(status_code=401, detail="invalid credentials")
+
     user.last_login_at = datetime.now(UTC)
-    token, ttl = create_access_token(user, settings)
+    auth_session = create_user_session(
+        db,
+        user=user,
+        request=request,
+        settings=settings,
+    )
+    token, ttl = create_access_token(user, settings, session_id=auth_session.id)
     csrf = generate_csrf_token()
     response.set_cookie(
         "guardian_session",
@@ -246,11 +358,37 @@ def login(
     )
     db.commit()
     login_limiter.reset(limiter_key)
-    return LoginResponse(access_token=token, csrf_token=csrf, expires_in=ttl)
+    return LoginResponse(
+        access_token=token,
+        csrf_token=csrf,
+        expires_in=ttl,
+        identity_setup_required=forced_setup_required(user),
+        recovery_codes_remaining=recovery_remaining,
+    )
 
 
 @router.post("/api/v1/auth/logout", status_code=204, tags=["auth"])
-def logout(response: Response, user: Annotated[User, Depends(require_role(Role.viewer))]) -> None:
+def logout(
+    request: Request,
+    response: Response,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> None:
+    auth_session = cast(UserSession, request.state.auth_session)
+    auth_session.revoked_at = datetime.now(UTC)
+    auth_session.revoked_by = user.id
+    auth_session.revoke_reason = "logout"
+    write_audit(
+        db,
+        actor=user,
+        action="session.revoke",
+        resource_type="session",
+        resource_id=auth_session.id,
+        outcome="success",
+        details={"reason": "logout"},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
     response.delete_cookie("guardian_session", path="/")
     response.delete_cookie("guardian_csrf", path="/")
 
@@ -260,16 +398,661 @@ def me(user: Annotated[User, Depends(require_role(Role.viewer))]) -> User:
     return user
 
 
-def _active_owner_count(db: Session, *, excluding: str | None = None) -> int:
-    statement = select(User).where(User.role == Role.owner.value, User.is_active.is_(True))
-    if excluding:
-        statement = statement.where(User.id != excluding)
-    return len(list(db.scalars(statement).all()))
+def _replace_auth_cookies(
+    response: Response,
+    *,
+    token: str,
+    csrf: str,
+    ttl: int,
+    settings: Settings,
+) -> None:
+    response.set_cookie(
+        "guardian_session",
+        token,
+        max_age=ttl,
+        httponly=True,
+        secure=settings.secure_cookies,
+        samesite="strict",
+        path="/",
+    )
+    response.set_cookie(
+        "guardian_csrf",
+        csrf,
+        max_age=ttl,
+        httponly=False,
+        secure=settings.secure_cookies,
+        samesite="strict",
+        path="/",
+    )
+
+
+@router.post(
+    "/api/v1/auth/change-password",
+    response_model=LoginResponse,
+    tags=["auth"],
+)
+def change_password(
+    payload: PasswordChangeRequest,
+    request: Request,
+    response: Response,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> LoginResponse:
+    source_ip = request.client.host if request.client else None
+    db.refresh(user, with_for_update=True)
+    if not verify_password(payload.current_password, user.password_hash):
+        write_audit(
+            db,
+            actor=user,
+            action="user.password_change",
+            resource_type="user",
+            resource_id=user.id,
+            outcome="rejected",
+            details={"reason": "reauthentication_failed"},
+            source_ip=source_ip,
+        )
+        db.commit()
+        raise HTTPException(status_code=401, detail="current password is invalid")
+    if verify_password(payload.new_password, user.password_hash):
+        write_audit(
+            db,
+            actor=user,
+            action="user.password_change",
+            resource_type="user",
+            resource_id=user.id,
+            outcome="rejected",
+            details={"reason": "password_reuse"},
+            source_ip=source_ip,
+        )
+        db.commit()
+        raise HTTPException(status_code=409, detail="new password must be different")
+    current = cast(UserSession, request.state.auth_session)
+    user.password_hash = hash_password(payload.new_password)
+    user.password_changed_at = datetime.now(UTC)
+    user.must_change_password = False
+    user.session_version += 1
+    revoked = revoke_sessions(
+        db,
+        user_id=user.id,
+        actor_id=user.id,
+        reason="password_changed",
+        except_session_id=current.id,
+    )
+    current.session_version = user.session_version
+    token, ttl = create_access_token(user, settings, session_id=current.id)
+    csrf = generate_csrf_token()
+    _replace_auth_cookies(response, token=token, csrf=csrf, ttl=ttl, settings=settings)
+    write_audit(
+        db,
+        actor=user,
+        action="user.password_change",
+        resource_type="user",
+        resource_id=user.id,
+        outcome="success",
+        details={"revoked_other_sessions": revoked, "retained_current_session": True},
+        source_ip=source_ip,
+    )
+    db.commit()
+    return LoginResponse(
+        access_token=token,
+        csrf_token=csrf,
+        expires_in=ttl,
+        identity_setup_required=forced_setup_required(user),
+    )
+
+
+@router.post(
+    "/api/v1/auth/totp/setup",
+    response_model=TotpSetupView,
+    tags=["auth"],
+)
+def setup_totp(
+    payload: ReauthenticationRequest,
+    request: Request,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> TotpSetupView:
+    _require_reauthentication_audited(
+        db, user, payload.current_password, "totp.setup_begin", request
+    )
+    if user.totp_enabled:
+        write_audit(
+            db,
+            actor=user,
+            action="totp.setup_begin",
+            resource_type="user",
+            resource_id=user.id,
+            outcome="rejected",
+            details={"reason": "already_enabled"},
+            source_ip=request.client.host if request.client else None,
+        )
+        db.commit()
+        raise HTTPException(status_code=409, detail="TOTP is already enabled")
+    secret = pyotp.random_base32()
+    user.totp_pending_secret_encrypted = encrypt_sensitive(secret, settings)
+    user.totp_pending_created_at = datetime.now(UTC)
+    write_audit(
+        db,
+        actor=user,
+        action="totp.setup_begin",
+        resource_type="user",
+        resource_id=user.id,
+        outcome="success",
+        details={"displayed_once": True},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return TotpSetupView(
+        secret=secret,
+        provisioning_uri=pyotp.TOTP(secret).provisioning_uri(
+            name=user.email,
+            issuer_name="VPS Guardian",
+        ),
+    )
+
+
+@router.post(
+    "/api/v1/auth/totp/enable",
+    response_model=RecoveryCodeBatchView,
+    tags=["auth"],
+)
+def enable_totp(
+    payload: TotpConfirmRequest,
+    request: Request,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> RecoveryCodeBatchView:
+    _require_reauthentication_audited(
+        db, user, payload.current_password, "totp.enable", request
+    )
+    if not user.totp_pending_secret_encrypted or not user.totp_pending_created_at:
+        write_audit(
+            db,
+            actor=user,
+            action="totp.enable",
+            resource_type="user",
+            resource_id=user.id,
+            outcome="rejected",
+            details={"reason": "setup_not_started"},
+            source_ip=request.client.host if request.client else None,
+        )
+        db.commit()
+        raise HTTPException(status_code=409, detail="start TOTP setup first")
+    pending_at = user.totp_pending_created_at
+    if pending_at.tzinfo is None:
+        pending_at = pending_at.replace(tzinfo=UTC)
+    if pending_at < datetime.now(UTC) - timedelta(minutes=10):
+        user.totp_pending_secret_encrypted = None
+        user.totp_pending_created_at = None
+        write_audit(
+            db,
+            actor=user,
+            action="totp.enable",
+            resource_type="user",
+            resource_id=user.id,
+            outcome="rejected",
+            details={"reason": "setup_expired"},
+            source_ip=request.client.host if request.client else None,
+        )
+        db.commit()
+        raise HTTPException(status_code=409, detail="TOTP setup expired")
+    secret = decrypt_sensitive(user.totp_pending_secret_encrypted, settings)
+    counter = totp_counter_for_code(secret, payload.totp_code)
+    if counter is None:
+        write_audit(
+            db,
+            actor=user,
+            action="totp.enable",
+            resource_type="user",
+            resource_id=user.id,
+            outcome="rejected",
+            details={"reason": "confirmation_code_invalid"},
+            source_ip=request.client.host if request.client else None,
+        )
+        db.commit()
+        raise HTTPException(status_code=401, detail="TOTP confirmation is invalid")
+    user.totp_secret_encrypted = user.totp_pending_secret_encrypted
+    user.totp_pending_secret_encrypted = None
+    user.totp_pending_created_at = None
+    user.totp_enabled = True
+    user.totp_enabled_at = datetime.now(UTC)
+    user.last_totp_counter = counter
+    user.recovery_codes_confirmed_at = None
+    codes = generate_recovery_code_batch(db, user=user, settings=settings)
+    write_audit(
+        db,
+        actor=user,
+        action="totp.enable",
+        resource_type="user",
+        resource_id=user.id,
+        outcome="success",
+        details={"recovery_code_count": len(codes), "displayed_once": True},
+        source_ip=request.client.host if request.client else None,
+    )
+    write_audit(
+        db,
+        actor=user,
+        action="recovery_codes.generate",
+        resource_type="user",
+        resource_id=user.id,
+        outcome="success",
+        details={"recovery_code_count": len(codes), "displayed_once": True},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return RecoveryCodeBatchView(codes=codes, remaining=len(codes))
+
+
+@router.post(
+    "/api/v1/auth/recovery-codes/confirm",
+    response_model=RecoveryCodeStatusView,
+    tags=["auth"],
+)
+def confirm_recovery_codes(
+    _: RecoveryCodesConfirmRequest,
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> RecoveryCodeStatusView:
+    remaining = active_recovery_code_count(db, user.id)
+    if not user.totp_enabled or remaining == 0:
+        write_audit(
+            db,
+            actor=user,
+            action="recovery_codes.confirm_saved",
+            resource_type="user",
+            resource_id=user.id,
+            outcome="rejected",
+            details={"reason": "codes_unavailable"},
+            source_ip=request.client.host if request.client else None,
+        )
+        db.commit()
+        raise HTTPException(status_code=409, detail="recovery codes are not available")
+    user.recovery_codes_confirmed_at = datetime.now(UTC)
+    write_audit(
+        db,
+        actor=user,
+        action="recovery_codes.confirm_saved",
+        resource_type="user",
+        resource_id=user.id,
+        outcome="success",
+        details={"remaining": remaining},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return RecoveryCodeStatusView(remaining=remaining, low=remaining <= 2)
+
+
+@router.get(
+    "/api/v1/auth/recovery-codes",
+    response_model=RecoveryCodeStatusView,
+    tags=["auth"],
+)
+def recovery_code_status(
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> RecoveryCodeStatusView:
+    remaining = active_recovery_code_count(db, user.id)
+    return RecoveryCodeStatusView(remaining=remaining, low=remaining <= 2)
+
+
+@router.post(
+    "/api/v1/auth/recovery-codes/regenerate",
+    response_model=RecoveryCodeBatchView,
+    tags=["auth"],
+)
+def regenerate_recovery_codes(
+    payload: TotpConfirmRequest,
+    request: Request,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> RecoveryCodeBatchView:
+    _require_reauthentication_audited(
+        db, user, payload.current_password, "recovery_codes.regenerate", request
+    )
+    if not verify_totp(user, payload.totp_code, settings):
+        write_audit(
+            db,
+            actor=user,
+            action="recovery_codes.regenerate",
+            resource_type="user",
+            resource_id=user.id,
+            outcome="rejected",
+            details={"reason": "second_factor_invalid"},
+            source_ip=request.client.host if request.client else None,
+        )
+        db.commit()
+        raise HTTPException(status_code=401, detail="TOTP confirmation is invalid")
+    secret = decrypt_sensitive(user.totp_secret_encrypted or "", settings)
+    user.last_totp_counter = totp_counter_for_code(secret, payload.totp_code)
+    codes = generate_recovery_code_batch(db, user=user, settings=settings)
+    user.recovery_codes_confirmed_at = None
+    write_audit(
+        db,
+        actor=user,
+        action="recovery_codes.regenerate",
+        resource_type="user",
+        resource_id=user.id,
+        outcome="success",
+        details={"recovery_code_count": len(codes), "displayed_once": True},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return RecoveryCodeBatchView(codes=codes, remaining=len(codes))
+
+
+@router.post("/api/v1/auth/totp/disable", status_code=204, tags=["auth"])
+def disable_totp(
+    payload: TotpConfirmRequest,
+    request: Request,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> None:
+    _require_reauthentication_audited(
+        db, user, payload.current_password, "totp.disable", request
+    )
+    if not user.totp_enabled or not verify_totp(user, payload.totp_code, settings):
+        write_audit(
+            db,
+            actor=user,
+            action="totp.disable",
+            resource_type="user",
+            resource_id=user.id,
+            outcome="rejected",
+            details={"reason": "second_factor_invalid"},
+            source_ip=request.client.host if request.client else None,
+        )
+        db.commit()
+        raise HTTPException(status_code=401, detail="TOTP confirmation is invalid")
+    now = datetime.now(UTC)
+    user.totp_enabled = False
+    user.totp_enabled_at = None
+    user.totp_secret_encrypted = None
+    user.last_totp_counter = None
+    user.recovery_codes_confirmed_at = None
+    db.execute(
+        update(RecoveryCode)
+        .where(
+            RecoveryCode.user_id == user.id,
+            RecoveryCode.used_at.is_(None),
+            RecoveryCode.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    user.session_version += 1
+    revoked = revoke_sessions(
+        db,
+        user_id=user.id,
+        actor_id=user.id,
+        reason="totp_disabled",
+    )
+    write_audit(
+        db,
+        actor=user,
+        action="totp.disable",
+        resource_type="user",
+        resource_id=user.id,
+        outcome="success",
+        details={"sessions_revoked": revoked},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+
+
+def _session_view(row: UserSession, current_id: str | None = None) -> UserSessionView:
+    return UserSessionView.model_validate(row).model_copy(update={"current": row.id == current_id})
+
+
+@router.get(
+    "/api/v1/auth/sessions",
+    response_model=list[UserSessionView],
+    tags=["auth"],
+)
+def own_sessions(
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> list[UserSessionView]:
+    current = cast(UserSession, request.state.auth_session)
+    rows = db.scalars(
+        select(UserSession)
+        .where(
+            UserSession.user_id == user.id,
+            UserSession.revoked_at.is_(None),
+            UserSession.expires_at > datetime.now(UTC),
+        )
+        .order_by(desc(UserSession.issued_at))
+    ).all()
+    return [_session_view(row, current.id) for row in rows]
+
+
+@router.delete("/api/v1/auth/sessions/{session_id}", status_code=204, tags=["auth"])
+def revoke_own_other_session(
+    session_id: str,
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> None:
+    current = cast(UserSession, request.state.auth_session)
+    if session_id == current.id:
+        raise HTTPException(status_code=409, detail="use logout to revoke the current session")
+    target = db.scalar(
+        select(UserSession).where(
+            UserSession.id == session_id,
+            UserSession.user_id == user.id,
+        )
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if target.revoked_at is None:
+        target.revoked_at = datetime.now(UTC)
+        target.revoked_by = user.id
+        target.revoke_reason = "user_revoke"
+    write_audit(
+        db,
+        actor=user,
+        action="session.revoke",
+        resource_type="session",
+        resource_id=target.id,
+        outcome="success",
+        details={"reason": "user_revoke"},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+
+
+@router.get(
+    "/api/v1/users/{user_id}/sessions",
+    response_model=list[UserSessionView],
+    tags=["users"],
+)
+def list_user_sessions(
+    user_id: str,
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.admin))],
+) -> list[UserSessionView]:
+    if db.get(User, user_id) is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    return [
+        _session_view(row)
+        for row in db.scalars(
+            select(UserSession)
+            .where(
+                UserSession.user_id == user_id,
+                UserSession.revoked_at.is_(None),
+                UserSession.expires_at > datetime.now(UTC),
+            )
+            .order_by(desc(UserSession.issued_at))
+        ).all()
+    ]
+
+
+@router.delete(
+    "/api/v1/users/{user_id}/sessions/{session_id}",
+    status_code=204,
+    tags=["users"],
+)
+def revoke_user_session(
+    user_id: str,
+    session_id: str,
+    request: Request,
+    db: DB,
+    actor: Annotated[User, Depends(require_role(Role.admin))],
+) -> None:
+    target_user = db.get(User, user_id)
+    active_sessions = list(
+        db.scalars(
+            select(UserSession)
+            .where(
+                UserSession.user_id == user_id,
+                UserSession.revoked_at.is_(None),
+                UserSession.expires_at > datetime.now(UTC),
+            )
+            .order_by(UserSession.id)
+            .with_for_update()
+        ).all()
+    )
+    target = next((row for row in active_sessions if row.id == session_id), None)
+    if target_user is None or target is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    active_count = len(active_sessions)
+    if target_user.role == Role.owner.value and target_user.is_active and active_count <= 1:
+        owners = _lock_active_owners(db)
+        if not _other_verified_owner_exists(owners, target_user):
+            _audit_rejected_owner_operation(
+                db,
+                actor=actor,
+                target=target_user,
+                action="session.revoke",
+                request=request,
+                reason="sole_owner_access",
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="cannot revoke the sole Owner's last session",
+            )
+    target.revoked_at = datetime.now(UTC)
+    target.revoked_by = actor.id
+    target.revoke_reason = "administrator_revoke"
+    write_audit(
+        db,
+        actor=actor,
+        action="session.revoke",
+        resource_type="session",
+        resource_id=target.id,
+        outcome="success",
+        details={"target_user_id": user_id, "reason": "administrator_revoke"},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+
+
+@router.get(
+    "/api/v1/auth/security-events",
+    response_model=list[AuditView],
+    tags=["auth"],
+)
+def own_security_events(
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> list[AuditLog]:
+    return list(
+        db.scalars(
+            select(AuditLog)
+            .where(
+                AuditLog.actor_id == user.id,
+                AuditLog.action.in_(
+                    [
+                        "auth.login",
+                        "auth.recovery_code",
+                        "user.password_change",
+                        "totp.enable",
+                        "totp.disable",
+                        "recovery_codes.regenerate",
+                        "session.revoke",
+                    ]
+                ),
+            )
+            .order_by(desc(AuditLog.created_at))
+            .limit(50)
+        ).all()
+    )
+
+
+def _lock_active_owners(db: Session) -> list[User]:
+    return list(
+        db.scalars(
+            select(User)
+            .where(User.role == Role.owner.value, User.is_active.is_(True))
+            .order_by(User.id)
+            .with_for_update()
+        ).all()
+    )
+
+
+def _other_verified_owner_exists(owners: list[User], target: User) -> bool:
+    return any(
+        owner.id != target.id
+        and not owner.must_change_password
+        and owner.totp_enabled
+        and owner.recovery_codes_confirmed_at is not None
+        for owner in owners
+    )
+
+
+def _audit_rejected_owner_operation(
+    db: Session,
+    *,
+    actor: User,
+    target: User,
+    action: str,
+    request: Request,
+    reason: str,
+) -> None:
+    write_audit(
+        db,
+        actor=actor,
+        action=action,
+        resource_type="user",
+        resource_id=target.id,
+        outcome="rejected",
+        details={"reason": reason},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
 
 
 def _require_reauthentication(actor: User, password: str) -> None:
     if not verify_password(password, actor.password_hash):
         raise HTTPException(status_code=401, detail="current password is invalid")
+
+
+def _require_reauthentication_audited(
+    db: Session,
+    actor: User,
+    password: str,
+    action: str,
+    request: Request,
+) -> None:
+    if verify_password(password, actor.password_hash):
+        return
+    write_audit(
+        db,
+        actor=actor,
+        action=action,
+        resource_type="user",
+        resource_id=actor.id,
+        outcome="rejected",
+        details={"reason": "reauthentication_failed"},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    raise HTTPException(status_code=401, detail="current password is invalid")
 
 
 @router.get("/api/v1/users", response_model=list[UserView], tags=["users"])
@@ -287,15 +1070,46 @@ def create_user(
     actor: Annotated[User, Depends(require_role(Role.owner))],
 ) -> User:
     if db.scalar(select(User).where(User.email == payload.email)):
+        write_audit(
+            db,
+            actor=actor,
+            action="user.create",
+            resource_type="user",
+            resource_id=None,
+            outcome="rejected",
+            details={"identifier": payload.email, "reason": "duplicate_identifier"},
+            source_ip=request.client.host if request.client else None,
+        )
+        db.commit()
         raise HTTPException(status_code=409, detail="user already exists")
     user = User(
         email=payload.email,
         password_hash=hash_password(payload.password),
         role=payload.role,
         scopes=payload.scopes,
+        must_change_password=True,
+        identity_setup_enforced=True,
+        created_by=actor.id,
     )
     db.add(user)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        actor_id = actor.id
+        db.rollback()
+        refreshed_actor = db.get(User, actor_id)
+        write_audit(
+            db,
+            actor=refreshed_actor,
+            action="user.create",
+            resource_type="user",
+            resource_id=None,
+            outcome="rejected",
+            details={"identifier": payload.email, "reason": "duplicate_identifier"},
+            source_ip=request.client.host if request.client else None,
+        )
+        db.commit()
+        raise HTTPException(status_code=409, detail="user already exists") from exc
     write_audit(
         db,
         actor=actor,
@@ -303,7 +1117,13 @@ def create_user(
         resource_type="user",
         resource_id=user.id,
         outcome="success",
-        details={"role": user.role, "scopes": user.scopes},
+        details={
+            "identifier": user.email,
+            "role": user.role,
+            "scopes": user.scopes,
+            "source": "owner_api",
+            "must_change_password": True,
+        },
         source_ip=request.client.host if request.client else None,
     )
     db.commit()
@@ -321,26 +1141,59 @@ def update_user(
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="user not found")
-    _require_reauthentication(actor, payload.current_password)
+    try:
+        _require_reauthentication(actor, payload.current_password)
+    except HTTPException:
+        write_audit(
+            db,
+            actor=actor,
+            action="user.update",
+            resource_type="user",
+            resource_id=target.id,
+            outcome="rejected",
+            details={"reason": "reauthentication_failed"},
+            source_ip=request.client.host if request.client else None,
+        )
+        db.commit()
+        raise
     removing_owner = target.role == Role.owner.value and (
         payload.role not in {None, Role.owner.value} or payload.is_active is False
     )
-    if removing_owner and _active_owner_count(db, excluding=target.id) == 0:
+    owners = _lock_active_owners(db) if removing_owner else []
+    if removing_owner and not any(owner.id != target.id for owner in owners):
+        _audit_rejected_owner_operation(
+            db,
+            actor=actor,
+            target=target,
+            action="user.update",
+            request=request,
+            reason="last_active_owner",
+        )
         raise HTTPException(status_code=409, detail="the last active Owner cannot be removed")
     changes: dict[str, object] = {}
+    invalidates_sessions = False
     if payload.role is not None and payload.role != target.role:
         changes["role"] = {"from": target.role, "to": payload.role}
         target.role = payload.role
-        target.session_version += 1
+        invalidates_sessions = True
     if payload.scopes is not None and payload.scopes != target.scopes:
         changes["scopes_changed"] = True
         target.scopes = payload.scopes
-        target.session_version += 1
+        invalidates_sessions = True
     if payload.is_active is not None and payload.is_active != target.is_active:
         changes["is_active"] = payload.is_active
         target.is_active = payload.is_active
         target.disabled_at = None if payload.is_active else datetime.now(UTC)
+        target.disabled_by = None if payload.is_active else actor.id
+        invalidates_sessions = True
+    if invalidates_sessions:
         target.session_version += 1
+        revoke_sessions(
+            db,
+            user_id=target.id,
+            actor_id=actor.id,
+            reason="identity_authorization_changed",
+        )
     write_audit(
         db,
         actor=actor,
@@ -365,7 +1218,31 @@ def revoke_user_sessions(
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="user not found")
+    owners = _lock_active_owners(db) if target.role == Role.owner.value else []
+    if (
+        target.role == Role.owner.value
+        and target.is_active
+        and not _other_verified_owner_exists(owners, target)
+    ):
+        _audit_rejected_owner_operation(
+            db,
+            actor=actor,
+            target=target,
+            action="user.sessions_revoke",
+            request=request,
+            reason="sole_owner_access",
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="another verified Owner is required before revoking all access",
+        )
     target.session_version += 1
+    revoked = revoke_sessions(
+        db,
+        user_id=target.id,
+        actor_id=actor.id,
+        reason="administrator_revoke_all",
+    )
     write_audit(
         db,
         actor=actor,
@@ -373,6 +1250,7 @@ def revoke_user_sessions(
         resource_type="user",
         resource_id=target.id,
         outcome="success",
+        details={"revoked_count": revoked},
         source_ip=request.client.host if request.client else None,
     )
     db.commit()
@@ -389,11 +1267,32 @@ def rotate_user_password(
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="user not found")
-    _require_reauthentication(actor, payload.current_password)
+    _require_reauthentication_audited(
+        db, actor, payload.current_password, "user.password_rotate", request
+    )
     if verify_password(payload.new_password, target.password_hash):
+        write_audit(
+            db,
+            actor=actor,
+            action="user.password_rotate",
+            resource_type="user",
+            resource_id=target.id,
+            outcome="rejected",
+            details={"reason": "password_reuse"},
+            source_ip=request.client.host if request.client else None,
+        )
+        db.commit()
         raise HTTPException(status_code=409, detail="new password must be different")
     target.password_hash = hash_password(payload.new_password)
+    target.password_changed_at = datetime.now(UTC)
+    target.must_change_password = True
     target.session_version += 1
+    revoked = revoke_sessions(
+        db,
+        user_id=target.id,
+        actor_id=actor.id,
+        reason="administrator_password_rotation",
+    )
     write_audit(
         db,
         actor=actor,
@@ -401,9 +1300,48 @@ def rotate_user_password(
         resource_type="user",
         resource_id=target.id,
         outcome="success",
-        details={"sessions_revoked": True},
+        details={"sessions_revoked": revoked, "must_change_password": True},
         source_ip=request.client.host if request.client else None,
     )
+    db.commit()
+
+
+@router.delete("/api/v1/users/{user_id}", status_code=204, tags=["users"])
+def delete_user(
+    user_id: str,
+    payload: UserDeleteRequest,
+    request: Request,
+    db: DB,
+    actor: Annotated[User, Depends(require_role(Role.owner))],
+) -> None:
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    _require_reauthentication_audited(
+        db, actor, payload.current_password, "user.delete", request
+    )
+    owners = _lock_active_owners(db) if target.role == Role.owner.value and target.is_active else []
+    if owners and not any(owner.id != target.id for owner in owners):
+        _audit_rejected_owner_operation(
+            db,
+            actor=actor,
+            target=target,
+            action="user.delete",
+            request=request,
+            reason="last_active_owner",
+        )
+        raise HTTPException(status_code=409, detail="the last active Owner cannot be deleted")
+    write_audit(
+        db,
+        actor=actor,
+        action="user.delete",
+        resource_type="user",
+        resource_id=target.id,
+        outcome="success",
+        details={"identifier": target.email, "role": target.role},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.delete(target)
     db.commit()
 
 

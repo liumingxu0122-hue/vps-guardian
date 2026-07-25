@@ -3667,3 +3667,53 @@ kbd {
   white-space: nowrap;
   border: 0;
 }
+.identity-setup-panel {
+  width: min(680px, calc(100vw - 32px));
+}
+
+.identity-setup-panel h2 {
+  align-items: center;
+  display: flex;
+  font-size: 1rem;
+  gap: 8px;
+}
+
+.one-time-secret {
+  overflow-wrap: anywhere;
+  padding: 12px;
+}
+
+.recovery-code-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.recovery-code-grid code,
+.one-time-secret {
+  background: var(--surface-raised, rgba(127, 127, 127, 0.1));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-radius: 8px;
+}
+
+.recovery-code-grid code {
+  padding: 8px;
+  text-align: center;
+}
+
+.session-row {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.session-row span {
+  display: grid;
+  gap: 3px;
+}
+
+@media (max-width: 560px) {
+  .recovery-code-grid {
+    grid-template-columns: 1fr;
+  }
+}

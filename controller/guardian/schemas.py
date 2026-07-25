@@ -15,10 +15,24 @@ class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+def validate_password_strength(value: str) -> str:
+    if len(set(value)) < 8 or value.casefold() in {
+        "passwordpassword",
+        "correcthorsebatterystaple",
+    }:
+        raise ValueError("password does not meet the passphrase strength policy")
+    if any(ord(character) < 32 for character in value):
+        raise ValueError("password contains control characters")
+    return value
+
+
 class LoginRequest(BaseModel):
     email: str = Field(min_length=3, max_length=255)
     password: str = Field(min_length=12, max_length=256)
     totp_code: str | None = Field(default=None, pattern=r"^\d{6}$")
+    recovery_code: str | None = Field(
+        default=None, min_length=16, max_length=32, pattern=r"^[A-Za-z0-9-]+$"
+    )
 
 
 class LoginResponse(BaseModel):
@@ -26,6 +40,8 @@ class LoginResponse(BaseModel):
     token_type: Literal["bearer"] = "bearer"  # noqa: S105 - OAuth token type, not a secret.
     csrf_token: str
     expires_in: int
+    identity_setup_required: bool
+    recovery_codes_remaining: int | None = None
 
 
 class UserView(ORMModel):
@@ -36,7 +52,13 @@ class UserView(ORMModel):
     is_active: bool
     scopes: list[str]
     last_login_at: datetime | None
+    password_changed_at: datetime | None
+    totp_enabled_at: datetime | None
     disabled_at: datetime | None
+    must_change_password: bool
+    identity_setup_required: bool
+    created_by: str | None
+    disabled_by: str | None
     created_at: datetime
 
 
@@ -53,6 +75,11 @@ class UserCreate(BaseModel):
         if "@" not in normalized:
             raise ValueError("email address is invalid")
         return normalized
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return validate_password_strength(value)
 
     @field_validator("scopes")
     @classmethod
@@ -79,6 +106,62 @@ class UserPasswordReset(BaseModel):
     current_password: str = Field(min_length=12, max_length=256)
     new_password: str = Field(min_length=14, max_length=256)
     confirmation: Literal["ROTATE USER CREDENTIAL"]
+
+    _validate_password = field_validator("new_password")(validate_password_strength)
+
+
+class UserDeleteRequest(BaseModel):
+    current_password: str = Field(min_length=12, max_length=256)
+    confirmation: Literal["DELETE USER"]
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=12, max_length=256)
+    new_password: str = Field(min_length=14, max_length=256)
+    retain_current_session: Literal[True] = True
+
+    _validate_password = field_validator("new_password")(validate_password_strength)
+
+
+class ReauthenticationRequest(BaseModel):
+    current_password: str = Field(min_length=12, max_length=256)
+
+
+class TotpConfirmRequest(ReauthenticationRequest):
+    totp_code: str = Field(pattern=r"^\d{6}$")
+
+
+class RecoveryCodesConfirmRequest(BaseModel):
+    confirmation: Literal["I SAVED MY RECOVERY CODES"]
+
+
+class RecoveryCodeBatchView(BaseModel):
+    codes: list[str]
+    remaining: int
+    displayed_once: Literal[True] = True
+
+
+class TotpSetupView(BaseModel):
+    secret: str
+    provisioning_uri: str
+    displayed_once: Literal[True] = True
+
+
+class RecoveryCodeStatusView(BaseModel):
+    remaining: int
+    low: bool
+
+
+class UserSessionView(ORMModel):
+    id: str
+    user_id: str
+    issued_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None
+    revoke_reason: str | None
+    user_agent_digest: str
+    ip_digest: str
+    current: bool = False
 
 
 class HostCreate(BaseModel):

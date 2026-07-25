@@ -1,18 +1,20 @@
 <script setup lang="ts">
-import { KeyRound, Pencil, Plus, RefreshCw, ShieldCheck, X } from '@lucide/vue'
+import { KeyRound, Monitor, Pencil, Plus, RefreshCw, ShieldCheck, X } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
 
 import { jsonBody, request } from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import { session } from '../session'
-import type { User } from '../types'
+import type { User, UserSession } from '../types'
 import { formatTime } from '../utils'
 
 const users = ref<User[]>([])
 const dialog = ref<HTMLDialogElement | null>(null)
 const editDialog = ref<HTMLDialogElement | null>(null)
 const passwordDialog = ref<HTMLDialogElement | null>(null)
+const sessionsDialog = ref<HTMLDialogElement | null>(null)
+const activeSessions = ref<UserSession[]>([])
 const submitting = ref(false)
 const form = ref({ email: '', password: '', role: 'viewer' as User['role'], scopes: '' })
 const selected = ref<User | null>(null)
@@ -43,6 +45,18 @@ async function createUser(): Promise<void> {
 }
 async function revokeSessions(user: User): Promise<void> {
   await request<void>(`/api/v1/users/${user.id}/revoke-sessions`, { method: 'POST' })
+}
+async function openSessions(user: User): Promise<void> {
+  selected.value = user
+  activeSessions.value = await request<UserSession[]>(`/api/v1/users/${user.id}/sessions`)
+  sessionsDialog.value?.showModal()
+}
+async function revokeSingleSession(sessionId: string): Promise<void> {
+  if (!selected.value) return
+  await request<void>(`/api/v1/users/${selected.value.id}/sessions/${sessionId}`, {
+    method: 'DELETE',
+  })
+  activeSessions.value = await request<UserSession[]>(`/api/v1/users/${selected.value.id}/sessions`)
 }
 function openEdit(user: User): void {
   selected.value = user
@@ -114,6 +128,7 @@ onMounted(load)
       <span class="row-actions">
         <button v-if="isOwner" class="icon-button bordered" type="button" :aria-label="$t('users.manage')" @click="openEdit(user)"><Pencil :size="14" /></button>
         <button v-if="isOwner" class="icon-button bordered" type="button" :aria-label="$t('users.rotatePassword')" @click="openPassword(user)"><KeyRound :size="14" /></button>
+        <button class="icon-button bordered" type="button" aria-label="View active sessions" @click="openSessions(user)"><Monitor :size="14" /></button>
         <button class="secondary-button" type="button" @click="revokeSessions(user)">{{ $t('users.revokeSessions') }}</button>
       </span>
     </div>
@@ -147,5 +162,16 @@ onMounted(load)
       <p class="permission-note">{{ $t('users.rotationWarning') }}</p>
       <div class="dialog-actions"><button class="secondary-button" type="button" @click="passwordDialog?.close()">{{ $t('common.cancel') }}</button><button class="danger-button" type="submit" :disabled="submitting">{{ $t('users.rotatePassword') }}</button></div>
     </form>
+  </dialog>
+  <dialog ref="sessionsDialog" class="modal-dialog compact">
+    <form method="dialog" class="dialog-header"><div><h2>Active sessions</h2><p>{{ selected?.email }}</p></div><button class="icon-button"><X :size="18" /></button></form>
+    <div class="dialog-form">
+      <p class="permission-note">Session identifiers are opaque; browser and IP values are stored only as keyed digests.</p>
+      <div v-for="row in activeSessions" :key="row.id" class="session-row">
+        <span><strong>{{ row.id.slice(0, 8) }}</strong><small>{{ formatTime(row.issued_at) }} → {{ formatTime(row.expires_at) }}</small></span>
+        <button class="danger-button" type="button" @click="revokeSingleSession(row.id)">Revoke</button>
+      </div>
+      <p v-if="!activeSessions.length">No active sessions.</p>
+    </div>
   </dialog>
 </template>

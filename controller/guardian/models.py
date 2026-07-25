@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    false,
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
@@ -136,9 +137,86 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     scopes: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     session_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    identity_setup_enforced: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    password_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    totp_enabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    totp_pending_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    totp_pending_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_totp_counter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recovery_codes_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    @property
+    def identity_setup_required(self) -> bool:
+        return bool(
+            self.must_change_password
+            or (
+                self.identity_setup_enforced
+                and (not self.totp_enabled or self.recovery_codes_confirmed_at is None)
+            )
+        )
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+    __table_args__ = (
+        CheckConstraint("session_version >= 1", name="ck_user_session_version"),
+        CheckConstraint("expires_at > issued_at", name="ck_user_session_expiry"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    revoke_reason: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    user_agent_digest: Mapped[str] = mapped_column(String(64))
+    ip_digest: Mapped[str] = mapped_column(String(64))
+    session_version: Mapped[int] = mapped_column(Integer)
+
+
+class RecoveryCode(Base):
+    __tablename__ = "recovery_codes"
+    __table_args__ = (
+        UniqueConstraint("user_id", "code_hash", name="uq_recovery_code_user_hash"),
+        Index("ix_recovery_codes_user_batch", "user_id", "batch_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    code_hash: Mapped[str] = mapped_column(String(64))
+    batch_id: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Host(Base):

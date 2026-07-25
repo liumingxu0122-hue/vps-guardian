@@ -14,6 +14,11 @@ const router = createRouter({
       meta: { public: true },
     },
     {
+      path: '/identity-setup',
+      name: 'identity-setup',
+      component: () => import('./views/IdentitySetupView.vue'),
+    },
+    {
       path: '/',
       component: OperationsLayout,
       children: [
@@ -30,6 +35,11 @@ const router = createRouter({
           component: () => import('./views/IncidentsView.vue'),
         },
         { path: 'repairs', name: 'repairs', component: () => import('./views/RepairsView.vue') },
+        {
+          path: 'account-security',
+          name: 'account-security',
+          component: () => import('./views/AccountSecurityView.vue'),
+        },
         {
           path: 'recovery',
           name: 'recovery',
@@ -88,8 +98,17 @@ const roleOrder = { viewer: 0, operator: 1, admin: 2, owner: 3 }
 
 router.beforeEach(async (to) => {
   await session.restore()
-  if (to.meta.public) return session.user ? { name: 'overview' } : true
+  if (to.meta.public) {
+    if (!session.user) return true
+    return session.user.identity_setup_required ? { name: 'identity-setup' } : { name: 'overview' }
+  }
   if (!session.user) return { name: 'login', query: { redirect: to.fullPath } }
+  if (session.user.identity_setup_required && to.name !== 'identity-setup') {
+    return { name: 'identity-setup' }
+  }
+  if (!session.user.identity_setup_required && to.name === 'identity-setup') {
+    return { name: 'overview' }
+  }
   const minimum = to.meta.minimumRole as keyof typeof roleOrder | undefined
   if (minimum && roleOrder[session.user.role] < roleOrder[minimum]) return { name: 'overview' }
   return true

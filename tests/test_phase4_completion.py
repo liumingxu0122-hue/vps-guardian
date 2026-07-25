@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pyotp
 from fastapi.testclient import TestClient
 from guardian.database import SessionLocal
 from guardian.models import (
@@ -26,6 +27,17 @@ def auth(token: str) -> dict[str, str]:
 def test_session_version_revokes_existing_bearer_token(
     client: TestClient, owner: User, owner_token: str
 ) -> None:
+    with SessionLocal() as db:
+        db.add(
+            User(
+                email="verified-recovery-owner@example.test",
+                password_hash="not-used-in-this-test",
+                role="owner",
+                totp_enabled=True,
+                recovery_codes_confirmed_at=datetime.now(UTC),
+            )
+        )
+        db.commit()
     revoked = client.post(
         f"/api/v1/users/{owner.id}/revoke-sessions",
         headers=auth(owner_token),
@@ -115,6 +127,38 @@ def test_explicit_scopes_narrow_role_permissions(
         },
     )
     token = login.json()["access_token"]
+    blocked = client.get("/api/v1/alerts", headers=auth(token))
+    assert blocked.status_code == 403
+    changed = client.post(
+        "/api/v1/auth/change-password",
+        headers=auth(token),
+        json={
+            "current_password": "scoped-viewer-secure-passphrase",
+            "new_password": "scoped-viewer-new-secure-passphrase",
+            "retain_current_session": True,
+        },
+    )
+    token = changed.json()["access_token"]
+    setup = client.post(
+        "/api/v1/auth/totp/setup",
+        headers=auth(token),
+        json={"current_password": "scoped-viewer-new-secure-passphrase"},
+    )
+    enabled = client.post(
+        "/api/v1/auth/totp/enable",
+        headers=auth(token),
+        json={
+            "current_password": "scoped-viewer-new-secure-passphrase",
+            "totp_code": pyotp.TOTP(setup.json()["secret"]).now(),
+        },
+    )
+    assert enabled.status_code == 200
+    confirmed = client.post(
+        "/api/v1/auth/recovery-codes/confirm",
+        headers=auth(token),
+        json={"confirmation": "I SAVED MY RECOVERY CODES"},
+    )
+    assert confirmed.status_code == 200
     assert client.get("/api/v1/alerts", headers=auth(token)).status_code == 200
     assert client.get("/api/v1/hosts", headers=auth(token)).status_code == 403
 

@@ -14,6 +14,9 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 - Added reversible migration `0009_agent_provenance`, side-effect-free Agent
   `version`/`--version` commands, authenticated heartbeat build metadata, Agent
   artifact manifests, and CycloneDX release metadata.
+- Added reversible migration `0010_identity_recovery`, server-side user sessions,
+  forced first-login password/TOTP/recovery-code setup, hash-only one-time recovery
+  codes, audited session revocation, and transaction-locked last-Owner protections.
 - Added bilingual Phase 4 workflows plus security, observation, production-gate, Staging/rollback, Komari coexistence, disk migration, and Nezha 2.3.0 comparison documentation.
 
 ### Changed
@@ -26,6 +29,10 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Security
 
+- Authentication now rejects JWTs without a live, unexpired, unrevoked server Session
+  row; password and authorization changes invalidate older sessions.
+- TOTP confirmation rejects time-step replay, and recovery-code login is rate-limited,
+  single-use, hash-only, and audited without recording the code.
 - Explicit scopes now narrow role permissions at the API for separate read/write resources.
 - Notification routing enforces event-scope and severity filters before enqueueing.
 - Settings expose Secret configuration state and source only, never Secret values.

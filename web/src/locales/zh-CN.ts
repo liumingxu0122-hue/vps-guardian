@@ -31,6 +31,7 @@ export default {
     overview: '运营总览', attention: '需要关注', hosts: '主机', services: '服务检查',
     topology: '拓扑', incidents: '事故', repairs: '修复', security: '安全中心',
     users: '用户与权限', agents: 'Agent 管理', notifications: '通知中心',
+    accountSecurity: '账户安全',
     recovery: '备份与恢复', approvals: '审批中心', audit: '审计日志', settings: '系统设置',
     groupOverview: '总览', groupInfrastructure: '基础设施', groupResponse: '事件响应',
     groupProtection: '数据保护', groupAdministration: '安全与管理',
@@ -44,6 +45,8 @@ export default {
     title: '登录控制中心', description: '使用具有最小所需权限的运维账户。',
     email: '邮箱', password: '密码', totp: 'TOTP 验证码', showPassword: '显示密码',
     hidePassword: '隐藏密码', submit: '登录', submitting: '正在验证',
+    recoveryCode: '恢复码', recoveryCodeHint: '用于替代 TOTP',
+    secondFactorChoice: 'TOTP 验证码和恢复码只能填写其中一个。',
   },
   overview: {
     title: '运营总览', description: 'Staging 运行态、资源、灾备与安全门禁',

@@ -116,7 +116,19 @@ def test_migrations_enforce_audit_append_only(tmp_path: Path) -> None:
         "completed_at",
     } <= task_columns
     user_columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
-    assert {"scopes", "session_version", "last_login_at", "disabled_at"} <= user_columns
+    assert {
+        "scopes",
+        "session_version",
+        "must_change_password",
+        "identity_setup_enforced",
+        "last_login_at",
+        "password_changed_at",
+        "totp_enabled_at",
+        "disabled_at",
+        "disabled_by",
+        "created_by",
+    } <= user_columns
+    assert {"user_sessions", "recovery_codes"} <= actual_tables
     agent_columns = {row[1] for row in connection.execute("PRAGMA table_info(agents)")}
     assert {
         "build_git_sha",
@@ -196,6 +208,134 @@ def test_phase4_completion_migration_round_trip(tmp_path: Path) -> None:
     assert "closed_at" in {
         row[1] for row in connection.execute("PRAGMA table_info(alert_instances)")
     }
+    connection.close()
+
+
+def test_identity_recovery_migrates_isolated_legacy_copy_and_preserves_core_rows(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "identity-legacy-copy.db"
+    environment = os.environ.copy()
+    environment["GUARDIAN_DATABASE_URL"] = f"sqlite:///{database.as_posix()}"
+
+    def migrate(*arguments: str) -> None:
+        result = subprocess.run(  # noqa: S603 - fixed Python/Alembic argv, no shell
+            [
+                sys.executable,
+                "-m",
+                "alembic",
+                "-c",
+                "controller/alembic.ini",
+                *arguments,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+
+    migrate("upgrade", "0009_agent_provenance")
+    connection = sqlite3.connect(database)
+    connection.execute(
+        """
+        INSERT INTO users
+            (id, email, password_hash, role, totp_enabled, is_active, scopes,
+             session_version, created_at)
+        VALUES
+            ('legacy-owner', 'legacy-owner@example.test', 'argon2id-placeholder',
+             'owner', 0, 1, '[]', 1, CURRENT_TIMESTAMP)
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO audit_logs
+            (actor_id, action, resource_type, resource_id, outcome, details,
+             source_ip, created_at)
+        VALUES
+            ('legacy-owner', 'legacy.identity', 'user', 'legacy-owner',
+             'success', '{}', NULL, CURRENT_TIMESTAMP)
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    migrate("upgrade", "0010_identity_recovery")
+    connection = sqlite3.connect(database)
+    assert connection.execute("SELECT COUNT(*) FROM users").fetchone() == (1,)
+    assert connection.execute("SELECT COUNT(*) FROM audit_logs").fetchone() == (1,)
+    user = connection.execute(
+        """
+        SELECT email, session_version, must_change_password, identity_setup_enforced,
+               last_login_at,
+               password_changed_at, totp_enabled_at, disabled_at, disabled_by,
+               created_by
+        FROM users WHERE id = 'legacy-owner'
+        """
+    ).fetchone()
+    assert user == (
+        "legacy-owner@example.test",
+        1,
+        0,
+        0,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    digest = "a" * 64
+    connection.execute(
+        """
+        INSERT INTO recovery_codes
+            (id, user_id, code_hash, batch_id, created_at)
+        VALUES ('code-1', 'legacy-owner', ?, 'batch-1', CURRENT_TIMESTAMP)
+        """,
+        (digest,),
+    )
+    connection.execute(
+        """
+        INSERT INTO user_sessions
+            (id, user_id, issued_at, expires_at, user_agent_digest, ip_digest,
+             session_version)
+        VALUES
+            ('session-1', 'legacy-owner', CURRENT_TIMESTAMP,
+             datetime(CURRENT_TIMESTAMP, '+30 minutes'), ?, ?, 1)
+        """,
+        ("b" * 64, "c" * 64),
+    )
+    connection.commit()
+    assert connection.execute(
+        "SELECT code_hash FROM recovery_codes WHERE id = 'code-1'"
+    ).fetchone() == (digest,)
+    assert connection.execute(
+        "SELECT session_version FROM user_sessions WHERE id = 'session-1'"
+    ).fetchone() == (1,)
+    connection.close()
+
+    migrate("downgrade", "0009_agent_provenance")
+    connection = sqlite3.connect(database)
+    assert connection.execute("SELECT COUNT(*) FROM users").fetchone() == (1,)
+    assert connection.execute("SELECT COUNT(*) FROM audit_logs").fetchone() == (1,)
+    tables = {
+        row[0]
+        for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert "user_sessions" not in tables
+    assert "recovery_codes" not in tables
+    connection.close()
+
+    migrate("upgrade", "0010_identity_recovery")
+    connection = sqlite3.connect(database)
+    assert connection.execute("SELECT COUNT(*) FROM users").fetchone() == (1,)
+    assert connection.execute("SELECT COUNT(*) FROM audit_logs").fetchone() == (1,)
+    tables = {
+        row[0]
+        for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert {"user_sessions", "recovery_codes"} <= tables
     connection.close()
 
 

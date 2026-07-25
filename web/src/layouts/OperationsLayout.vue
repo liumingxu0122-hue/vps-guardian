@@ -69,6 +69,7 @@ const navGroups = [
     label: 'nav.groupProtection',
     items: [
       { to: '/recovery', label: 'nav.recovery', icon: ArchiveRestore, minimumRole: 'operator' },
+      { to: '/account-security', label: 'nav.accountSecurity', icon: ShieldCheck },
     ],
   },
   {
@@ -215,6 +216,14 @@ async function logout(): Promise<void> {
         <div class="breadcrumbs"><span>VPS Guardian</span><ChevronRight :size="13" /><strong>{{ currentItem ? t(currentItem.label) : route.name }}</strong></div>
         <button class="command-trigger" type="button" @click="paletteOpen = true"><Search :size="15" /><span>{{ t('nav.search') }}</span><kbd>Ctrl K</kbd></button>
       </header>
+      <RouterLink
+        v-if="session.recoveryCodesRemaining !== null && session.recoveryCodesRemaining <= 2"
+        class="risk-banner"
+        to="/account-security"
+      >
+        <ShieldCheck :size="17" />
+        <span>Only {{ session.recoveryCodesRemaining }} recovery codes remain. Regenerate a new batch.</span>
+      </RouterLink>
       <RouterView />
     </main>
     <div v-if="paletteOpen" class="command-backdrop" @click.self="paletteOpen = false">

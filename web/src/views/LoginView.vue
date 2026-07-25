@@ -11,6 +11,7 @@ import { session } from '../session'
 const email = ref('')
 const password = ref('')
 const totp = ref('')
+const recoveryCode = ref('')
 const reveal = ref(false)
 const loading = ref(false)
 const error = ref('')
@@ -22,7 +23,12 @@ async function submit(): Promise<void> {
   error.value = ''
   loading.value = true
   try {
-    await session.login(email.value.trim(), password.value, totp.value.trim())
+    await session.login(
+      email.value.trim(),
+      password.value,
+      totp.value.trim(),
+      recoveryCode.value.trim(),
+    )
     const target = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
     await router.replace(target)
   } catch (caught) {
@@ -69,6 +75,16 @@ async function submit(): Promise<void> {
           <span>{{ t('login.totp') }}</span>
           <input v-model="totp" inputmode="numeric" autocomplete="one-time-code" pattern="\d{6}" maxlength="6" />
         </label>
+        <label>
+          <span>{{ t('login.recoveryCode') }}</span>
+          <input
+            v-model="recoveryCode"
+            autocomplete="one-time-code"
+            maxlength="32"
+            :placeholder="t('login.recoveryCodeHint')"
+          />
+        </label>
+        <p class="permission-note">{{ t('login.secondFactorChoice') }}</p>
         <p v-if="error" class="form-error" role="alert">{{ error }}</p>
         <button class="primary-button login-button" type="submit" :disabled="loading">
           {{ loading ? t('login.submitting') : t('login.submit') }}

@@ -92,6 +92,9 @@ docker compose exec -it controller controller-entrypoint guardian-admin create-u
 
 TLS 1.3 mTLS、签名任务、防重放、RBAC、TOTP、CSRF 防护、限流、审批和审计用于缩小影响范围，但不能替代主机加固。参见[安全模型](docs/zh-CN/SECURITY_MODEL.md)与[安全策略](SECURITY.md)。
 
+候选身份恢复闭环见[身份恢复](docs/zh-CN/IDENTITY_RECOVERY.md)。该文档不构成
+在线迁移或部署授权。
+
 ## 路线图
 
 - 验证更大规模多 VPS 集群的长期运行

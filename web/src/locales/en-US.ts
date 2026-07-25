@@ -31,6 +31,7 @@ export default {
     overview: 'Operations overview', attention: 'Needs attention', hosts: 'Hosts', services: 'Service checks',
     topology: 'Topology', incidents: 'Incidents', repairs: 'Repairs', security: 'Security center',
     users: 'Users & access', agents: 'Agent management', notifications: 'Notification center',
+    accountSecurity: 'Account security',
     recovery: 'Backup & Restore', approvals: 'Approvals', audit: 'Audit log', settings: 'Settings',
     groupOverview: 'Overview', groupInfrastructure: 'Infrastructure', groupResponse: 'Event response',
     groupProtection: 'Data protection', groupAdministration: 'Security & administration',
@@ -44,6 +45,8 @@ export default {
     title: 'Sign in to the control center', description: 'Use an operations account with least-privilege access.',
     email: 'Email', password: 'Password', totp: 'TOTP code', showPassword: 'Show password',
     hidePassword: 'Hide password', submit: 'Sign in', submitting: 'Verifying',
+    recoveryCode: 'Recovery code', recoveryCodeHint: 'Use instead of TOTP',
+    secondFactorChoice: 'Enter either a TOTP code or one recovery code, never both.',
   },
   overview: {
     title: 'Operations Overview', description: 'Staging health, resources, disaster recovery, and security gates',
