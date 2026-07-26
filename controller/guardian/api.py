@@ -40,7 +40,12 @@ from guardian.backup import (
     promote_recovery_point,
 )
 from guardian.config import Settings, get_settings
-from guardian.dashboard import current_resource_summary, dashboard_bootstrap
+from guardian.dashboard import (
+    current_resource_summary,
+    dashboard_bootstrap,
+    security_summary,
+    topology_summary,
+)
 from guardian.database import get_db
 from guardian.enrollment import (
     EnrollmentRateLimitError,
@@ -1834,6 +1839,39 @@ def dashboard_resources_current(
 ) -> dict[str, object]:
     started = time.perf_counter()
     payload = current_resource_summary(db)
+    response.headers["Cache-Control"] = "private, max-age=15"
+    response.headers["Server-Timing"] = (
+        f"total;dur={(time.perf_counter() - started) * 1000:.2f}"
+    )
+    response.headers["Vary"] = "Authorization, Cookie"
+    return payload
+
+
+@router.get("/api/v1/dashboard/topology", tags=["dashboard"])
+def dashboard_topology(
+    response: Response,
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.viewer))],
+) -> dict[str, object]:
+    started = time.perf_counter()
+    payload = topology_summary(db)
+    response.headers["Cache-Control"] = "private, max-age=15"
+    response.headers["Server-Timing"] = (
+        f"total;dur={(time.perf_counter() - started) * 1000:.2f}"
+    )
+    response.headers["Vary"] = "Authorization, Cookie"
+    return payload
+
+
+@router.get("/api/v1/dashboard/security", tags=["dashboard"])
+def dashboard_security(
+    response: Response,
+    db: DB,
+    settings: Config,
+    _: Annotated[User, Depends(require_role(Role.admin))],
+) -> dict[str, object]:
+    started = time.perf_counter()
+    payload = security_summary(db, settings=settings)
     response.headers["Cache-Control"] = "private, max-age=15"
     response.headers["Server-Timing"] = (
         f"total;dur={(time.perf_counter() - started) * 1000:.2f}"

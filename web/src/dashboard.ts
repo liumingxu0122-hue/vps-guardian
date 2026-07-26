@@ -71,6 +71,32 @@ export interface DashboardBootstrap {
   sections: Record<string, { status: string }>
 }
 
+export interface DashboardTopology {
+  generated_at: string
+  nodes: Array<{
+    id: string
+    label: string
+    kind: 'control' | 'gateway' | 'database' | 'web' | 'agent'
+    status: 'healthy' | 'degraded' | 'offline' | 'unknown'
+  }>
+}
+
+export interface DashboardSecurity {
+  generated_at: string
+  controls: {
+    uncovered_critical: number | null
+    uncovered_high: number | null
+    mtls: string
+    crl: string
+    certificate_rotation: string
+    last_scan_at: string | null
+    login_rate_limit: string
+    totp: string
+    rbac: string
+    audit: string
+  }
+}
+
 let loadPromise: Promise<void> | null = null
 
 export const dashboard = reactive({

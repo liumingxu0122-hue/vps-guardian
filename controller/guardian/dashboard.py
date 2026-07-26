@@ -15,8 +15,10 @@ from guardian import __version__
 from guardian.config import Settings
 from guardian.models import (
     Agent,
+    AgentIdentity,
     AlertInstance,
     AlertRule,
+    Host,
     Incident,
     IncidentStatus,
     MetricSnapshot,
@@ -231,6 +233,75 @@ def current_resource_summary(database: Session) -> dict[str, object]:
             "disk_percent": average_delta("disk_percent"),
         },
         "hosts": host_values,
+    }
+
+
+def topology_summary(database: Session) -> dict[str, object]:
+    """Return topology inventory without loading metric history or evidence."""
+    hosts = database.execute(
+        select(Host.id, Host.name, Host.status)
+        .where(Host.enabled.is_(True))
+        .order_by(Host.name)
+    ).all()
+    return {
+        "generated_at": _iso(datetime.now(UTC)),
+        "nodes": [
+            {
+                "id": "controller",
+                "label": "Controller",
+                "kind": "control",
+                "status": "healthy",
+            },
+            {
+                "id": "agent-gateway",
+                "label": "Agent Gateway",
+                "kind": "gateway",
+                "status": "unknown",
+            },
+            {
+                "id": "postgresql",
+                "label": "PostgreSQL",
+                "kind": "database",
+                "status": "healthy",
+            },
+            {"id": "web", "label": "Web", "kind": "web", "status": "healthy"},
+            *[
+                {
+                    "id": f"agent-{host_id}",
+                    "label": name,
+                    "kind": "agent",
+                    "status": status,
+                }
+                for host_id, name, status in hosts
+            ],
+        ],
+    }
+
+
+def security_summary(database: Session, *, settings: Settings) -> dict[str, object]:
+    """Return non-secret security controls without the full operations overview."""
+    active_identities = database.scalar(
+        select(func.count(AgentIdentity.id)).where(
+            AgentIdentity.state == "active",
+            AgentIdentity.revoked_at.is_(None),
+        )
+    )
+    return {
+        "generated_at": _iso(datetime.now(UTC)),
+        "controls": {
+            "uncovered_critical": settings.operations_uncovered_critical,
+            "uncovered_high": settings.operations_uncovered_high,
+            "mtls": "enforced",
+            "crl": "enforced",
+            "certificate_rotation": (
+                "operational" if int(active_identities or 0) else "not_observed"
+            ),
+            "last_scan_at": _iso(settings.operations_security_scan_at),
+            "login_rate_limit": "enforced",
+            "totp": "available",
+            "rbac": "enforced",
+            "audit": "append_only",
+        },
     }
 
 

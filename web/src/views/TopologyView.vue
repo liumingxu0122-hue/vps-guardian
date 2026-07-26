@@ -5,11 +5,17 @@ import { onMounted, ref } from 'vue'
 import { request } from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
-import type { Overview } from '../types'
+import type { DashboardTopology } from '../dashboard'
 
-const data = ref<Overview | null>(null)
+const data = ref<DashboardTopology | null>(null)
+const error = ref('')
 async function load(): Promise<void> {
-  data.value = await request<Overview>('/api/v1/overview?window=24h')
+  error.value = ''
+  try {
+    data.value = await request<DashboardTopology>('/api/v1/dashboard/topology')
+  } catch {
+    error.value = 'Topology summary is temporarily unavailable.'
+  }
 }
 onMounted(load)
 </script>
@@ -18,9 +24,10 @@ onMounted(load)
   <PageHeader :title="$t('topology.title')" :description="$t('topology.description')">
     <template #actions><button class="icon-button bordered" type="button" :aria-label="$t('common.refresh')" @click="load"><RefreshCw :size="17" /></button></template>
   </PageHeader>
+  <div v-if="error" class="v3-module-state error-state" role="alert"><strong>{{ error }}</strong><button class="proto-button secondary" type="button" @click="load">Retry</button></div>
   <section v-if="data" class="topology-map overview-section">
     <div class="topology-stage">
-      <article v-for="node in data.topology" :key="node.id" class="topology-card">
+      <article v-for="node in data.nodes" :key="node.id" class="topology-card">
         <component :is="node.kind === 'database' ? Database : node.kind === 'gateway' ? ShieldCheck : node.kind === 'agent' ? Server : Network" :size="19" />
         <div><strong>{{ node.label }}</strong><small>{{ node.kind }}</small></div>
         <StatusBadge :status="node.status" />

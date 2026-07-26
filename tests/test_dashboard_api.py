@@ -242,6 +242,70 @@ def test_dashboard_current_resources_requires_authentication(client: TestClient)
     assert response.status_code == 401
 
 
+def test_dashboard_topology_is_small_and_avoids_metric_history(
+    client: TestClient, owner_token: str
+) -> None:
+    seed_dashboard()
+    headers = {"Authorization": f"Bearer {owner_token}"}
+    statements: list[str] = []
+
+    def record_statement(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: object,
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_statement)
+    try:
+        response = client.get("/api/v1/dashboard/topology", headers=headers)
+    finally:
+        event.remove(engine, "before_cursor_execute", record_statement)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert {node["label"] for node in payload["nodes"]} >= {
+        "Controller",
+        "Agent Gateway",
+        "PostgreSQL",
+        "Web",
+        "hong-kong",
+        "us-west",
+    }
+    assert all("address" not in node for node in payload["nodes"])
+    assert not any("metric_snapshots" in statement.lower() for statement in statements)
+    assert len(statements) <= 3
+    assert "total;dur=" in response.headers["server-timing"]
+
+
+def test_dashboard_security_is_non_secret_and_role_protected(
+    client: TestClient, owner_token: str
+) -> None:
+    response = client.get(
+        "/api/v1/dashboard/security",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["controls"]["mtls"] == "enforced"
+    assert payload["controls"]["rbac"] == "enforced"
+    serialized = str(payload).lower()
+    assert "password" not in serialized
+    assert "token" not in serialized
+    assert "secret" not in serialized
+    assert (
+        client.get(
+            "/api/v1/dashboard/security",
+            headers={"Authorization": "Bearer invalid-explicit-credential"},
+        ).status_code
+        == 401
+    )
+
+
 def test_dashboard_bootstrap_degrades_noncritical_backup_section(
     monkeypatch: MonkeyPatch,
     owner_token: str,

@@ -9,7 +9,11 @@ import type {
   ServiceSummary,
   User,
 } from '../src/types'
-import type { DashboardBootstrap } from '../src/dashboard'
+import type {
+  DashboardBootstrap,
+  DashboardSecurity,
+  DashboardTopology,
+} from '../src/dashboard'
 
 const captureDirectory = process.env.UI_V3_CAPTURE_DIR
 
@@ -245,6 +249,33 @@ const resources = {
   hosts: [],
 }
 
+const topology: DashboardTopology = {
+  generated_at: '2026-07-25T08:00:00Z',
+  nodes: [
+    { id: 'controller', label: 'Controller', kind: 'control', status: 'healthy' },
+    { id: 'gateway', label: 'Agent Gateway', kind: 'gateway', status: 'unknown' },
+    { id: 'database', label: 'PostgreSQL', kind: 'database', status: 'healthy' },
+    { id: 'web', label: 'Web', kind: 'web', status: 'healthy' },
+    { id: 'agent-host-1', label: 'edge-hk', kind: 'agent', status: 'healthy' },
+  ],
+}
+
+const security: DashboardSecurity = {
+  generated_at: '2026-07-25T08:00:00Z',
+  controls: {
+    uncovered_critical: 0,
+    uncovered_high: 0,
+    mtls: 'enforced',
+    crl: 'enforced',
+    certificate_rotation: 'operational',
+    last_scan_at: '2026-07-25T07:30:00Z',
+    login_rate_limit: 'enforced',
+    totp: 'available',
+    rbac: 'enforced',
+    audit: 'append_only',
+  },
+}
+
 interface MockOptions {
   locale?: 'en-US' | 'zh-CN'
   theme?: 'light' | 'dark'
@@ -295,6 +326,8 @@ async function mockAuthenticated(
       '/api/v1/service-check-results': results,
       '/api/v1/incidents': incidents,
       '/api/v1/users': [user],
+      '/api/v1/dashboard/topology': topology,
+      '/api/v1/dashboard/security': security,
       '/api/v1/agents': [],
       '/api/v1/alerts': [],
       '/api/v1/alert-rules': [],
@@ -362,6 +395,22 @@ test('overview renders from one lightweight bootstrap without legacy heavy reque
   await expectNoHorizontalOverflow(page)
   await expect(page.getByText('28%', { exact: true })).toBeVisible()
   await capture(page, 'overview-1440-light')
+})
+
+test('topology and security use bounded summaries without the legacy overview', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const counts = await mockAuthenticated(page)
+
+  await page.goto('/topology')
+  await expect(page.getByText('Agent Gateway', { exact: true })).toBeVisible()
+  await page.goto('/security')
+  await expect(page.getByText('Owner TOTP', { exact: true })).toBeVisible()
+
+  await expect.poll(() => counts.get('/api/v1/dashboard/topology')).toBe(1)
+  await expect.poll(() => counts.get('/api/v1/dashboard/security')).toBe(1)
+  expect(counts.get('/api/v1/overview')).toBeUndefined()
+  expect(errors).toEqual([])
 })
 
 test('active navigation remains visible in light and dark themes on key routes', async ({ page }) => {
