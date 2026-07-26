@@ -1,15 +1,11 @@
 <script setup lang="ts">
+import ProductPageHeader from './v3/PageHeader.vue'
+
 defineProps<{ title: string; description?: string }>()
 </script>
 
 <template>
-  <header class="page-header">
-    <div>
-      <h1>{{ title }}</h1>
-      <p v-if="description">{{ description }}</p>
-    </div>
-    <div v-if="$slots.actions" class="page-actions">
-      <slot name="actions" />
-    </div>
-  </header>
+  <ProductPageHeader :title="title" :description="description">
+    <template v-if="$slots.actions" #actions><slot name="actions" /></template>
+  </ProductPageHeader>
 </template>

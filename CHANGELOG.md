@@ -6,6 +6,13 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Added
 
+- Added the Phase 4 UI V3 product shell, shared design tokens, responsive/focus-trapped
+  navigation and detail drawers, lightweight dashboard bootstrap/current-resource
+  APIs, URL-persisted operational filters, and audited Service-check batch updates.
+- Added a reversible `0011_dashboard_query_indexes` migration, user-isolated
+  10-second dashboard cache, ETag/304 handling, `Server-Timing`, production
+  sourcemap exclusion, axe/Playwright product regressions, and an internal
+  `vps-guardian-product-ui` design-review Skill.
 - Added the Phase 4 V2 grouped operations console, Attention queue, topology/security/user/Agent/notification pages, breadcrumbs, command palette, responsive drawer, and light/dark tokens.
 - Added explainable deployment health, 1h/24h/7d/30d stability components, confidence, group/location aggregates, and bounded service-check history.
 - Added persistent alert assignment/closure, audited incident transitions, resolution/postmortem fields, notification scope/severity filters, retry history, and dead-letter handling.
@@ -21,6 +28,12 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Changed
 
+- Replaced the heavyweight Overview startup path with a minimal bootstrap followed by
+  independently loaded current resource values; full metrics, Topology, Audit and raw
+  evidence no longer block the first decision view.
+- Replaced Services card/raw-output walls and Incidents black selected rows with
+  structured comparison tables, localized semantic states, high-contrast selection,
+  product names, controlled evidence viewers and decision-focused drawers.
 - Reworked Overview, Services, Alerts, Incidents, Approvals, and Settings around structured actions instead of raw operational data.
 - Added API pagination to fleet/history collections, GET request deduplication, and request cancellation support without increasing Agent sampling frequency.
 - Made the deduplicated GET cleanup Promise the caller-visible Promise so an
@@ -32,6 +45,9 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Security
 
+- Redact plain, JSON and NDJSON service evidence before returning it to the browser;
+  evidence remains authenticated, escaped, collapsed by default, and downloadable only
+  as the already-redacted representation.
 - Authentication now rejects JWTs without a live, unexpired, unrevoked server Session
   row; password and authorization changes invalidate older sessions.
 - TOTP confirmation rejects time-step replay, and recovery-code login is rate-limited,

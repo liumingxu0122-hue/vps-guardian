@@ -267,8 +267,12 @@ export interface ServiceSummary {
   host_id: string
   host_name: string
   kind: string
-  status: 'failed' | 'observed'
+  status: 'healthy' | 'warning' | 'critical' | 'execution_failed' | 'no_data' | 'unsupported' | 'parse_failed'
+  reason: string
+  counts: Record<string, number>
+  parsed: boolean
   summary: string
+  evidence_available: boolean
   collected_at: string
 }
 

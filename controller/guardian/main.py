@@ -13,6 +13,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from guardian import __version__
 from guardian.api import router
 from guardian.config import Settings, get_settings
+from guardian.dashboard import invalidate_dashboard_cache
 from guardian.database import Base, SessionLocal, engine
 from guardian.liveness import mark_stale_agents_offline
 from guardian.monitoring import prune_monitoring_history, run_due_controller_checks
@@ -95,6 +96,14 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type", "X-CSRF-Token"],
     )
+
+    @app.middleware("http")
+    async def invalidate_dashboard_after_mutation(request, call_next):  # type: ignore[no-untyped-def]
+        response = await call_next(request)
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and response.status_code < 400:
+            invalidate_dashboard_cache()
+        return response
+
     app.include_router(router)
 
     return app

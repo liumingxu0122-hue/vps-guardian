@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -102,3 +103,22 @@ def redact_structure(value: Any) -> Any:
                 output[str(key)] = redact_structure(item)
         return output
     return value
+
+
+def redact_serialized_text(value: str) -> str:
+    """Redact plain text, JSON, or newline-delimited JSON without exposing key values."""
+    output: list[str] = []
+    for line in value.splitlines() or [""]:
+        try:
+            parsed = json.loads(line)
+        except (TypeError, ValueError):
+            output.append(redact_text(line))
+        else:
+            output.append(
+                json.dumps(
+                    redact_structure(parsed),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+    return "\n".join(output)

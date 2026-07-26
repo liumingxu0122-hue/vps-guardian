@@ -18,7 +18,7 @@ from guardian.models import (
     Incident,
     User,
 )
-from sqlalchemy import func, select
+from sqlalchemy import desc, func, select
 
 
 def auth(token: str) -> dict[str, str]:
@@ -156,6 +156,49 @@ def test_service_check_and_notification_configuration_reject_embedded_secrets(
         },
     )
     assert protected.status_code == 201
+
+
+def test_service_check_update_is_bounded_and_audited(
+    client: TestClient, owner_token: str
+) -> None:
+    created = client.post(
+        "/api/v1/service-checks",
+        headers=auth(owner_token),
+        json={
+            "name": "batch-managed-check",
+            "kind": "https",
+            "configuration": {"target": "https://example.test/health"},
+        },
+    )
+    assert created.status_code == 201
+    check_id = created.json()["id"]
+
+    updated = client.patch(
+        f"/api/v1/service-checks/{check_id}",
+        headers=auth(owner_token),
+        json={"enabled": False, "interval_seconds": 300},
+    )
+    invalid = client.patch(
+        f"/api/v1/service-checks/{check_id}",
+        headers=auth(owner_token),
+        json={"interval_seconds": 1},
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["enabled"] is False
+    assert updated.json()["interval_seconds"] == 300
+    assert invalid.status_code == 422
+    with SessionLocal() as db:
+        audit = db.scalar(
+            select(AuditLog)
+            .where(
+                AuditLog.action == "service_check.update",
+                AuditLog.resource_id == check_id,
+            )
+            .order_by(desc(AuditLog.created_at))
+        )
+        assert audit is not None
+        assert audit.details["fields"] == ["enabled", "interval_seconds"]
 
 
 def test_alert_acknowledgement_and_high_risk_self_approval_gate(

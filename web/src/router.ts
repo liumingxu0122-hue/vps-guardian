@@ -97,7 +97,11 @@ const router = createRouter({
 const roleOrder = { viewer: 0, operator: 1, admin: 2, owner: 3 }
 
 router.beforeEach(async (to) => {
-  await session.restore()
+  try {
+    await session.restore()
+  } catch {
+    return false
+  }
   if (to.meta.public) {
     if (!session.user) return true
     return session.user.identity_setup_required ? { name: 'identity-setup' } : { name: 'overview' }

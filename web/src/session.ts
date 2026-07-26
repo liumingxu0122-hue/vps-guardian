@@ -16,22 +16,36 @@ export const session = reactive({
   user: null as User | null,
   recoveryCodesRemaining: null as number | null,
   ready: false,
+  error: null as Error | null,
   async restore(): Promise<void> {
     if (this.ready) return
     if (restorePromise) return restorePromise
     restorePromise = (async () => {
       try {
         this.user = await request<User>('/api/v1/auth/me')
+        this.error = null
       } catch (error) {
-        if (!(error instanceof ApiError) || error.status !== 401) throw error
-        sessionStorage.removeItem('guardian_token')
-        sessionStorage.removeItem('guardian_csrf')
+        if (error instanceof ApiError && error.status === 401) {
+          sessionStorage.removeItem('guardian_token')
+          sessionStorage.removeItem('guardian_csrf')
+          this.error = null
+        } else {
+          this.error = error instanceof Error ? error : new Error(String(error))
+          this.user = null
+          throw error
+        }
         this.user = null
       } finally {
         this.ready = true
+        restorePromise = null
       }
     })()
     return restorePromise
+  },
+  async retryRestore(): Promise<void> {
+    this.ready = false
+    this.error = null
+    await this.restore()
   },
   async login(email: string, password: string, totpCode: string, recoveryCode = ''): Promise<void> {
     const payload = await request<LoginResponse>('/api/v1/auth/login', {
@@ -46,6 +60,7 @@ export const session = reactive({
     sessionStorage.setItem('guardian_token', payload.access_token)
     sessionStorage.setItem('guardian_csrf', payload.csrf_token)
     this.user = await request<User>('/api/v1/auth/me')
+    this.error = null
     this.recoveryCodesRemaining = payload.recovery_codes_remaining
     this.ready = true
   },
@@ -65,6 +80,7 @@ export const session = reactive({
       sessionStorage.removeItem('guardian_csrf')
       this.user = null
       this.recoveryCodesRemaining = null
+      this.error = null
     }
   },
 })

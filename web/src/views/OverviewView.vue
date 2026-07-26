@@ -1,339 +1,388 @@
 <script setup lang="ts">
-import {
-  Activity,
-  AlertTriangle,
-  ArrowRight,
-  CheckCircle2,
-  Clock3,
-  Database,
-  DatabaseBackup,
-  Gauge,
-  KeyRound,
-  LockKeyhole,
-  Network,
-  RefreshCw,
-  Server,
-  ShieldCheck,
-  TriangleAlert,
-  WifiOff,
-} from '@lucide/vue'
+import { Activity, ChevronRight, RefreshCw } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
-import { ApiError, request } from '../api'
-import { apiErrorKey, translateStatus } from '../i18n'
-import EmptyState from '../components/EmptyState.vue'
-import PageHeader from '../components/PageHeader.vue'
-import StatusBadge from '../components/StatusBadge.vue'
-import TrendChart from '../components/TrendChart.vue'
-import type { OperationsHost, Overview, ResourcePoint, StabilityReport } from '../types'
-import { formatTime, relativeTime, titleize } from '../utils'
+import { dashboard, type DashboardTone } from '../dashboard'
+import { request } from '../api'
+import PageHeader from '../components/v3/PageHeader.vue'
+import StatusBadge from '../components/v3/StatusBadge.vue'
+import SummaryMetric from '../components/v3/SummaryMetric.vue'
+import { relativeTime } from '../utils'
 
-const data = ref<Overview | null>(null)
-const stability = ref<StabilityReport | null>(null)
-const { t } = useI18n()
-const loading = ref(true)
-const refreshing = ref(false)
-const error = ref('')
-const permissionDenied = ref(false)
-const online = ref(navigator.onLine)
-const windowRange = ref<'1h' | '24h' | '7d' | '30d'>('24h')
-const hostFilter = ref('all')
-const timelineHost = ref('all')
-const timelineLevel = ref('all')
-let pollTimer: number | undefined
-
-const selectedHost = computed(() =>
-  data.value?.host_rows.find((host) => host.id === hostFilter.value),
-)
-const selectedSeries = computed<ResourcePoint[]>(() => {
-  if (!data.value) return []
-  if (hostFilter.value !== 'all') return data.value.resource_series[hostFilter.value] ?? []
-  const buckets = new Map<number, ResourcePoint[]>()
-  const interval =
-    windowRange.value === '1h'
-      ? 5 * 60_000
-      : windowRange.value === '24h'
-        ? 15 * 60_000
-        : windowRange.value === '7d'
-          ? 60 * 60_000
-          : 4 * 60 * 60_000
-  for (const point of Object.values(data.value.resource_series).flat()) {
-    const bucket = Math.floor(new Date(point.at).getTime() / interval) * interval
-    buckets.set(bucket, [...(buckets.get(bucket) ?? []), point])
+const { locale } = useI18n()
+const zh = computed(() => locale.value === 'zh-CN')
+interface CurrentResources {
+  generated_at: string
+  sampled_hosts: number
+  current: {
+    cpu_percent: number | null
+    memory_percent: number | null
+    disk_percent: number | null
+    network_bytes_per_second: number | null
   }
-  return [...buckets.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([at, points]) => ({
-      at: new Date(at).toISOString(),
-      cpu_percent: average(points.map((point) => point.cpu_percent)),
-      cpu_source: points.some((point) => point.cpu_source === 'cpu_time')
-        ? 'cpu_time'
-        : 'normalized_load',
-      memory_percent: average(points.map((point) => point.memory_percent)),
-      disk_percent: average(points.map((point) => point.disk_percent)),
-      network_bytes_per_second: sum(points.map((point) => point.network_bytes_per_second)),
-    }))
-})
-const filteredTimeline = computed(() =>
-  (data.value?.timeline ?? []).filter((entry) => {
-    const hostMatches = timelineHost.value === 'all' || entry.host_id === timelineHost.value
-    const levelMatches =
-      timelineLevel.value === 'all' ||
-      (timelineLevel.value === 'critical' ? entry.severity >= 4 : entry.severity < 4)
-    return hostMatches && levelMatches
-  }),
+  delta: {
+    cpu_percent: number | null
+    memory_percent: number | null
+    disk_percent: number | null
+  }
+}
+const resourcePanel = ref<HTMLElement | null>(null)
+const resources = ref<CurrentResources | null>(null)
+const resourcesLoading = ref(false)
+const resourcesError = ref(false)
+let resourceObserver: IntersectionObserver | null = null
+
+const labels = computed(() =>
+  zh.value
+    ? {
+        title: '运行概览',
+        description: '集中查看健康、待办、可恢复性与发布门禁。',
+        updated: '最近更新',
+        refresh: '刷新',
+        retry: '重试',
+        loading: '正在加载运行摘要',
+        error: '运行摘要加载失败，没有把错误伪装为空数据。',
+        attention: '需要处理',
+        attentionDescription: '只显示当前需要决策或操作的项目。',
+        queue: '查看处置队列',
+        level: '等级',
+        item: '事项',
+        impact: '影响',
+        owner: 'Owner',
+        time: '更新时间',
+        action: '下一步',
+        noAttention: '当前没有需要处理的事项。',
+        pulse: '运行脉搏',
+        pulseDescription: '当前值与趋势在进入视口后独立加载，不阻塞首屏摘要。',
+        loadResources: '加载资源趋势',
+        recoverability: '可恢复性与发布门禁',
+        verifiedBackup: '最近已验证备份',
+        productionGate: 'Production Gate',
+        details: '查看详情',
+      }
+    : {
+        title: 'Operational overview',
+        description: 'Health, attention, recoverability and release gates in one view.',
+        updated: 'Last updated',
+        refresh: 'Refresh',
+        retry: 'Retry',
+        loading: 'Loading operational summary',
+        error: 'Operational summary failed to load. The error is not shown as empty data.',
+        attention: 'Needs attention',
+        attentionDescription: 'Only current items that require a decision or action.',
+        queue: 'View response queue',
+        level: 'Level',
+        item: 'Item',
+        impact: 'Impact',
+        owner: 'Owner',
+        time: 'Updated',
+        action: 'Next action',
+        noAttention: 'There are no items requiring action.',
+        pulse: 'Operational pulse',
+        pulseDescription: 'Current values and trends load independently after entering view.',
+        loadResources: 'Load resource trends',
+        recoverability: 'Recoverability & release gate',
+        verifiedBackup: 'Latest verified backup',
+        productionGate: 'Production gate',
+        details: 'View details',
+      },
 )
 
-function average(values: Array<number | null>): number | null {
-  const present = values.filter((value): value is number => value !== null)
-  return present.length ? present.reduce((total, value) => total + value, 0) / present.length : null
+function tone(value: string): DashboardTone {
+  if (value === 'healthy' || value === 'verified' || value === 'go') return 'healthy'
+  if (value === 'critical' || value === 'failed') return 'critical'
+  if (value === 'warning' || value === 'degraded') return 'warning'
+  if (value === 'blocked' || value === 'not_deployed') return 'info'
+  return 'neutral'
 }
 
-function sum(values: Array<number | null>): number | null {
-  const present = values.filter((value): value is number => value !== null)
-  return present.length ? present.reduce((total, value) => total + value, 0) : null
+function statusLabel(value: string): string {
+  const values: Record<string, [string, string]> = {
+    healthy: ['正常', 'Healthy'],
+    warning: ['警告', 'Warning'],
+    critical: ['严重', 'Critical'],
+    blocked: ['有阻塞项', 'Blocked'],
+    unknown: ['未知', 'Unknown'],
+  }
+  return values[value]?.[zh.value ? 0 : 1] ?? value
 }
 
-function values(key: keyof Pick<ResourcePoint, 'cpu_percent' | 'memory_percent' | 'disk_percent' | 'network_bytes_per_second'>): Array<number | null> {
-  return selectedSeries.value.map((point) => point[key])
+function healthReason(): string {
+  const value = dashboard.data?.global_health
+  if (!value) return '—'
+  if (zh.value) {
+    if (value.critical) return `${value.critical} 个严重条件需要处理`
+    if (value.warning) return `${value.warning} 个警告条件，0 个严重条件`
+    return '没有活动的严重或警告条件'
+  }
+  if (value.critical) return `${value.critical} critical condition(s) require action`
+  if (value.warning) return `${value.warning} warning condition(s), no critical conditions`
+  return 'No active critical or warning conditions'
 }
 
-function gateLabel(value: string): string {
-  if (value === 'go_for_controlled_production_rollout_planning') return t('overview.gatePlanning')
-  if (value === 'not_assessed') return t('overview.notAssessed')
-  return titleize(value)
+function backupValue(): string {
+  if (!dashboard.data?.backup.verified) return zh.value ? '尚未验证' : 'Not verified'
+  return zh.value ? '可恢复' : 'Recoverable'
 }
 
-function healthLabel(value: Overview['global_health']): string {
-  return translateStatus(value)
+function gateValue(): string {
+  if (dashboard.data?.environment.production_deployed) return zh.value ? '已部署' : 'Deployed'
+  return zh.value ? '未部署' : 'Not deployed'
 }
 
-function hostName(id: string | null): string {
-  if (!id) return t('overview.global')
-  return data.value?.host_rows.find((host) => host.id === id)?.name ?? t('overview.removedHost')
+function duration(seconds: number | null): string {
+  if (seconds === null) return zh.value ? '尚未实测' : 'Not measured'
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`
+  return `${Math.round(seconds / 3600)}h`
 }
 
-function certificateLabel(host: OperationsHost): string {
-  return translateStatus(host.certificate_status)
+function impact(item: NonNullable<typeof dashboard.data>['attention'][number]): string {
+  const values = [...item.impact.hosts, ...item.impact.services]
+  return values.length ? values.join(' · ') : zh.value ? '未声明影响资源' : 'No impact declared'
 }
 
-async function load(background = false): Promise<void> {
-  if (background) refreshing.value = true
-  else loading.value = true
-  error.value = ''
-  permissionDenied.value = false
+function localizedIncidentTitle(
+  item: NonNullable<typeof dashboard.data>['attention'][number],
+): string {
+  if (!zh.value) return item.title
+  const faultLabels: Record<string, string> = {
+    database_corruption: '数据库完整性事件',
+    reverse_proxy_backend: '后端服务不可用',
+    certificate_expiry: '证书即将到期',
+    approval_audit: '审批审计事件',
+  }
+  if (faultLabels[item.fault_type]) return faultLabels[item.fault_type]
+  return /[\u4e00-\u9fff]/u.test(item.title) ? item.title : '需要处理的运行事件'
+}
+
+const summaries = computed(() => {
+  const data = dashboard.data
+  if (!data) return []
+  return [
+    {
+      label: zh.value ? '系统健康' : 'System health',
+      value:
+        data.global_health.status === 'healthy'
+          ? zh.value
+            ? '正常'
+            : 'Healthy'
+          : zh.value
+            ? '需要关注'
+            : 'Needs attention',
+      detail: healthReason(),
+      updated: relativeTime(data.global_health.updated_at),
+      tone: tone(data.global_health.status),
+      statusLabel: statusLabel(data.global_health.status),
+    },
+    {
+      label: 'Guardian Agent',
+      value: `${data.agents.online} / ${data.agents.total} ${zh.value ? '在线' : 'online'}`,
+      detail:
+        data.agents.offline === 0
+          ? zh.value
+            ? '心跳状态正常'
+            : 'Heartbeats are healthy'
+          : zh.value
+            ? `${data.agents.offline} 个离线或不新鲜`
+            : `${data.agents.offline} offline or stale`,
+      updated: relativeTime(data.agents.updated_at),
+      tone: data.agents.offline ? ('critical' as const) : ('healthy' as const),
+      statusLabel: data.agents.offline ? statusLabel('critical') : statusLabel('healthy'),
+    },
+    {
+      label: zh.value ? '活跃告警' : 'Active alerts',
+      value: `${data.alerts.active} ${zh.value ? '个' : ''}`,
+      detail: zh.value
+        ? `${data.alerts.critical} 个严重，${data.alerts.warning} 个警告`
+        : `${data.alerts.critical} critical, ${data.alerts.warning} warning`,
+      updated: relativeTime(data.alerts.updated_at),
+      tone: data.alerts.critical ? ('critical' as const) : data.alerts.warning ? ('warning' as const) : ('healthy' as const),
+      statusLabel: data.alerts.critical ? statusLabel('critical') : data.alerts.warning ? statusLabel('warning') : statusLabel('healthy'),
+    },
+    {
+      label: zh.value ? '最近已验证备份' : 'Latest verified backup',
+      value: backupValue(),
+      detail: data.backup.verified
+        ? `${data.backup.scope === 'offsite' ? 'Offsite' : 'Same-host'} · check ${data.backup.check_status}`
+        : zh.value
+          ? '没有已验证恢复点'
+          : 'No verified recovery point',
+      updated: relativeTime(data.backup.verified_at),
+      tone: data.backup.verified ? ('healthy' as const) : ('warning' as const),
+      statusLabel: data.backup.verified ? statusLabel('healthy') : statusLabel('warning'),
+    },
+    {
+      label: 'Production Gate',
+      value: gateValue(),
+      detail: data.production_gate.decision.replaceAll('_', ' '),
+      updated: relativeTime(data.generated_at),
+      tone: data.environment.production_deployed ? ('healthy' as const) : ('info' as const),
+      statusLabel: data.environment.production_deployed ? statusLabel('healthy') : statusLabel('blocked'),
+    },
+  ]
+})
+
+async function refresh(): Promise<void> {
+  await dashboard.load(true).catch(() => undefined)
+}
+
+async function loadResources(): Promise<void> {
+  if (resourcesLoading.value) return
+  resourcesLoading.value = true
+  resourcesError.value = false
   try {
-    const params = new URLSearchParams({ window: windowRange.value })
-    if (hostFilter.value !== 'all') params.set('host_id', hostFilter.value)
-    ;[data.value, stability.value] = await Promise.all([
-      request<Overview>(`/api/v1/overview?${params}`),
-      request<StabilityReport>(`/api/v1/stability?window=${windowRange.value}`),
-    ])
-  } catch (caught) {
-    permissionDenied.value = caught instanceof ApiError && caught.status === 403
-    error.value = caught instanceof ApiError ? t(apiErrorKey(caught.status), { status: caught.status }) : t('overview.fetchFailed')
+    const result = await request<unknown>('/api/v1/dashboard/resources/current')
+    if (!isCurrentResources(result)) throw new Error('Invalid current resource summary')
+    resources.value = result
+  } catch {
+    resources.value = null
+    resourcesError.value = true
   } finally {
-    loading.value = false
-    refreshing.value = false
+    resourcesLoading.value = false
   }
 }
 
-function setConnectivity(): void {
-  online.value = navigator.onLine
-  if (online.value) void load(true)
+function isCurrentResources(value: unknown): value is CurrentResources {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<CurrentResources>
+  return Boolean(
+    candidate.current &&
+      typeof candidate.current === 'object' &&
+      candidate.delta &&
+      typeof candidate.delta === 'object' &&
+      typeof candidate.sampled_hosts === 'number' &&
+      typeof candidate.generated_at === 'string',
+  )
 }
 
-watch([windowRange, hostFilter], () => void load())
-onMounted(() => {
-  void load()
-  window.addEventListener('online', setConnectivity)
-  window.addEventListener('offline', setConnectivity)
-  pollTimer = window.setInterval(() => {
-    if (document.visibilityState === 'visible' && navigator.onLine) void load(true)
-  }, 60_000)
+function resourceValue(value: number | null, kind: 'percent' | 'network'): string {
+  if (value === null) return '—'
+  if (kind === 'percent') return `${Math.round(value)}%`
+  if (value < 1024) return `${Math.round(value)} B/s`
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KiB/s`
+  return `${(value / 1024 ** 2).toFixed(1)} MiB/s`
+}
+
+function deltaValue(value: number | null): string {
+  if (value === null) return zh.value ? '无上一样本' : 'No prior sample'
+  if (value === 0) return zh.value ? '与上一样本持平' : 'No change'
+  return `${value > 0 ? '+' : ''}${value.toFixed(1)} pp`
+}
+
+watch(resourcePanel, (element) => {
+  resourceObserver?.disconnect()
+  if (!element || typeof IntersectionObserver === 'undefined') return
+  resourceObserver = new IntersectionObserver(
+    (entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      resourceObserver?.disconnect()
+      void loadResources()
+    },
+    { rootMargin: '100px' },
+  )
+  resourceObserver.observe(element)
 })
-onBeforeUnmount(() => {
-  window.removeEventListener('online', setConnectivity)
-  window.removeEventListener('offline', setConnectivity)
-  if (pollTimer) window.clearInterval(pollTimer)
-})
+
+onMounted(() => void dashboard.load().catch(() => undefined))
+
+onBeforeUnmount(() => resourceObserver?.disconnect())
 </script>
 
 <template>
-  <PageHeader :title="t('overview.title')" :description="t('overview.description')">
+  <PageHeader
+    :eyebrow="`${dashboard.data?.environment.stage ?? 'Staging'} / ${labels.title}`"
+    :title="labels.title"
+    :description="labels.description"
+    :updated="dashboard.data ? `${labels.updated} ${relativeTime(dashboard.data.generated_at)}` : undefined"
+  >
     <template #actions>
-      <div class="overview-context" :aria-label="t('overview.environment')">
-        <span class="context-pill staging">{{ data?.environment.current ?? 'Staging' }}</span>
-        <span v-if="data" class="context-pill mono">v{{ data.environment.version }} · {{ data.environment.deployment_commit.slice(0, 8) }}</span>
-        <span class="context-pill production">{{ t('overview.production') }} · {{ t('overview.notDeployed') }}</span>
-      </div>
-      <button class="icon-button bordered" type="button" :title="t('common.refresh')" :aria-label="t('common.refresh')" :disabled="refreshing" @click="load(true)">
-        <RefreshCw :size="17" :class="{ spinning: refreshing }" />
+      <button class="proto-button secondary" type="button" :disabled="dashboard.loading" @click="refresh">
+        <RefreshCw :size="15" :class="{ spinning: dashboard.loading }" />{{ labels.refresh }}
       </button>
     </template>
   </PageHeader>
 
-  <div v-if="!online" class="overview-notice warning" role="status"><WifiOff :size="17" />{{ t('overview.offline') }}</div>
-  <div v-if="error" class="overview-error" role="alert">
-    <LockKeyhole v-if="permissionDenied" :size="22" />
-    <TriangleAlert v-else :size="22" />
-      <div><strong>{{ permissionDenied ? t('overview.permissionDenied') : t('errors.unavailable') }}</strong><span>{{ error }}</span></div>
-      <button class="secondary-button" type="button" @click="load()">{{ t('common.retry') }}</button>
+  <div v-if="dashboard.error && !dashboard.data" class="v3-module-state error-state" role="alert">
+    <strong>{{ labels.error }}</strong>
+    <button class="proto-button secondary" type="button" @click="refresh">{{ labels.retry }}</button>
   </div>
 
-  <template v-if="data">
-    <section class="gate-band" :aria-label="t('overview.gate')">
-      <div><ShieldCheck :size="18" /><span>{{ t('overview.currentGate') }}</span><strong>{{ gateLabel(data.environment.gate_decision) }}</strong></div>
-      <p>{{ t('overview.productionStatus', { status: translateStatus(data.environment.production_status) }) }}</p>
+  <section v-else-if="dashboard.loading && !dashboard.data" class="proto-summary-grid" :aria-label="labels.loading">
+    <div v-for="index in 5" :key="index" class="v3-summary-skeleton"><span></span><b></b><i></i></div>
+  </section>
+
+  <template v-else-if="dashboard.data">
+    <section class="proto-summary-grid" aria-label="运行摘要">
+      <SummaryMetric v-for="summary in summaries" :key="summary.label" v-bind="summary" />
     </section>
 
-    <section class="operations-status" :aria-label="t('overview.globalHealth')">
-      <div class="status-metric" :class="`health-${data.global_health}`"><Activity :size="18" /><span>{{ t('overview.globalHealth') }}</span><strong>{{ healthLabel(data.global_health) }}</strong><small>{{ formatTime(data.generated_at) }} · {{ t('common.updated') }}</small></div>
-      <div class="status-metric"><Server :size="18" /><span>{{ t('overview.onlineHosts') }}</span><strong>{{ data.hosts.healthy }} / {{ data.hosts.total }}</strong><small>{{ data.hosts.degraded }} {{ t('status.degraded') }} · {{ data.hosts.offline }} {{ t('status.offline') }}</small></div>
-      <div class="status-metric"><AlertTriangle :size="18" /><span>{{ t('overview.currentAlerts') }}</span><strong>{{ data.alerts.active }}</strong><small>{{ data.alerts.critical }} {{ t('status.critical') }} · {{ data.alerts.warning }} Warning</small></div>
-      <div class="status-metric"><Clock3 :size="18" /><span>{{ t('overview.measuredRpoRto') }}</span><strong>{{ data.recovery.rpo_seconds ?? '—' }}s / {{ data.recovery.rto_seconds ?? '—' }}s</strong><small>{{ t('overview.measuredReference') }}</small></div>
-      <div class="status-metric"><DatabaseBackup :size="18" /><span>{{ t('overview.acceptedSnapshot') }}</span><strong class="mono">{{ data.recovery.accepted_snapshot ?? t('common.none') }}</strong><small>{{ relativeTime(data.recovery.last_check_at) }} · {{ t('common.checks') }}</small></div>
-      <div class="status-metric production-state"><ShieldCheck :size="18" /><span>{{ t('overview.production') }}</span><strong>{{ t('overview.notDeployed') }}</strong><small>{{ t('overview.planningOnly') }}</small></div>
-    </section>
-
-    <section class="overview-section overview-attention">
-      <header class="overview-section-heading"><div><h2>{{ t('overview.needsAttention') }}</h2><span>{{ t('overview.healthWhy') }}</span></div><RouterLink to="/attention">{{ t('overview.fullList') }} <ArrowRight :size="14" /></RouterLink></header>
-      <div v-if="data.attention.length" class="overview-attention-grid">
-        <RouterLink v-for="item in data.attention.slice(0, 5)" :key="item.id" :to="item.href">
-          <StatusBadge :status="item.severity" /><div><strong>{{ item.object }}</strong><span>{{ item.reason }}</span></div><ArrowRight :size="14" />
-        </RouterLink>
+    <section class="proto-section">
+      <div class="proto-section-heading">
+        <div><h2>{{ labels.attention }}</h2><p>{{ labels.attentionDescription }}</p></div>
+        <RouterLink class="proto-text-button" to="/attention">{{ labels.queue }} <ChevronRight :size="14" /></RouterLink>
       </div>
-      <EmptyState v-else :title="t('attention.empty')" :detail="data.health_reasons[0]?.reason" />
+      <div v-if="dashboard.data.attention.length" class="proto-table-shell">
+        <table class="proto-table attention-table">
+          <thead><tr><th>{{ labels.level }}</th><th>{{ labels.item }}</th><th>{{ labels.impact }}</th><th>{{ labels.owner }}</th><th>{{ labels.time }}</th><th>{{ labels.action }}</th></tr></thead>
+          <tbody>
+            <tr v-for="item in dashboard.data.attention" :key="item.id">
+              <td><StatusBadge :tone="item.severity" :label="`S${item.severity_level}`" compact /></td>
+              <td><strong>{{ localizedIncidentTitle(item) }}</strong><small>{{ item.fault_type.replaceAll('_', ' ') }}</small></td>
+              <td>{{ impact(item) }}</td>
+              <td>{{ item.owner ?? (zh ? '未分配' : 'Unassigned') }}</td>
+              <td>{{ relativeTime(item.updated_at) }}</td>
+              <td><RouterLink class="proto-row-action" :to="item.href">{{ item.next_action && !zh ? item.next_action : zh ? '查看并确认下一步' : 'Review next action' }} <ChevronRight :size="13" /></RouterLink></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-else class="v3-empty-inline"><StatusBadge tone="healthy" :label="statusLabel('healthy')" /><span>{{ labels.noAttention }}</span></div>
     </section>
 
-    <section class="overview-section resource-section">
-      <header class="overview-section-heading">
-        <div><h2>{{ t('overview.resources') }}</h2><span>{{ selectedHost?.name ?? t('overview.aggregatedHosts') }}</span></div>
-        <div class="resource-controls">
-          <select v-model="hostFilter" :aria-label="t('overview.filterResources')">
-            <option value="all">{{ t('overview.allHosts') }}</option>
-            <option v-for="host in data.host_rows" :key="host.id" :value="host.id">{{ host.name }}</option>
-          </select>
-          <div class="segmented-control" :aria-label="t('overview.range')">
-            <button type="button" :class="{ active: windowRange === '1h' }" @click="windowRange = '1h'">1h</button>
-            <button type="button" :class="{ active: windowRange === '24h' }" @click="windowRange = '24h'">{{ t('overview.hours24') }}</button>
-            <button type="button" :class="{ active: windowRange === '7d' }" @click="windowRange = '7d'">{{ t('overview.days7') }}</button>
-            <button type="button" :class="{ active: windowRange === '30d' }" @click="windowRange = '30d'">30d</button>
+    <section class="proto-section">
+      <div class="proto-section-heading">
+        <div><h2>{{ labels.pulse }}</h2><p>{{ labels.pulseDescription }}</p></div>
+      </div>
+      <div class="proto-pulse-layout">
+        <div ref="resourcePanel" class="proto-resource-panel">
+          <h3>{{ zh ? '当前资源使用' : 'Current resource use' }}</h3>
+          <div v-if="resources" class="v3-current-resources">
+            <div><span>CPU</span><strong>{{ resourceValue(resources.current.cpu_percent, 'percent') }}</strong><small>{{ deltaValue(resources.delta.cpu_percent) }}</small></div>
+            <div><span>{{ zh ? '内存' : 'Memory' }}</span><strong>{{ resourceValue(resources.current.memory_percent, 'percent') }}</strong><small>{{ deltaValue(resources.delta.memory_percent) }}</small></div>
+            <div><span>{{ zh ? '磁盘' : 'Disk' }}</span><strong>{{ resourceValue(resources.current.disk_percent, 'percent') }}</strong><small>{{ deltaValue(resources.delta.disk_percent) }}</small></div>
+            <div><span>{{ zh ? '网络' : 'Network' }}</span><strong>{{ resourceValue(resources.current.network_bytes_per_second, 'network') }}</strong><small>{{ zh ? '最近采样速率' : 'Latest sample rate' }}</small></div>
+            <small>{{ resources.sampled_hosts }} {{ zh ? '个主机 · 独立轻量查询' : 'hosts · independent lightweight query' }}</small>
           </div>
+          <button v-else class="proto-chart-placeholder" type="button" :disabled="resourcesLoading" @click="loadResources">
+            <Activity :size="18" /><span>{{ labels.loadResources }}</span>
+          </button>
+          <p v-if="resourcesError" class="v3-inline-error">
+            {{ zh ? '资源摘要加载失败；运行总览仍可用。' : 'Resource summary failed; the operational summary remains available.' }}
+          </p>
         </div>
-      </header>
-      <div v-if="selectedSeries.length" class="trend-grid-layout">
-        <TrendChart label="CPU" :values="values('cpu_percent')" unit="%" tone="green" />
-        <TrendChart :label="t('overview.memory')" :values="values('memory_percent')" unit="%" tone="blue" />
-        <TrendChart :label="t('overview.disk')" :values="values('disk_percent')" unit="%" tone="amber" />
-        <TrendChart :label="t('overview.network')" :values="values('network_bytes_per_second')" unit="B/s" tone="cyan" />
-      </div>
-      <EmptyState v-else :title="t('overview.noSamples')" :detail="t('overview.waitingSamples')" />
-      <div class="threshold-legend"><span><i class="warning"></i>{{ t('overview.warning80') }}</span><span><i class="critical"></i>{{ t('overview.critical90') }}</span><span v-if="data.resource_series_truncated">{{ t('overview.truncated') }}</span></div>
-    </section>
-
-    <section v-if="stability" class="overview-section stability-section">
-      <header class="overview-section-heading">
-        <div><h2>{{ t('overview.stability') }}</h2><span>{{ t('overview.stabilityDetail') }}</span></div>
-        <RouterLink to="/hosts">{{ t('overview.fullList') }} <ArrowRight :size="14" /></RouterLink>
-      </header>
-      <div class="stability-table">
-        <div class="stability-head"><span>{{ t('overview.host') }}</span><span>{{ t('overview.score') }}</span><span>Uptime</span><span>Heartbeat</span><span>Checks</span><span>{{ t('overview.confidence') }}</span></div>
-        <RouterLink v-for="host in stability.hosts.slice(0, 8)" :key="host.host_id" :to="`/hosts/${host.host_id}`" class="stability-row">
-          <span><strong>{{ host.host_name }}</strong><small>{{ host.reason }}</small></span>
-          <strong>{{ host.stability_score ?? '—' }}</strong>
-          <span>{{ host.uptime_score ?? '—' }}</span>
-          <span>{{ host.heartbeat_score ?? '—' }}</span>
-          <span>{{ host.check_success_score ?? '—' }}</span>
-          <span>{{ Math.round(host.confidence * 100) }}%</span>
-        </RouterLink>
-      </div>
-    </section>
-
-    <section class="overview-section hosts-section">
-      <header class="overview-section-heading"><div><h2>{{ t('overview.vpsList') }}</h2><span>{{ t('overview.managedHosts', { count: data.host_rows.length }) }}</span></div><RouterLink to="/hosts">{{ t('overview.fullList') }} <ArrowRight :size="14" /></RouterLink></header>
-      <div v-if="data.host_rows.length" class="operations-host-table">
-        <div class="operations-host-head"><span>{{ t('overview.host') }}</span><span>{{ t('overview.status') }}</span><span>CPU</span><span>{{ t('overview.memory') }}</span><span>{{ t('overview.disk') }}</span><span>{{ t('overview.heartbeat') }}</span><span>{{ t('overview.agentCertificate') }}</span><span>{{ t('overview.queueFailed') }}</span></div>
-        <RouterLink v-for="host in data.host_rows" :key="host.id" :to="`/hosts/${host.id}`" class="operations-host-row">
-          <span class="ops-host-name"><strong>{{ host.name }}</strong><small>{{ host.location || t('overview.regionMissing') }}</small></span>
-          <StatusBadge :status="host.status" />
-          <span>{{ host.resources.cpu_percent === null ? '—' : `${host.resources.cpu_percent.toFixed(1)}%` }}</span>
-          <span>{{ host.resources.memory_percent === null ? '—' : `${host.resources.memory_percent.toFixed(1)}%` }}</span>
-          <span class="disk-value" :class="{ warning: (host.resources.disk_percent ?? 0) >= 80, critical: (host.resources.disk_percent ?? 0) >= 90 }">{{ host.resources.disk_percent === null ? '—' : `${host.resources.disk_percent.toFixed(1)}%` }}</span>
-          <span>{{ relativeTime(host.last_heartbeat_at) }}</span>
-          <span class="agent-cell"><code>{{ host.agent_serial ?? t('overview.unassigned') }}</code><small :class="`certificate-${host.certificate_status}`">{{ certificateLabel(host) }}</small></span>
-          <span>{{ host.offline_queue }} / {{ host.failed_tasks }}</span>
-        </RouterLink>
-      </div>
-      <EmptyState v-else :title="t('overview.noHosts')" />
-    </section>
-
-    <div class="overview-two-column">
-      <section class="overview-section topology-section">
-        <header class="overview-section-heading"><div><h2>{{ t('overview.topology') }}</h2><span>{{ t('overview.noSensitiveTopology') }}</span></div><Network :size="18" /></header>
-        <div class="topology-flow">
-          <div class="topology-core">
-            <div v-for="node in data.topology.filter((item) => item.kind !== 'agent')" :key="node.id" class="topology-node" :class="`node-${node.status}`">
-              <component :is="node.kind === 'database' ? Database : node.kind === 'gateway' ? ShieldCheck : node.kind === 'web' ? Network : Gauge" :size="17" />
-              <span>{{ node.label }}</span><i></i>
-            </div>
+        <div class="proto-gate-panel">
+          <h3>{{ labels.recoverability }}</h3>
+          <div class="proto-gate-row">
+            <StatusBadge :tone="dashboard.data.backup.verified ? 'healthy' : 'warning'" :label="backupValue()" />
+            <div><strong>{{ labels.verifiedBackup }}</strong><span>{{ dashboard.data.backup.scope }} · {{ relativeTime(dashboard.data.backup.verified_at) }}</span></div>
+            <span>RPO {{ duration(dashboard.data.backup.rpo_seconds) }} · RTO {{ duration(dashboard.data.backup.rto_seconds) }}</span>
           </div>
-          <div class="topology-rail" aria-hidden="true"></div>
-          <div class="topology-agents">
-            <div v-for="node in data.topology.filter((item) => item.kind === 'agent')" :key="node.id" class="topology-node" :class="`node-${node.status}`"><Server :size="16" /><span>{{ node.label }}</span><i></i></div>
-            <span v-if="!data.topology.some((item) => item.kind === 'agent')" class="topology-empty">{{ t('overview.noAgents') }}</span>
+          <div class="proto-gate-row">
+            <StatusBadge :tone="dashboard.data.environment.production_deployed ? 'healthy' : 'info'" :label="gateValue()" />
+            <div><strong>{{ labels.productionGate }}</strong><span>{{ dashboard.data.production_gate.decision.replaceAll('_', ' ') }}</span></div>
+            <span>{{ dashboard.data.environment.version }}</span>
           </div>
+          <ul v-if="dashboard.data.production_gate.blockers.length" class="v3-gate-blockers">
+            <li v-for="blocker in dashboard.data.production_gate.blockers" :key="blocker">
+              {{ blocker.replaceAll('_', ' ') }}
+            </li>
+          </ul>
+          <RouterLink class="proto-text-button" to="/recovery">{{ labels.details }} <ChevronRight :size="14" /></RouterLink>
         </div>
-      </section>
-
-      <section class="overview-section recovery-section">
-        <header class="overview-section-heading"><div><h2>{{ t('overview.recovery') }}</h2><span>{{ data.recovery.repository }}</span></div><StatusBadge :status="data.recovery.status" :label="data.recovery.status === 'healthy' ? t('overview.readable') : translateStatus(data.recovery.status)" /></header>
-        <dl class="overview-definition-list">
-          <div><dt>{{ t('overview.acceptedSnapshot') }}</dt><dd class="mono">{{ data.recovery.accepted_snapshot ?? t('common.none') }}</dd></div>
-          <div><dt>{{ t('overview.latestBackup') }}</dt><dd>{{ formatTime(data.recovery.last_backup_at) }}</dd></div>
-          <div><dt>{{ t('overview.latestCheck') }}</dt><dd>{{ formatTime(data.recovery.last_check_at) }}</dd></div>
-          <div><dt>Snapshots</dt><dd>{{ data.recovery.snapshot_count }}</dd></div>
-          <div><dt>{{ t('overview.isolatedRestore') }}</dt><dd>{{ translateStatus(data.recovery.restore_status) }}</dd></div>
-          <div><dt>{{ t('overview.retention') }}</dt><dd>{{ titleize(data.recovery.retention_policy) }}</dd></div>
-        </dl>
-        <div class="recovery-reference-values"><div><span>RPO</span><strong>{{ data.recovery.rpo_seconds ?? '—' }} {{ t('common.seconds') }}</strong></div><div><span>RTO</span><strong>{{ data.recovery.rto_seconds ?? '—' }} {{ t('common.seconds') }}</strong></div><small>{{ t('overview.measuredReference') }}</small></div>
-        <div v-if="!data.permissions.can_view_recovery" class="permission-note"><LockKeyhole :size="15" />{{ t('overview.recoveryPermission') }}</div>
-      </section>
-    </div>
-
-    <div class="overview-two-column lower-panels">
-      <section class="overview-section security-section">
-        <header class="overview-section-heading"><div><h2>{{ t('overview.security') }}</h2><span>{{ formatTime(data.security.last_scan_at) }} · {{ t('overview.scanAt') }}</span></div><ShieldCheck :size="18" /></header>
-        <div class="security-score"><div><span>{{ t('overview.uncoveredCritical') }}</span><strong>{{ data.security.uncovered_critical ?? '—' }}</strong></div><div><span>{{ t('overview.uncoveredHigh') }}</span><strong>{{ data.security.uncovered_high ?? '—' }}</strong></div></div>
-        <ul class="security-controls">
-          <li><CheckCircle2 :size="15" /><span>mTLS</span><strong>{{ titleize(data.security.mtls) }}</strong></li>
-          <li><CheckCircle2 :size="15" /><span>CRL</span><strong>{{ titleize(data.security.crl) }}</strong></li>
-          <li><KeyRound :size="15" /><span>{{ t('overview.certificateRotation') }}</span><strong>{{ translateStatus(data.security.certificate_rotation) }}</strong></li>
-          <li><LockKeyhole :size="15" /><span>{{ t('overview.controls') }}</span><strong>{{ t('status.enforced') }}</strong></li>
-          <li><ShieldCheck :size="15" /><span>{{ t('overview.audit') }}</span><strong>{{ t('status.append_only') }}</strong></li>
-        </ul>
-        <div v-if="!data.permissions.can_view_security" class="permission-note"><LockKeyhole :size="15" />{{ t('overview.securityPermission') }}</div>
-      </section>
-
-      <section class="overview-section timeline-section">
-        <header class="overview-section-heading"><div><h2>{{ t('overview.alertsAudit') }}</h2><span>{{ t('overview.pendingTasks', { count: data.pending_approvals }) }}</span></div></header>
-        <div class="timeline-filters">
-          <select v-model="timelineLevel" :aria-label="t('overview.levelFilter')"><option value="all">{{ t('overview.allLevels') }}</option><option value="critical">{{ t('overview.severe') }}</option><option value="normal">{{ t('overview.normal') }}</option></select>
-          <select v-model="timelineHost" :aria-label="t('overview.timelineHost')"><option value="all">{{ t('overview.allHosts') }}</option><option v-for="host in data.host_rows" :key="host.id" :value="host.id">{{ host.name }}</option></select>
-        </div>
-        <ol v-if="filteredTimeline.length" class="operations-timeline">
-          <li v-for="entry in filteredTimeline.slice(0, 12)" :key="entry.id" :class="`timeline-severity-${entry.severity}`">
-            <i></i><div><strong>{{ entry.title }}</strong><span>{{ hostName(entry.host_id) }} · {{ titleize(entry.status) }}</span></div><time>{{ relativeTime(entry.at) }}</time>
-          </li>
-        </ol>
-        <EmptyState v-else :title="t('overview.noTimeline')" />
-      </section>
-    </div>
+      </div>
+    </section>
   </template>
-
-  <div v-else-if="loading" class="overview-loading" :aria-label="t('overview.loading')">
-    <span v-for="item in 12" :key="item"></span>
-  </div>
 </template>

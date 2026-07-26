@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from guardian.redaction import REDACTED, redact_structure, redact_text
+from guardian.redaction import REDACTED, redact_serialized_text, redact_structure, redact_text
 
 
 @pytest.mark.parametrize(
@@ -34,3 +34,17 @@ def test_redacts_nested_structures() -> None:
     assert result["authorization"] == REDACTED
     assert result["nested"]["db_password"] == REDACTED
     assert "secret" not in result["nested"]["url"]
+
+
+def test_redacts_json_and_ndjson_key_values() -> None:
+    source = (
+        '{"Names":"api","State":"running","token":"forbidden-token"}\n'
+        '{"service":"worker","environment":{"db_password":"forbidden-password"}}'
+    )
+
+    result = redact_serialized_text(source)
+
+    assert "forbidden-token" not in result
+    assert "forbidden-password" not in result
+    assert result.count(REDACTED) == 2
+    assert '"Names":"api"' in result

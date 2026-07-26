@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 import shlex
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, cast
@@ -9,7 +10,7 @@ from typing import Annotated, Any, Literal, cast
 import pyotp
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import desc, select, update
+from sqlalchemy import and_, desc, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -39,6 +40,7 @@ from guardian.backup import (
     promote_recovery_point,
 )
 from guardian.config import Settings, get_settings
+from guardian.dashboard import current_resource_summary, dashboard_bootstrap
 from guardian.database import get_db
 from guardian.enrollment import (
     EnrollmentRateLimitError,
@@ -88,7 +90,7 @@ from guardian.monitoring import assigned_agent_checks, record_agent_check_result
 from guardian.notifications import NotificationConfigurationError, send_test_notification
 from guardian.operations import Window, build_operations_overview
 from guardian.reconciliation import reconcile_staging_heartbeat, record_agent_results
-from guardian.redaction import redact_structure
+from guardian.redaction import redact_serialized_text, redact_structure
 from guardian.schemas import (
     AgentBootstrapRequest,
     AgentBootstrapResponse,
@@ -135,6 +137,7 @@ from guardian.schemas import (
     RecoveryPointView,
     ServiceCheckCreate,
     ServiceCheckResultView,
+    ServiceCheckUpdate,
     ServiceCheckView,
     TotpConfirmRequest,
     TotpSetupView,
@@ -158,6 +161,7 @@ from guardian.security import (
     verify_totp,
     verify_user_password,
 )
+from guardian.service_semantics import classify_service_observation
 from guardian.stability import StabilityWindow, build_stability_report
 from guardian.tasking import create_agent_task, serialize_agent_task
 
@@ -1791,6 +1795,53 @@ def overview(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/api/v1/dashboard/bootstrap", tags=["dashboard"], response_model=None)
+def bootstrap_dashboard(
+    response: Response,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+    if_none_match: Annotated[str | None, Header()] = None,
+) -> dict[str, object] | Response:
+    started = time.perf_counter()
+    payload, etag, cache_hit, db_ms, serialization_ms = dashboard_bootstrap(
+        db,
+        settings=settings,
+        user=user,
+    )
+    total_ms = (time.perf_counter() - started) * 1000
+    headers = {
+        "Cache-Control": "private, max-age=0, must-revalidate",
+        "ETag": etag,
+        "Server-Timing": (
+            f'db;dur={db_ms:.2f}, cache;desc="{"hit" if cache_hit else "miss"}";dur=0, '
+            f"serialization;dur={serialization_ms:.2f}, total;dur={total_ms:.2f}"
+        ),
+        "Vary": "Authorization, Cookie",
+    }
+    if if_none_match == etag:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+    for key, value in headers.items():
+        response.headers[key] = value
+    return payload
+
+
+@router.get("/api/v1/dashboard/resources/current", tags=["dashboard"])
+def dashboard_resources_current(
+    response: Response,
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.viewer))],
+) -> dict[str, object]:
+    started = time.perf_counter()
+    payload = current_resource_summary(db)
+    response.headers["Cache-Control"] = "private, max-age=15"
+    response.headers["Server-Timing"] = (
+        f"total;dur={(time.perf_counter() - started) * 1000:.2f}"
+    )
+    response.headers["Vary"] = "Authorization, Cookie"
+    return payload
+
+
 @router.get("/api/v1/attention", tags=["dashboard"])
 def attention(
     db: DB,
@@ -1831,31 +1882,51 @@ def list_services(
     db: DB, _: Annotated[User, Depends(require_role(Role.viewer))]
 ) -> list[dict[str, object]]:
     services: list[dict[str, object]] = []
-    for host in db.scalars(select(Host).order_by(Host.name)).all():
-        snapshot = db.scalar(
-            select(MetricSnapshot)
-            .where(MetricSnapshot.host_id == host.id)
-            .order_by(desc(MetricSnapshot.collected_at))
-            .limit(1)
+    latest_times = (
+        select(
+            MetricSnapshot.host_id,
+            func.max(MetricSnapshot.collected_at).label("collected_at"),
         )
-        if not snapshot:
-            continue
-        raw_services = snapshot.payload.get("_services", [])
+        .group_by(MetricSnapshot.host_id)
+        .subquery()
+    )
+    rows = db.execute(
+        select(
+            Host.id,
+            Host.name,
+            MetricSnapshot.collected_at,
+            MetricSnapshot.payload,
+        )
+        .join(latest_times, latest_times.c.host_id == Host.id)
+        .join(
+            MetricSnapshot,
+            and_(
+                MetricSnapshot.host_id == latest_times.c.host_id,
+                MetricSnapshot.collected_at == latest_times.c.collected_at,
+            ),
+        )
+        .order_by(Host.name)
+    ).all()
+    for host_id, host_name, collected_at, payload in rows:
+        raw_services = payload.get("_services", [])
         if not isinstance(raw_services, list):
             continue
         for item in raw_services[:100]:
             if not isinstance(item, dict):
                 continue
             kind = str(item.get("kind", "unknown"))[:80]
-            summary = str(item.get("summary", ""))[:1000]
+            raw_summary = str(item.get("summary", ""))[:1000]
+            classification = classify_service_observation(kind, raw_summary)
+            summary = redact_serialized_text(raw_summary)
             services.append(
                 {
-                    "host_id": host.id,
-                    "host_name": host.name,
+                    "host_id": host_id,
+                    "host_name": host_name,
                     "kind": kind,
-                    "status": "failed" if kind == "systemd_failed" else "observed",
+                    **classification,
                     "summary": summary,
-                    "collected_at": snapshot.collected_at.isoformat(),
+                    "evidence_available": bool(summary),
+                    "collected_at": collected_at.isoformat(),
                 }
             )
     return services
@@ -1951,6 +2022,47 @@ def create_service_check(
         source_ip=request.client.host if request.client else None,
     )
     db.commit()
+    return check
+
+
+@router.patch(
+    "/api/v1/service-checks/{check_id}",
+    response_model=ServiceCheckView,
+    tags=["monitoring"],
+)
+def update_service_check(
+    check_id: str,
+    payload: ServiceCheckUpdate,
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.admin))],
+) -> ServiceCheck:
+    check = db.get(ServiceCheck, check_id)
+    if check is None:
+        raise HTTPException(status_code=404, detail="service check not found")
+    changes = payload.model_dump(exclude_none=True)
+    if not changes:
+        return check
+    previous = {key: getattr(check, key) for key in changes}
+    for key, value in changes.items():
+        setattr(check, key, value)
+    check.updated_at = datetime.now(UTC)
+    write_audit(
+        db,
+        actor=user,
+        action="service_check.update",
+        resource_type="service_check",
+        resource_id=check.id,
+        outcome="success",
+        details={
+            "fields": sorted(changes),
+            "previous": previous,
+            "current": changes,
+        },
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.refresh(check)
     return check
 
 

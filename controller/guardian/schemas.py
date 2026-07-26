@@ -290,6 +290,11 @@ class ServiceCheckView(ORMModel):
     updated_at: datetime
 
 
+class ServiceCheckUpdate(BaseModel):
+    enabled: bool | None = None
+    interval_seconds: int | None = Field(default=None, ge=15, le=86400)
+
+
 class ServiceCheckResultView(ORMModel):
     id: int
     check_id: str
