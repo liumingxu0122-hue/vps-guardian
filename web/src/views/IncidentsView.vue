@@ -6,6 +6,7 @@ import { useI18n } from 'vue-i18n'
 
 import { jsonBody, request } from '../api'
 import DetailDrawer from '../components/v3/DetailDrawer.vue'
+import DataTable from '../components/v3/DataTable.vue'
 import PageHeader from '../components/v3/PageHeader.vue'
 import StatusBadge, { type StatusTone } from '../components/v3/StatusBadge.vue'
 import { session } from '../session'
@@ -308,24 +309,18 @@ onMounted(load)
       <label class="v3-compact-select"><span class="sr-only">{{ zh ? '排序' : 'Sort' }}</span><select v-model="sortBy"><option value="updated">{{ zh ? '最后更新' : 'Updated' }}</option><option value="created">{{ zh ? '创建时间' : 'Created' }}</option></select><ChevronDown :size="14" /></label>
     </div>
 
-    <div v-if="error" class="v3-module-state error-state" role="alert"><strong>{{ error }}</strong><button class="proto-button secondary" type="button" @click="load">{{ zh ? '重试' : 'Retry' }}</button></div>
-    <div v-else-if="loading" class="v3-table-skeleton" aria-label="正在加载事故"><span v-for="index in 5" :key="index"></span></div>
-    <div v-else-if="filtered.length" class="proto-table-shell">
-      <table class="proto-table incidents-table">
-        <thead><tr><th>{{ zh ? '等级' : 'Severity' }}</th><th>{{ zh ? '事故' : 'Incident' }}</th><th>{{ zh ? '影响资源' : 'Impact' }}</th><th>{{ zh ? '状态' : 'Status' }}</th><th>Owner</th><th>{{ zh ? '来源' : 'Source' }}</th><th>{{ zh ? '创建时间' : 'Created' }}</th><th>{{ zh ? '持续时间' : 'Duration' }}</th><th>{{ zh ? '最后更新' : 'Updated' }}</th><th>{{ zh ? '下一步' : 'Next action' }}</th></tr></thead>
-        <tbody>
-          <tr v-for="incident in filtered" :key="incident.id" :class="{ selected: selected?.id === incident.id }" tabindex="0" @click="selected = incident" @keydown.enter="selected = incident">
+    <DataTable :label="zh ? '事故' : 'Incidents'" table-class="incidents-table" :loading="loading" :error="error" :empty="!filtered.length" :total="filtered.length" @retry="load">
+      <template #head><tr><th>{{ zh ? '等级' : 'Severity' }}</th><th>{{ zh ? '事故' : 'Incident' }}</th><th>{{ zh ? '影响资源' : 'Impact' }}</th><th>{{ zh ? '状态' : 'Status' }}</th><th>Owner</th><th>{{ zh ? '来源' : 'Source' }}</th><th>{{ zh ? '创建时间' : 'Created' }}</th><th>{{ zh ? '持续时间' : 'Duration' }}</th><th>{{ zh ? '最后更新' : 'Updated' }}</th><th>{{ zh ? '下一步' : 'Next action' }}</th></tr></template>
+      <tr v-for="incident in filtered" :key="incident.id" :class="{ selected: selected?.id === incident.id, 'is-selected': selected?.id === incident.id }" :aria-selected="selected?.id === incident.id" tabindex="0" @click="selected = incident" @keydown.enter="selected = incident">
             <td><StatusBadge :tone="severityTone(incident.severity)" :label="`S${incident.severity}`" compact /></td>
             <td><strong>{{ title(incident) }}</strong><small>{{ sourceLabel(incident) }} <span v-if="isTestRecord(incident)" class="proto-test-label">{{ zh ? '测试记录' : 'Test record' }}</span></small></td>
             <td>{{ affected(incident) }}</td><td><StatusBadge :tone="statusTone(incident.status)" :label="statusLabel(incident.status)" compact /></td>
             <td>{{ ownerName(incident) }}</td><td>{{ sourceLabel(incident) }}</td><td><time :title="formatTime(incident.first_seen_at)">{{ formatTime(incident.first_seen_at) }}</time></td>
             <td>{{ age(incident) }}</td><td>{{ relativeTime(incident.updated_at) }}</td>
             <td><button class="proto-row-action" type="button">{{ nextAction(incident) }} <ChevronRight :size="13" /></button></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <div v-else class="v3-empty-inline"><span>{{ zh ? '当前筛选没有匹配事故。' : 'No incidents match the current filters.' }}</span><button class="proto-text-button" type="button" @click="clearFilters">{{ zh ? '清除筛选' : 'Clear filters' }}</button></div>
+      </tr>
+      <template #empty><span>{{ zh ? '当前筛选没有匹配事故。' : 'No incidents match the current filters.' }}</span><button class="proto-text-button" type="button" @click="clearFilters">{{ zh ? '清除筛选' : 'Clear filters' }}</button></template>
+    </DataTable>
     <div v-if="!loading && incidents.some(isTestRecord)" class="proto-list-foot"><span>{{ zh ? '历史测试事故已明确标记；S5 信息事件不参与首屏严重健康判断。' : 'Historical test incidents are labelled; S5 informational items do not drive critical health.' }}</span><strong>{{ zh ? `显示 ${filtered.length} 项` : `${filtered.length} shown` }}</strong></div>
   </section>
 

@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 
 import { request } from '../api'
 import EmptyState from '../components/EmptyState.vue'
+import DataTable from '../components/v3/DataTable.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import type { Agent, AgentIdentity, Host } from '../types'
@@ -32,25 +33,20 @@ onMounted(load)
     <template #actions><button class="icon-button bordered" type="button" :aria-label="$t('common.refresh')" @click="load"><RefreshCw :size="17" /></button></template>
   </PageHeader>
   <div class="split-view" :class="{ 'detail-open': selected }">
-    <section class="agent-list">
-      <button v-for="agent in agents" :key="agent.id" type="button" class="agent-row" @click="inspect(agent)">
-        <Server :size="18" />
-        <span>
-          <strong>{{ hostMap[agent.host_id]?.name ?? agent.host_id }}</strong>
-          <small>
-            {{ agent.version ?? $t('common.unknown') }}
-            <template v-if="agent.build_git_sha"> · {{ agent.build_git_sha.slice(0, 12) }}</template>
-            <template v-if="agent.platform_os && agent.platform_arch"> · {{ agent.platform_os }}/{{ agent.platform_arch }}</template>
-          </small>
-        </span>
-        <StatusBadge :status="agent.revoked_at ? 'revoked' : 'active'" />
-        <span>{{ relativeTime(agent.last_heartbeat_at) }}</span>
-        <code>v{{ agent.identity_version }}</code>
-      </button>
-      <EmptyState v-if="!agents.length" :title="$t('agents.empty')" />
-    </section>
+    <DataTable :label="$t('agents.title')" :empty="!agents.length" :total="agents.length">
+      <template #head><tr><th>Host</th><th>Status</th><th>Version</th><th>Platform</th><th>Heartbeat</th><th>Identity</th></tr></template>
+      <tr v-for="agent in agents" :key="agent.id" :class="{ 'is-selected': selected === agent.id }" :aria-selected="selected === agent.id" tabindex="0" @click="inspect(agent)" @keydown.enter="inspect(agent)">
+        <td><span class="rc5-resource"><span class="rc5-resource-icon"><Server :size="18" /></span><strong>{{ hostMap[agent.host_id]?.name ?? 'Unavailable host' }}</strong></span></td>
+        <td><StatusBadge :status="agent.revoked_at ? 'revoked' : 'active'" /></td>
+        <td>{{ agent.version ?? $t('common.unknown') }}</td>
+        <td>{{ agent.platform_os && agent.platform_arch ? `${agent.platform_os}/${agent.platform_arch}` : $t('common.unknown') }}</td>
+        <td>{{ relativeTime(agent.last_heartbeat_at) }}</td>
+        <td>Generation {{ agent.identity_version }}</td>
+      </tr>
+      <template #empty><EmptyState :title="$t('agents.empty')" /></template>
+    </DataTable>
     <aside v-if="selected" class="detail-panel">
-      <header><div><span class="mono">{{ selected.slice(0, 8) }}</span><h2>{{ $t('agents.identities') }}</h2></div></header>
+      <header><div><span>{{ $t('agents.title') }}</span><h2>{{ $t('agents.identities') }}</h2></div></header>
       <article v-for="identity in identities" :key="identity.id" class="identity-card">
         <KeyRound :size="16" /><div><strong>Generation {{ identity.generation }}</strong><small>{{ formatTime(identity.created_at) }}</small></div>
         <StatusBadge :status="identity.state" />

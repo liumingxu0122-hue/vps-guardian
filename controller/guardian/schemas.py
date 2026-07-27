@@ -210,6 +210,28 @@ class HostUpdate(BaseModel):
         return HostCreate.validate_labels(value) if value is not None else None
 
 
+class HostBatchUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    host_ids: list[str] = Field(min_length=1, max_length=200)
+    enabled: bool | None = None
+    group_name: str | None = Field(default=None, max_length=120)
+    add_tags: list[str] = Field(default_factory=list, max_length=32)
+    remove_tags: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("host_ids")
+    @classmethod
+    def validate_host_ids(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value) or any(len(item) > 36 for item in value):
+            raise ValueError("host_ids must be unique identifiers")
+        return value
+
+    @field_validator("add_tags", "remove_tags")
+    @classmethod
+    def validate_batch_tags(cls, value: list[str]) -> list[str]:
+        return HostCreate.validate_tags(value)
+
+
 class HostView(ORMModel):
     id: str
     name: str
@@ -225,6 +247,45 @@ class HostView(ORMModel):
     last_seen_at: datetime | None
     enrolled_at: datetime | None
     disabled_at: datetime | None
+
+
+class HostPresentationView(BaseModel):
+    """Explicit allowlist for the operator-facing host index."""
+
+    id: str
+    name: str
+    primary_address: str
+    os_name: str | None
+    region: str | None
+    group: str | None
+    provider: str | None
+    purpose: str | None
+    display_tags: list[str]
+    health: Literal["healthy", "degraded", "offline", "unknown"]
+    data_state: Literal["normal", "no_data", "stale", "offline", "agent_error"]
+    enabled: bool
+    management: Literal[
+        "guardian_and_komari",
+        "guardian",
+        "komari_only",
+        "pending_enrollment",
+    ]
+    agent_state: Literal["online", "stale", "never_seen", "revoked", "not_installed"]
+    agent_version: str | None
+    last_heartbeat_at: datetime | None
+    last_seen_at: datetime | None
+    enrolled_at: datetime | None
+    data_reason: Literal[
+        "available",
+        "no_guardian_agent",
+        "never_connected",
+        "pending_enrollment",
+        "disabled",
+        "stale",
+        "agent_error",
+    ]
+    resource_summary: dict[str, float] | None
+    technical_evidence_available: bool
 
 
 class EnrollmentTokenIssue(BaseModel):
@@ -565,6 +626,41 @@ class AuditView(ORMModel):
     details: dict[str, Any]
     source_ip: str | None
     created_at: datetime
+
+
+class AuditPresentationView(BaseModel):
+    """Explicit allowlist for the human-readable audit index."""
+
+    event_id: int
+    display_action: str
+    action_code: str
+    category: str
+    severity: Literal["neutral", "info", "warning", "critical"]
+    result: str
+    actor_display: str
+    actor_type: Literal["user", "system", "agent", "unknown"]
+    resource_display: str
+    resource_type: str
+    source_display: str
+    source_type: Literal["internal_service", "private_network", "external_client", "unknown"]
+    created_at: datetime
+    summary: str
+    correlation_id: str | None
+    request_id: str | None
+    evidence_available: bool
+
+
+class AuditEvidenceView(BaseModel):
+    """Redacted technical evidence, fetched only after an explicit detail request."""
+
+    audit_id: int
+    action_code: str
+    resource_type: str
+    resource_id: str | None
+    actor_id: str | None
+    source_ip: str | None
+    changes: dict[str, Any]
+    correlation_id: str | None
 
 
 class RecoveryPointView(ORMModel):

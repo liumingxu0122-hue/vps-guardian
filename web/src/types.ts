@@ -50,6 +50,30 @@ export interface Host {
   disabled_at: string | null
 }
 
+export interface HostPresentation {
+  id: string
+  name: string
+  primary_address: string
+  os_name: string | null
+  region: string | null
+  group: string | null
+  provider: string | null
+  purpose: string | null
+  display_tags: string[]
+  health: Host['status']
+  data_state: Host['data_state']
+  enabled: boolean
+  management: 'guardian_and_komari' | 'guardian' | 'komari_only' | 'pending_enrollment'
+  agent_state: 'online' | 'stale' | 'never_seen' | 'revoked' | 'not_installed'
+  agent_version: string | null
+  last_heartbeat_at: string | null
+  last_seen_at: string | null
+  enrolled_at: string | null
+  data_reason: 'available' | 'no_guardian_agent' | 'never_connected' | 'pending_enrollment' | 'disabled' | 'stale' | 'agent_error'
+  resource_summary: Record<string, number> | null
+  technical_evidence_available: boolean
+}
+
 export interface Evidence {
   source?: string
   observation?: string
@@ -343,6 +367,37 @@ export interface AuditEntry {
   details: Record<string, unknown>
   source_ip: string | null
   created_at: string
+}
+
+export interface AuditPresentation {
+  event_id: number
+  display_action: string
+  action_code: string
+  category: string
+  severity: 'neutral' | 'info' | 'warning' | 'critical'
+  result: string
+  actor_display: string
+  actor_type: 'user' | 'system' | 'agent' | 'unknown'
+  resource_display: string
+  resource_type: string
+  source_display: string
+  source_type: 'internal_service' | 'private_network' | 'external_client' | 'unknown'
+  created_at: string
+  summary: string
+  correlation_id: string | null
+  request_id: string | null
+  evidence_available: boolean
+}
+
+export interface AuditEvidence {
+  audit_id: number
+  action_code: string
+  resource_type: string
+  resource_id: string | null
+  actor_id: string | null
+  source_ip: string | null
+  changes: Record<string, unknown>
+  correlation_id: string | null
 }
 
 export interface ServiceSummary {

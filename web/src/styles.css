@@ -140,7 +140,7 @@ pre {
   width: var(--sidebar-width);
   flex-direction: column;
   border-right: 1px solid var(--line-soft);
-  background: #0e1115;
+  background: var(--panel);
 }
 
 .brand-row {
@@ -161,7 +161,7 @@ pre {
   border: 1px solid #335e53;
   border-radius: 6px;
   color: var(--green);
-  background: #12211e;
+  background: color-mix(in srgb, var(--green) 10%, var(--panel));
 }
 
 .brand-row > div:nth-child(2) {
@@ -202,7 +202,7 @@ pre {
   border: 1px solid var(--line-soft);
   border-radius: 5px;
   color: var(--muted);
-  background: #12161b;
+  background: var(--surface-2);
 }
 
 .controller-state > div span,
@@ -468,10 +468,10 @@ select:focus-visible {
   background: currentColor;
 }
 
-.status-positive { border-color: #31594e; color: var(--green); background: #11201c; }
-.status-warning { border-color: #62502d; color: var(--amber); background: #1f1b12; }
-.status-negative { border-color: #633838; color: var(--red); background: #211414; }
-.status-neutral { color: #99a4af; background: #161a1f; }
+.status-positive { border-color: #31594e; color: var(--green); background: color-mix(in srgb, var(--green) 10%, var(--panel)); }
+.status-warning { border-color: #62502d; color: var(--amber); background: color-mix(in srgb, var(--amber) 10%, var(--panel)); }
+.status-negative { border-color: #633838; color: var(--red); background: color-mix(in srgb, var(--red) 10%, var(--panel)); }
+.status-neutral { color: var(--muted); background: var(--surface-2); }
 
 .inline-error,
 .form-error {
@@ -586,7 +586,7 @@ select:focus-visible {
 }
 
 .table-row:hover {
-  background: #11151a;
+  background: var(--surface-2);
 }
 
 .table-row strong,
@@ -618,7 +618,7 @@ select:focus-visible {
 .severity-4,
 .severity-5 { border-color: #6c3838; color: var(--red); background: #211313; }
 .severity-3 { border-color: #665129; color: var(--amber); background: #211c12; }
-.severity-2 { border-color: #345678; color: var(--blue); background: #121b25; }
+.severity-2 { border-color: #345678; color: var(--blue); background: color-mix(in srgb, var(--blue) 10%, var(--panel)); }
 
 .fleet-total {
   padding: 25px 0 17px;
@@ -805,7 +805,7 @@ select:focus-visible {
 }
 
 .host-item.expanded {
-  background: #0e1216;
+  background: var(--panel-raised);
 }
 
 .host-summary {
@@ -822,7 +822,7 @@ select:focus-visible {
 }
 
 .host-summary:hover {
-  background: #11151a;
+  background: var(--surface-2);
 }
 
 .host-icon,
@@ -1167,7 +1167,7 @@ select:focus-visible {
 
 .incident-row:hover,
 .incident-row.selected {
-  background: #11161a;
+  background: var(--surface-2);
 }
 
 .incident-row.selected {
@@ -1213,7 +1213,7 @@ select:focus-visible {
   padding: 18px 22px 40px;
   overflow-y: auto;
   border-left: 1px solid var(--line);
-  background: #0e1115;
+  background: var(--panel);
 }
 
 .detail-panel > header {
@@ -1331,7 +1331,7 @@ select:focus-visible {
 .repair-status.allowed {
   border-color: #31594e;
   color: var(--green);
-  background: #11201c;
+  background: color-mix(in srgb, var(--green) 10%, var(--panel));
 }
 
 .repair-content {
@@ -1398,7 +1398,7 @@ select:focus-visible {
 
 .approval-list {
   border-right: 1px solid var(--line);
-  background: #0e1115;
+  background: var(--panel);
 }
 
 .approval-list > button {
@@ -1556,7 +1556,7 @@ select:focus-visible {
   padding: 11px;
   border: 1px solid var(--line-soft);
   color: var(--green);
-  background: #101815;
+  background: color-mix(in srgb, var(--green) 7%, var(--panel));
 }
 
 .recovery-reference strong,
@@ -1733,7 +1733,7 @@ select:focus-visible {
   border: 1px solid var(--line);
   border-radius: 3px;
   color: var(--blue) !important;
-  background: #111a23;
+  background: color-mix(in srgb, var(--blue) 8%, var(--panel));
   text-transform: uppercase;
 }
 
@@ -1801,7 +1801,7 @@ select:focus-visible {
   padding: 30px 32px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #0f1318;
+  background: var(--panel-raised);
   box-shadow: 0 18px 60px rgb(0 0 0 / 35%);
 }
 
@@ -1914,7 +1914,7 @@ select:focus-visible {
   border: 1px solid #343c44;
   border-radius: 6px;
   color: var(--text);
-  background: #11151a;
+  background: var(--panel);
   box-shadow: 0 24px 90px rgb(0 0 0 / 60%);
 }
 
@@ -1988,7 +1988,7 @@ select:focus-visible {
 @media (max-width: 900px) {
   .close-nav,
   .mobile-menu { display: inline-flex !important; }
-  .mobile-menu { position: fixed; z-index: 25; top: 15px; left: 14px; border: 1px solid var(--line); background: #11151a; }
+  .mobile-menu { position: fixed; z-index: 25; top: 15px; left: 14px; border: 1px solid var(--line); background: var(--panel); }
   .close-nav { margin-left: auto; }
   .sidebar { transform: translateX(-100%); transition: transform 0.18s ease; }
   .sidebar.open { transform: translateX(0); }

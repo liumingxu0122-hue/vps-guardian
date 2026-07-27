@@ -2,9 +2,12 @@
 import { Copy, KeyRound, RefreshCw, ShieldCheck, Trash2 } from '@lucide/vue'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 
 import { jsonBody, request } from '../api'
 import PageHeader from '../components/PageHeader.vue'
+import DataTable from '../components/v3/DataTable.vue'
+import { auditActionLabel, resultLabel } from '../presentationRegistry'
 import { session } from '../session'
 import type { AuditEntry, RecoveryCodeStatus, UserSession } from '../types'
 import { formatTime } from '../utils'
@@ -15,6 +18,7 @@ interface RecoveryBatch {
 }
 
 const router = useRouter()
+const { locale } = useI18n()
 const sessions = ref<UserSession[]>([])
 const status = ref<RecoveryCodeStatus | null>(null)
 const events = ref<AuditEntry[]>([])
@@ -102,14 +106,14 @@ onMounted(load)
 
   <section class="settings-section">
     <div class="section-heading"><div><h2>Active sessions</h2><span>IP and browser values are keyed digests, not raw identifiers.</span></div></div>
-    <div class="security-control-table">
-      <div v-for="row in sessions" :key="row.id">
-        <ShieldCheck :size="16" />
-        <strong>{{ row.current ? 'Current session' : `Session ${row.id.slice(0, 8)}` }}</strong>
-        <span>{{ formatTime(row.issued_at) }} · expires {{ formatTime(row.expires_at) }}</span>
-        <button v-if="!row.current" class="icon-button bordered" type="button" aria-label="Revoke session" @click="revoke(row.id)"><Trash2 :size="14" /></button>
-      </div>
-    </div>
+    <DataTable label="Active sessions" :empty="!sessions.length" :total="sessions.length" density="compact">
+      <template #head><tr><th>Session</th><th>Issued</th><th>Expires</th><th>Action</th></tr></template>
+      <tr v-for="row in sessions" :key="row.id">
+        <td><span class="rc5-resource"><span class="rc5-resource-icon"><ShieldCheck :size="16" /></span><strong>{{ row.current ? 'Current session' : 'Other signed-in session' }}</strong></span></td>
+        <td>{{ formatTime(row.issued_at) }}</td><td>{{ formatTime(row.expires_at) }}</td>
+        <td><button v-if="!row.current" class="icon-button bordered" type="button" aria-label="Revoke session" @click="revoke(row.id)"><Trash2 :size="14" /></button><span v-else>Current</span></td>
+      </tr>
+    </DataTable>
   </section>
 
   <section class="settings-section">
@@ -135,10 +139,12 @@ onMounted(load)
 
   <section class="settings-section">
     <div class="section-heading"><div><h2>Recent identity events</h2><span>Passwords, tokens, TOTP secrets, and recovery codes are excluded.</span></div></div>
-    <div class="security-control-table">
-      <div v-for="event in events" :key="event.id">
-        <ShieldCheck :size="16" /><strong>{{ event.action }}</strong><span>{{ event.outcome }} · {{ formatTime(event.created_at) }}</span>
-      </div>
-    </div>
+    <DataTable label="Recent identity events" :empty="!events.length" :total="events.length" density="compact">
+      <template #head><tr><th>Event</th><th>Result</th><th>Time</th></tr></template>
+      <tr v-for="event in events" :key="event.id">
+        <td><span class="rc5-resource"><span class="rc5-resource-icon"><ShieldCheck :size="16" /></span><strong>{{ auditActionLabel(event.action, 'Unknown audit action', locale) }}</strong></span></td>
+        <td>{{ resultLabel(event.outcome, locale) }}</td><td>{{ formatTime(event.created_at) }}</td>
+      </tr>
+    </DataTable>
   </section>
 </template>

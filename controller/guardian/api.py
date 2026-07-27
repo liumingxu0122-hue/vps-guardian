@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import csv
+import io
+import json
 import secrets
 import shlex
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
+from ipaddress import ip_address
 from typing import Annotated, Any, Literal, cast
 
 import pyotp
@@ -126,11 +130,15 @@ from guardian.schemas import (
     ApprovalTargetView,
     ApprovalTimelineEntryView,
     ApprovalView,
+    AuditEvidenceView,
+    AuditPresentationView,
     AuditView,
     EnrollmentTokenIssue,
     EnrollmentTokenView,
     HealthResponse,
+    HostBatchUpdate,
     HostCreate,
+    HostPresentationView,
     HostUpdate,
     HostView,
     IncidentUpdateRequest,
@@ -1361,6 +1369,184 @@ def _snapshot_metric(snapshot: MetricSnapshot | None, key: str) -> float:
         return -1.0
     value = snapshot.payload.get(key)
     return float(value) if isinstance(value, int | float) else -1.0
+
+
+_INTERNAL_HOST_TAGS = frozenset({"komari-import", "pending-enrollment"})
+
+
+def _host_management(host: Host, agent: Agent | None) -> str:
+    tags = set(host.tags)
+    if agent is not None and "komari-import" in tags:
+        return "guardian_and_komari"
+    if agent is not None:
+        return "guardian"
+    if "komari-import" in tags or host.address.startswith("komari:"):
+        return "komari_only"
+    return "pending_enrollment"
+
+
+def _host_agent_state(agent: Agent | None, now: datetime) -> str:
+    if agent is None:
+        return "not_installed"
+    if agent.revoked_at is not None:
+        return "revoked"
+    if agent.last_heartbeat_at is None:
+        return "never_seen"
+    heartbeat = agent.last_heartbeat_at
+    if heartbeat.tzinfo is None:
+        heartbeat = heartbeat.replace(tzinfo=UTC)
+    return "online" if heartbeat >= now - timedelta(minutes=5) else "stale"
+
+
+def _host_data_reason(host: Host, agent: Agent | None) -> str:
+    if not host.enabled:
+        return "disabled"
+    if host.data_state == "stale":
+        return "stale"
+    if host.data_state == "agent_error":
+        return "agent_error"
+    if agent is None and _host_management(host, agent) == "pending_enrollment":
+        return "pending_enrollment"
+    if agent is None:
+        return "no_guardian_agent"
+    if agent.last_heartbeat_at is None:
+        return "never_connected"
+    return "available"
+
+
+def _resource_percent(payload: dict[str, object], key: str) -> float | None:
+    value = payload.get(key)
+    return float(value) if isinstance(value, int | float) else None
+
+
+def _host_resource_summary(payload: dict[str, object] | None) -> dict[str, float] | None:
+    if payload is None:
+        return None
+    values = {
+        "cpu_percent": _resource_percent(payload, "cpu_percent"),
+        "memory_percent": _resource_percent(payload, "memory_percent"),
+        "disk_percent": _resource_percent(payload, "disk_percent"),
+    }
+    return {key: value for key, value in values.items() if value is not None} or None
+
+
+@router.get(
+    "/api/v1/hosts/presentation",
+    response_model=list[HostPresentationView],
+    tags=["inventory"],
+)
+def list_host_presentations(
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.viewer))],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[HostPresentationView]:
+    """Bounded, single-query host index with an explicit presentation allowlist."""
+
+    rows = db.execute(
+        select(Host, Agent)
+        .outerjoin(Agent, Agent.host_id == Host.id)
+        .order_by(Host.name)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    host_ids = [host.id for host, _agent in rows]
+    snapshots: dict[str, dict[str, object]] = {}
+    if host_ids:
+        ranked_snapshots = (
+            select(
+                MetricSnapshot.host_id,
+                MetricSnapshot.payload,
+                func.row_number()
+                .over(
+                    partition_by=MetricSnapshot.host_id,
+                    order_by=desc(MetricSnapshot.collected_at),
+                )
+                .label("snapshot_rank"),
+            )
+            .where(MetricSnapshot.host_id.in_(host_ids))
+            .subquery()
+        )
+        snapshots = {
+            host_id: cast(dict[str, object], payload)
+            for host_id, payload in db.execute(
+                select(ranked_snapshots.c.host_id, ranked_snapshots.c.payload).where(
+                    ranked_snapshots.c.snapshot_rank == 1
+                )
+            ).all()
+        }
+    now = datetime.now(UTC)
+    return [
+        HostPresentationView(
+            id=host.id,
+            name=host.name,
+            primary_address=host.address,
+            os_name=host.os_name,
+            region=host.location,
+            group=host.group_name,
+            provider=host.labels.get("provider"),
+            purpose=host.labels.get("purpose"),
+            display_tags=[tag for tag in host.tags if tag not in _INTERNAL_HOST_TAGS],
+            health=cast(Any, host.status),
+            data_state=cast(Any, host.data_state),
+            enabled=host.enabled,
+            management=cast(Any, _host_management(host, agent)),
+            agent_state=cast(Any, _host_agent_state(agent, now)),
+            agent_version=agent.version if agent else None,
+            last_heartbeat_at=agent.last_heartbeat_at if agent else None,
+            last_seen_at=host.last_seen_at,
+            enrolled_at=host.enrolled_at,
+            data_reason=cast(Any, _host_data_reason(host, agent)),
+            resource_summary=_host_resource_summary(snapshots.get(host.id)),
+            technical_evidence_available=True,
+        )
+        for host, agent in rows
+    ]
+
+
+@router.patch("/api/v1/hosts/batch", tags=["inventory"])
+def batch_update_hosts(
+    payload: HostBatchUpdate,
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.admin))],
+) -> dict[str, int]:
+    if (
+        payload.enabled is None
+        and payload.group_name is None
+        and not payload.add_tags
+        and not payload.remove_tags
+    ):
+        raise HTTPException(status_code=422, detail="at least one batch change is required")
+    hosts = list(db.scalars(select(Host).where(Host.id.in_(payload.host_ids))).all())
+    if len(hosts) != len(payload.host_ids):
+        raise HTTPException(status_code=404, detail="one or more hosts were not found")
+    for host in hosts:
+        if payload.enabled is not None:
+            host.enabled = payload.enabled
+            host.disabled_at = None if payload.enabled else datetime.now(UTC)
+        if payload.group_name is not None:
+            host.group_name = payload.group_name or None
+        tags = (set(host.tags) | set(payload.add_tags)) - set(payload.remove_tags)
+        host.tags = sorted(tags)
+    write_audit(
+        db,
+        actor=user,
+        action="host.batch_update",
+        resource_type="host",
+        resource_id=None,
+        outcome="success",
+        details={
+            "host_count": len(hosts),
+            "enabled_changed": payload.enabled is not None,
+            "group_changed": payload.group_name is not None,
+            "tags_added": len(payload.add_tags),
+            "tags_removed": len(payload.remove_tags),
+        },
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return {"updated": len(hosts)}
 
 
 @router.get("/api/v1/hosts", response_model=list[HostView], tags=["inventory"])
@@ -3017,6 +3203,307 @@ def list_audit(
         db.scalars(
             select(AuditLog).order_by(desc(AuditLog.created_at)).limit(limit).offset(offset)
         ).all()
+    )
+
+
+_AUDIT_ACTION_LABELS = {
+    "auth.login": "Signed in",
+    "auth.logout": "Signed out",
+    "auth.login_failed": "Sign-in denied",
+    "session.revoke": "Revoked session",
+    "host.create": "Added host",
+    "host.update": "Updated host",
+    "host.delete": "Removed host",
+    "host.stale": "Host became stale",
+    "host.offline": "Host went offline",
+    "host.register": "Registered host",
+    "user.create": "Created user",
+    "user.update": "Updated user",
+    "user.delete": "Removed user",
+    "approval.approved": "Approved operation",
+    "approval.created": "Created approval",
+    "approval.rejected": "Rejected operation",
+    "notification.phase4_acceptance": "Sent Phase 4 acceptance notification",
+}
+
+_AUDIT_RESOURCE_LABELS = {
+    "user": "User",
+    "session": "Session",
+    "host": "Host",
+    "agent": "Guardian Agent",
+    "alert": "Alert",
+    "incident": "Incident",
+    "approval": "Approval",
+    "service_check": "Service check",
+}
+
+
+def _audit_source(source_ip: str | None) -> tuple[str, str]:
+    if not source_ip:
+        return ("internal_service", "Controller internal service")
+    try:
+        address = ip_address(source_ip)
+    except ValueError:
+        return ("unknown", "Unclassified source")
+    if address.is_loopback:
+        return ("internal_service", "Controller internal service")
+    if address.is_private or address.is_link_local:
+        return ("private_network", "Private network client")
+    return ("external_client", "External client")
+
+
+def _audit_severity(entry: AuditLog) -> str:
+    if entry.outcome in {"failed", "denied", "error"}:
+        return "critical" if entry.action.startswith(("auth.", "agent.", "user.")) else "warning"
+    if any(word in entry.action for word in ("delete", "revoke", "disable", "offline")):
+        return "warning"
+    return "neutral"
+
+
+def _audit_correlation_id(details: dict[str, object]) -> str | None:
+    for key in ("correlation_id", "trace_id"):
+        value = details.get(key)
+        if isinstance(value, str) and value:
+            return value[:128]
+    return None
+
+
+def _audit_request_id(details: dict[str, object]) -> str | None:
+    value = details.get("request_id")
+    return value[:128] if isinstance(value, str) and value else None
+
+
+def _audit_resource_labels(db: Session, entries: list[AuditLog]) -> dict[tuple[str, str], str]:
+    labels: dict[tuple[str, str], str] = {}
+    model_fields: tuple[tuple[str, type[Any], Any], ...] = (
+        ("host", Host, Host.name),
+        ("user", User, User.email),
+        ("incident", Incident, Incident.title),
+        ("approval", Approval, Approval.action_name),
+        ("service_check", ServiceCheck, ServiceCheck.name),
+    )
+    for resource_type, model, display_field in model_fields:
+        ids = {
+            entry.resource_id
+            for entry in entries
+            if entry.resource_type == resource_type and entry.resource_id
+        }
+        if not ids:
+            continue
+        for resource_id, display in db.execute(
+            select(model.id, display_field).where(model.id.in_(ids))
+        ).all():
+            labels[(resource_type, resource_id)] = str(display)
+    return labels
+
+
+@router.get(
+    "/api/v1/audit/presentation",
+    response_model=list[AuditPresentationView],
+    tags=["audit"],
+)
+def list_audit_presentations(
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.admin))],
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[AuditPresentationView]:
+    entries = list(
+        db.scalars(
+            select(AuditLog)
+            .order_by(desc(AuditLog.created_at))
+            .limit(limit)
+            .offset(offset)
+        ).all()
+    )
+    actor_ids = {entry.actor_id for entry in entries if entry.actor_id}
+    actors = {
+        user.id: user.email
+        for user in db.scalars(select(User).where(User.id.in_(actor_ids))).all()
+    } if actor_ids else {}
+    resources = _audit_resource_labels(db, entries)
+    result: list[AuditPresentationView] = []
+    for entry in entries:
+        source_type, source_display = _audit_source(entry.source_ip)
+        actor_display = actors.get(entry.actor_id or "")
+        if entry.action.startswith("agent.") and entry.actor_id is None:
+            actor_type = "agent"
+            actor_display = "Guardian Agent"
+            source_display = "Agent certificate identity"
+        elif actor_display:
+            actor_type = "user"
+        elif entry.actor_id is None:
+            actor_type = "system"
+        else:
+            actor_type = "unknown"
+        resource_display = resources.get(
+            (entry.resource_type, entry.resource_id or ""),
+            _AUDIT_RESOURCE_LABELS.get(entry.resource_type, "Unknown resource"),
+        )
+        result.append(
+            AuditPresentationView(
+                event_id=entry.id,
+                display_action=_AUDIT_ACTION_LABELS.get(
+                    entry.action, "Unknown audit action"
+                ),
+                action_code=entry.action,
+                category=entry.action.partition(".")[0] or "system",
+                severity=cast(Any, _audit_severity(entry)),
+                result=entry.outcome,
+                actor_display=actor_display
+                or ("Controller service" if entry.actor_id is None else "Unknown actor"),
+                actor_type=cast(Any, actor_type),
+                resource_display=resource_display,
+                resource_type=entry.resource_type,
+                source_display=source_display,
+                source_type=cast(Any, source_type),
+                created_at=entry.created_at,
+                summary=(
+                    f"{_AUDIT_ACTION_LABELS.get(entry.action, 'Unknown audit action')} · "
+                    f"{resource_display}"
+                ),
+                correlation_id=_audit_correlation_id(entry.details),
+                request_id=_audit_request_id(entry.details),
+                evidence_available=bool(entry.details or entry.resource_id or entry.source_ip),
+            )
+        )
+    return result
+
+
+@router.get("/api/v1/audit/export", tags=["audit"])
+def export_audit_presentations(
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.admin))],
+    format: Literal["csv", "jsonl"] = "csv",
+    limit: Annotated[int, Query(ge=1, le=200)] = 200,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    query: Annotated[str | None, Query(max_length=160)] = None,
+    result: Annotated[str | None, Query(max_length=32)] = None,
+    category: Annotated[str | None, Query(max_length=64)] = None,
+    severity: Annotated[str | None, Query(max_length=32)] = None,
+    source_type: Annotated[str | None, Query(max_length=32)] = None,
+    actor_type: Annotated[str | None, Query(max_length=32)] = None,
+    resource_type: Annotated[str | None, Query(max_length=64)] = None,
+) -> StreamingResponse:
+    entries = list_audit_presentations(db, user, limit=limit, offset=offset)
+    needle = (query or "").casefold().strip()
+    entries = [
+        entry
+        for entry in entries
+        if (result is None or entry.result == result)
+        and (category is None or entry.category == category)
+        and (severity is None or entry.severity == severity)
+        and (source_type is None or entry.source_type == source_type)
+        and (actor_type is None or entry.actor_type == actor_type)
+        and (resource_type is None or entry.resource_type == resource_type)
+        and (
+            not needle
+            or needle
+            in " ".join(
+                (
+                    entry.display_action,
+                    entry.resource_display,
+                    entry.actor_display,
+                    entry.source_display,
+                    entry.correlation_id or "",
+                    entry.request_id or "",
+                )
+            ).casefold()
+        )
+    ]
+    rows = [
+        {
+            "event_id": entry.event_id,
+            "created_at": entry.created_at.isoformat(),
+            "action": entry.display_action,
+            "category": entry.category,
+            "severity": entry.severity,
+            "result": entry.result,
+            "actor": entry.actor_display,
+            "resource": entry.resource_display,
+            "resource_type": entry.resource_type,
+            "source": entry.source_display,
+            "summary": entry.summary,
+            "correlation_id": entry.correlation_id or "",
+            "request_id": entry.request_id or "",
+        }
+        for entry in entries
+    ]
+    output = io.StringIO()
+    if format == "csv":
+        fieldnames = list(rows[0]) if rows else [
+            "event_id",
+            "created_at",
+            "action",
+            "category",
+            "severity",
+            "result",
+            "actor",
+            "resource",
+            "resource_type",
+            "source",
+            "summary",
+            "correlation_id",
+            "request_id",
+        ]
+        csv_rows = [
+            {
+                key: f"'{value}"
+                if isinstance(value, str) and value.startswith(("=", "+", "-", "@"))
+                else value
+                for key, value in row.items()
+            }
+            for row in rows
+        ]
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(csv_rows)
+        media_type = "text/csv"
+    else:
+        output.write("\n".join(json.dumps(row, ensure_ascii=False) for row in rows))
+        output.write("\n")
+        media_type = "application/x-ndjson"
+    write_audit(
+        db,
+        actor=user,
+        action="audit.export",
+        resource_type="audit",
+        resource_id=None,
+        outcome="success",
+        details={"format": format, "row_count": len(rows), "offset": offset},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="guardian-audit.{format}"'},
+    )
+
+
+@router.get(
+    "/api/v1/audit/{audit_id}/evidence",
+    response_model=AuditEvidenceView,
+    tags=["audit"],
+)
+def get_audit_evidence(
+    audit_id: int,
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.admin))],
+) -> AuditEvidenceView:
+    entry = db.get(AuditLog, audit_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="audit entry not found")
+    return AuditEvidenceView(
+        audit_id=entry.id,
+        action_code=entry.action,
+        resource_type=entry.resource_type,
+        resource_id=entry.resource_id,
+        actor_id=entry.actor_id,
+        source_ip=entry.source_ip,
+        changes=cast(dict[str, Any], redact_structure(entry.details)),
+        correlation_id=_audit_correlation_id(entry.details),
     )
 
 

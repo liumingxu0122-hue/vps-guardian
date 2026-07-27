@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import { KeyRound, Monitor, Pencil, Plus, RefreshCw, ShieldCheck, X } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import { jsonBody, request } from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
+import DataTable from '../components/v3/DataTable.vue'
 import { session } from '../session'
 import type { User, UserSession } from '../types'
 import { formatTime } from '../utils'
 
 const users = ref<User[]>([])
+const { locale } = useI18n()
 const dialog = ref<HTMLDialogElement | null>(null)
 const editDialog = ref<HTMLDialogElement | null>(null)
 const passwordDialog = ref<HTMLDialogElement | null>(null)
@@ -118,21 +121,21 @@ onMounted(load)
       <button v-if="isOwner" class="primary-button" type="button" @click="dialog?.showModal()"><Plus :size="15" />{{ $t('users.add') }}</button>
     </template>
   </PageHeader>
-  <section class="data-table users-table">
-    <div class="data-table-head"><span>{{ $t('users.account') }}</span><span>{{ $t('users.role') }}</span><span>TOTP</span><span>{{ $t('users.lastLogin') }}</span><span>{{ $t('common.actions') }}</span></div>
-    <div v-for="user in users" :key="user.id" class="data-table-row">
-      <span><strong>{{ user.email }}</strong><small>{{ user.scopes.join(', ') || $t('users.roleDefault') }}</small></span>
-      <StatusBadge :status="user.is_active ? user.role : 'disabled'" />
-      <span><ShieldCheck :size="14" />{{ user.totp_enabled ? $t('common.enabled') : $t('common.disabled') }}</span>
-      <span>{{ formatTime(user.last_login_at) }}</span>
-      <span class="row-actions">
+  <DataTable :label="$t('users.title')" :empty="!users.length">
+    <template #head><tr><th>{{ $t('users.account') }}</th><th>{{ $t('users.role') }}</th><th>TOTP</th><th>{{ $t('users.lastLogin') }}</th><th>{{ $t('common.actions') }}</th></tr></template>
+    <tr v-for="user in users" :key="user.id">
+      <td :data-label="locale === 'zh-CN' ? '账户' : 'Account'"><span><strong>{{ user.email }}</strong><small>{{ user.scopes.length ? (locale === 'zh-CN' ? `${user.scopes.length} 项权限` : `${user.scopes.length} scopes`) : $t('users.roleDefault') }}</small></span></td>
+      <td :data-label="locale === 'zh-CN' ? '角色' : 'Role'"><StatusBadge :status="user.is_active ? user.role : 'disabled'" /></td>
+      <td data-label="TOTP"><span><ShieldCheck :size="14" />{{ user.totp_enabled ? $t('common.enabled') : $t('common.disabled') }}</span></td>
+      <td :data-label="locale === 'zh-CN' ? '最近登录' : 'Last login'"><span>{{ formatTime(user.last_login_at) }}</span></td>
+      <td :data-label="locale === 'zh-CN' ? '操作' : 'Actions'"><span class="row-actions">
         <button v-if="isOwner" class="icon-button bordered" type="button" :aria-label="$t('users.manage')" @click="openEdit(user)"><Pencil :size="14" /></button>
         <button v-if="isOwner" class="icon-button bordered" type="button" :aria-label="$t('users.rotatePassword')" @click="openPassword(user)"><KeyRound :size="14" /></button>
         <button class="icon-button bordered" type="button" aria-label="View active sessions" @click="openSessions(user)"><Monitor :size="14" /></button>
         <button class="secondary-button" type="button" @click="revokeSessions(user)">{{ $t('users.revokeSessions') }}</button>
-      </span>
-    </div>
-  </section>
+      </span></td>
+    </tr>
+  </DataTable>
   <dialog ref="dialog" class="modal-dialog compact">
     <form method="dialog" class="dialog-header"><div><h2>{{ $t('users.add') }}</h2><p>{{ $t('users.ownerOnly') }}</p></div><button class="icon-button"><X :size="18" /></button></form>
     <form class="dialog-form" @submit.prevent="createUser">
@@ -168,7 +171,7 @@ onMounted(load)
     <div class="dialog-form">
       <p class="permission-note">Session identifiers are opaque; browser and IP values are stored only as keyed digests.</p>
       <div v-for="row in activeSessions" :key="row.id" class="session-row">
-        <span><strong>{{ row.id.slice(0, 8) }}</strong><small>{{ formatTime(row.issued_at) }} → {{ formatTime(row.expires_at) }}</small></span>
+        <span><strong>{{ row.current ? 'Current session' : 'Other signed-in session' }}</strong><small>{{ formatTime(row.issued_at) }} → {{ formatTime(row.expires_at) }}</small></span>
         <button class="danger-button" type="button" @click="revokeSingleSession(row.id)">Revoke</button>
       </div>
       <p v-if="!activeSessions.length">No active sessions.</p>

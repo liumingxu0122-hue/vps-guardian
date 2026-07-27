@@ -5,7 +5,9 @@ import type {
   ApprovalDetail,
   ApprovalEvidence,
   ApprovalSummary,
+  AuditPresentation,
   Host,
+  HostPresentation,
   Incident,
   ServiceCheck,
   ServiceCheckResult,
@@ -119,6 +121,55 @@ const hosts: Host[] = [{
   last_seen_at: '2026-07-25T07:59:50Z',
   enrolled_at: '2026-07-01T00:00:00Z',
   disabled_at: null,
+}]
+
+const hostPresentations: HostPresentation[] = [{
+  id: 'host-1',
+  name: 'edge-hk',
+  primary_address: '192.0.2.10',
+  os_name: 'Ubuntu 24.04',
+  region: 'Hong Kong',
+  group: 'edge',
+  provider: 'Example Cloud',
+  purpose: 'Public gateway',
+  display_tags: ['staging'],
+  health: 'healthy',
+  data_state: 'normal',
+  enabled: true,
+  management: 'guardian_and_komari',
+  agent_state: 'online',
+  agent_version: '0.4.0',
+  last_heartbeat_at: '2026-07-25T07:59:50Z',
+  last_seen_at: '2026-07-25T07:59:50Z',
+  enrolled_at: '2026-07-01T00:00:00Z',
+  data_reason: 'available',
+  resource_summary: { cpu_percent: 22, memory_percent: 50, disk_percent: 50 },
+  technical_evidence_available: true,
+}]
+
+const auditPresentations: AuditPresentation[] = [{
+  event_id: 17,
+  display_action: 'Signed in',
+  action_code: 'auth.login',
+  category: 'auth',
+  severity: 'neutral',
+  result: 'success',
+  actor_display: 'owner@example.test',
+  actor_type: 'user',
+  actor_id: 'user-1',
+  resource_display: 'Session',
+  resource_type: 'session',
+  resource_id: 'session-17',
+  source_display: 'Controller internal service',
+  source_type: 'internal_service',
+  client_ip: null,
+  internal_ip: '172.19.0.4',
+  created_at: '2026-07-25T07:59:00Z',
+  summary: 'Signed in · Session',
+  changes: {},
+  correlation_id: 'request-17',
+  request_id: 'request-17',
+  evidence_available: true,
 }]
 
 const checks: ServiceCheck[] = [
@@ -406,8 +457,46 @@ async function mockAuthenticated(
       })
       return
     }
+    if (path === '/api/v1/hosts/host-1/latest') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          host_id: 'host-1',
+          collected_at: '2026-07-25T07:59:50Z',
+          payload: {
+            memory_total_bytes: 8589934592,
+            memory_available_bytes: 4294967296,
+            disk_total_bytes: 107374182400,
+            disk_free_bytes: 53687091200,
+            load_1: 0.22,
+            uptime_seconds: 86400,
+          },
+        }),
+      })
+      return
+    }
+    if (path === '/api/v1/audit/17/evidence') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          audit_id: 17,
+          action_code: 'auth.login',
+          resource_type: 'session',
+          resource_id: 'session-17',
+          actor_id: 'user-1',
+          source_ip: '172.19.0.4',
+          changes: {},
+          correlation_id: 'request-17',
+        }),
+      })
+      return
+    }
     const payloads: Record<string, unknown> = {
       '/api/v1/hosts': hosts,
+      '/api/v1/hosts/presentation': hostPresentations,
+      '/api/v1/audit/presentation': auditPresentations,
       '/api/v1/service-checks': checks,
       '/api/v1/services': observations,
       '/api/v1/service-check-results': results,
@@ -450,6 +539,19 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
 async function contrastRatio(page: Page, selector: string): Promise<number> {
   return page.locator(selector).evaluate((element) => {
     const rgb = (value: string): number[] => value.match(/\d+(?:\.\d+)?/g)!.slice(0, 3).map(Number)
+    const isOpaque = (value: string): boolean => {
+      const alpha = value.match(/rgba?\([^)]*(?:,\s*([\d.]+))\)$/)?.[1]
+      return value !== 'transparent' && (alpha == null || Number(alpha) > 0)
+    }
+    const effectiveBackground = (target: Element): string => {
+      const own = getComputedStyle(target).backgroundColor
+      if (isOpaque(own)) return own
+      const paintedChild = [...target.children]
+        .map((child) => getComputedStyle(child).backgroundColor)
+        .find(isOpaque)
+      if (paintedChild) return paintedChild
+      return target.parentElement ? effectiveBackground(target.parentElement) : 'rgb(255, 255, 255)'
+    }
     const luminance = (color: number[]): number => {
       const channels = color.map((value) => {
         const channel = value / 255
@@ -459,7 +561,7 @@ async function contrastRatio(page: Page, selector: string): Promise<number> {
     }
     const style = getComputedStyle(element)
     const foreground = luminance(rgb(style.color))
-    const background = luminance(rgb(style.backgroundColor))
+    const background = luminance(rgb(effectiveBackground(element)))
     return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05)
   })
 }
@@ -579,16 +681,16 @@ test('approval filters and mobile master-detail behavior remain usable', async (
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/approvals')
 
-  await expect(page.getByRole('option', { name: /重启服务/ })).toBeVisible()
-  await page.getByRole('option', { name: /重启服务/ }).click()
+  await expect(page.getByRole('row', { name: /重启服务/ })).toBeVisible()
+  await page.getByRole('row', { name: /重启服务/ }).click()
   await expect(page.getByRole('heading', { name: '重启服务' })).toBeVisible()
   await expectNoHorizontalOverflow(page)
   await capture(page, 'approvals-390-detail-light')
   await page.getByRole('button', { name: '返回请求列表' }).click()
-  await expect(page.getByRole('option', { name: /重启服务/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /重启服务/ })).toBeVisible()
   await page.getByRole('searchbox', { name: '搜索审批' }).fill('worker')
-  await expect(page.getByRole('option', { name: /受限清理/ })).toBeVisible()
-  await expect(page.getByRole('option', { name: /重启服务/ })).toHaveCount(0)
+  await expect(page.getByRole('row', { name: /受限清理/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /重启服务/ })).toHaveCount(0)
   await expectNoHorizontalOverflow(page)
   await capture(page, 'approvals-390-list-light')
 })
@@ -597,12 +699,12 @@ test('approval center dark theme and 768px detail use semantic surfaces', async 
   await mockAuthenticated(page, { theme: 'dark' })
   await page.setViewportSize({ width: 768, height: 900 })
   await page.goto('/approvals')
-  await expect(page.getByRole('option', { name: /Restart service/ })).toBeVisible()
-  const queueBackground = await page.locator('.approval-queue').evaluate(
+  await expect(page.getByRole('row', { name: /Restart service/ })).toBeVisible()
+  const queueBackground = await page.locator('.approval-workspace .rc5-data-region').evaluate(
     (element) => getComputedStyle(element).backgroundColor,
   )
   expect(queueBackground).not.toBe('rgb(0, 0, 0)')
-  await page.getByRole('option', { name: /Restart service/ }).click()
+  await page.getByRole('row', { name: /Restart service/ }).click()
   await expect(page.getByRole('heading', { name: 'Restart service' })).toBeVisible()
   await expectNoHorizontalOverflow(page)
   const accessibility = await new AxeBuilder({ page }).analyze()
@@ -888,5 +990,160 @@ test('critical Chinese routes expose no object coercion or raw null markers', as
     expect(body).not.toContain('Gateway requests may fail')
     expect(body).not.toContain('Investigation started')
     expect(body).not.toContain('Check passed')
+  }
+})
+
+test('RC5 hosts uses semantic selection, compact mobile records, and an accessible detail drawer', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'en-US', theme: 'light' })
+  await page.setViewportSize({ width: 1366, height: 900 })
+  await page.goto('/hosts')
+  await expect(page.getByRole('heading', { name: 'Hosts' })).toBeVisible()
+  await expect(page.getByRole('table', { name: 'Hosts' }).getByText('Guardian + Komari')).toBeVisible()
+  await expect(page.getByRole('table', { name: 'Hosts' }).getByText('Reporting')).toBeVisible()
+  await expect(page.getByText('komari-import')).toHaveCount(0)
+  await page.getByRole('row', { name: /edge-hk/ }).click()
+  const selected = page.getByRole('row', { name: /edge-hk/ })
+  await expect(selected).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('dialog', { name: 'edge-hk' })).toBeVisible()
+  const background = await selected.evaluate((element) => getComputedStyle(element).backgroundColor)
+  expect(background).not.toBe('rgb(14, 18, 22)')
+  const accessibility = await new AxeBuilder({ page }).analyze()
+  expect(accessibility.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))).toEqual([])
+  await expectNoHorizontalOverflow(page)
+  await capture(page, 'rc5-hosts-drawer-1366-light')
+
+  await page.getByRole('button', { name: /close/i }).click()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expectNoHorizontalOverflow(page)
+  await expect(page.getByRole('row', { name: /edge-hk/ })).toBeVisible()
+  await capture(page, 'rc5-hosts-390-light')
+})
+
+test('RC5 audit keeps machine evidence out of the primary table and reveals it only on demand', async ({ page }) => {
+  const counts = await mockAuthenticated(page, { locale: 'zh-CN', theme: 'light' })
+  await page.setViewportSize({ width: 1366, height: 900 })
+  await page.goto('/audit')
+  await expect(page.getByText('用户登录')).toBeVisible()
+  await expect(page.getByText('Controller 内部服务')).toBeVisible()
+  await expect(page.getByText('auth.login')).not.toBeVisible()
+  await expect(page.getByText('172.19.0.4')).toHaveCount(0)
+  await page.getByRole('row', { name: /用户登录/ }).click()
+  await expect(page.getByRole('dialog', { name: '用户登录' })).toBeVisible()
+  expect(counts.get('/api/v1/audit/17/evidence') ?? 0).toBe(0)
+  await expect(page.getByText('auth.login')).not.toBeVisible()
+  await page.getByText('技术证据', { exact: true }).click()
+  await expect.poll(() => counts.get('/api/v1/audit/17/evidence')).toBe(1)
+  await expect(page.getByText('auth.login')).toBeVisible()
+  await expect(page.getByText('172.19.0.4')).toBeVisible()
+  const accessibility = await new AxeBuilder({ page }).analyze()
+  expect(accessibility.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))).toEqual([])
+  await expectNoHorizontalOverflow(page)
+  await capture(page, 'rc5-audit-drawer-1366-light')
+})
+
+test('Chinese primary surfaces reject raw machine values across the product routes', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'zh-CN', theme: 'light' })
+  const routes = [
+    '/overview', '/hosts', '/services', '/topology', '/alerts', '/incidents',
+    '/repairs', '/approvals', '/backup', '/account-security', '/security',
+    '/users', '/agents', '/notifications', '/audit', '/settings',
+  ]
+  const forbidden = [
+    /\b(?:auth|session|host|notification|approval)\.[a-z_]+\b/i,
+    /\b(?:pending_enrollment|komari-import|restricted_cleanup)\b/i,
+    /\b(?:true|false|null|undefined)\b/i,
+    /\[object Object\]/i,
+    /\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b/,
+  ]
+  for (const route of routes) {
+    await page.goto(route)
+    await page.waitForLoadState('networkidle')
+    const text = await page.locator('main').innerText()
+    for (const pattern of forbidden) expect(text, `${route} exposes ${pattern}`).not.toMatch(pattern)
+  }
+})
+
+test('all tabular product surfaces use the shared RC5 DataTable region', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'en-US', theme: 'light' })
+  const routes = [
+    '/hosts',
+    '/services',
+    '/alerts',
+    '/incidents',
+    '/approvals',
+    '/users',
+    '/agents',
+    '/notifications',
+    '/audit',
+    '/backup',
+    '/account-security',
+  ]
+  for (const route of routes) {
+    await page.goto(route)
+    await expect(page.locator('.rc5-data-region').first(), `${route} did not mount the shared DataTable`).toBeVisible()
+    const width = await page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      client: document.documentElement.clientWidth,
+      offenders: [...document.querySelectorAll<HTMLElement>('body *')]
+        .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+        .filter(({ rect }) => rect.right > document.documentElement.clientWidth + 1)
+        .slice(0, 5)
+        .map(({ element, rect }) => ({
+          tag: element.tagName,
+          className: element.className,
+          right: Math.round(rect.right),
+          width: Math.round(rect.width),
+        })),
+    }))
+    expect(width.scroll, `${route} overflowed its ${width.client}px viewport: ${JSON.stringify(width.offenders)}`).toBeLessThanOrEqual(width.client)
+  }
+})
+
+test('200 percent zoom equivalent reflows critical data routes without clipping', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'zh-CN', theme: 'light' })
+  await page.setViewportSize({ width: 683, height: 450 })
+  for (const route of ['/hosts', '/audit', '/approvals']) {
+    await page.goto(route)
+    await expect(page.locator('.rc5-data-region').first()).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+  }
+})
+
+test('shared selected rows remain readable in light, dark, hover, focus, and reduced motion', async ({ page }) => {
+  test.setTimeout(60_000)
+  await mockAuthenticated(page, { locale: 'en-US', theme: 'light' })
+  const cases = [
+    { path: '/services', row: '.services-table tbody tr', selected: '.services-table tbody tr.selected' },
+    { path: '/incidents', row: '.incidents-table tbody tr', selected: '.incidents-table tbody tr.selected' },
+    { path: '/approvals', row: '.approval-row', selected: '.approval-row.selected' },
+    { path: '/hosts', row: '.rc5-data-table tbody tr', selected: '.rc5-data-table tbody tr.is-selected' },
+    { path: '/audit', row: '.rc5-data-table tbody tr', selected: '.rc5-data-table tbody tr.is-selected' },
+  ]
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  for (const theme of ['light', 'dark'] as const) {
+    if (theme === 'dark') {
+      await page.evaluate(() => localStorage.setItem('guardian_theme', 'dark'))
+    }
+    for (const item of cases) {
+      await page.goto(item.path)
+      await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe(theme)
+      const row = page.locator(item.row).first()
+      await expect(row).toBeVisible()
+      await row.click()
+      const selected = page.locator(item.selected).first()
+      await expect(selected).toBeVisible()
+      const colors = await selected.evaluate((element) => {
+        const style = getComputedStyle(element)
+        return { background: style.backgroundColor, color: style.color }
+      })
+      expect(colors.background).not.toMatch(/rgb\((?:0|1[0-9]|2[0-5]),\s*(?:0|1[0-9]|2[0-5]),\s*(?:0|1[0-9]|2[0-5])\)/)
+      expect(await contrastRatio(page, item.selected), `${theme} ${item.path} ${JSON.stringify(colors)}`).toBeGreaterThanOrEqual(4.5)
+      await selected.hover({ force: true })
+      expect((await selected.evaluate((element) => getComputedStyle(element).backgroundColor))).not.toBe('rgb(14, 18, 22)')
+      if (await selected.getAttribute('tabindex')) {
+        await selected.focus()
+        await expect(selected).toBeFocused()
+      }
+    }
   }
 })

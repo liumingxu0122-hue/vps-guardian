@@ -30,6 +30,9 @@ export default {
     observed: '已观测', verified: '已验证', passed: '通过', valid: '有效', expiring: '即将到期',
     revoked: '已吊销', missing: '未绑定', enforced: '强制执行', operational: '运行正常',
     available: '可用', append_only: '仅追加', deployed: '已部署', not_deployed: '未部署',
+    detected: '已检测', skipped: '已跳过', partial: '部分完成',
+    delivered: '已送达', retrying: '正在重试', dead_letter: '已停止投递', sending: '正在发送',
+    viewer: '只读用户', operator: '运维人员', admin: '管理员', owner: 'Owner',
   },
   nav: {
     alerts: '告警',
@@ -156,6 +159,7 @@ export default {
   },
   approvals: {
     title: '审批中心', description: '在作出可审计决定前，核对风险、影响、执行计划与回滚路径',
+    unknownAction: '未知审批动作',
     summary: '审批摘要', total: '全部请求', pending: '待我审批',
     expiringSoon: '即将过期', awaitingExecution: '已批准待执行',
     recentFailures: '最近执行失败', completedWeek: '本周已完成',
@@ -165,6 +169,7 @@ export default {
     allRisks: '全部风险等级', queue: '审批请求队列', requestLabel: '审批请求',
     backToQueue: '返回请求列表', unknownTarget: '未指定目标', systemRequester: '系统',
     requester: '申请人', approver: '审批人', notDecided: '尚未决定', expires: '过期时间',
+    columnAction: '动作', columnRisk: '风险', columnStatus: '状态', requestedAt: '申请时间',
     execution: '执行状态', managedTarget: '受管目标', executionSteps: '执行计划',
     noStructuredSteps: '该请求没有可展示的结构化执行步骤。',
     dryRunAvailable: 'Dry Run 可用', dryRunPreview: '预览已签名计划，但不应用任何更改。',

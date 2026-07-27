@@ -6,6 +6,12 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Added
 
+- Added the RC5 semantic token layer, compact light/dark App Shell environment
+  presentation, shared accessible DataTable, centralized bilingual Presentation
+  Registry, responsive Host/Audit records, and progressive-disclosure detail drawers.
+- Added explicit Host and Audit presentation allowlists, bounded latest-resource
+  queries, audited Host batch updates, redacted Audit CSV/JSONL export, and lazy
+  technical evidence retrieval.
 - Added decision-oriented Approval summary/detail DTOs, bounded lifecycle timelines,
   structured impact and execution steps, lazy redacted evidence, and bilingual,
   responsive Approval Center regressions.
@@ -31,6 +37,14 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Changed
 
+- Reconstructed Hosts and Audit as product-facing operational views: internal import
+  tags, dotted action codes, UUID fragments, raw enums, and container IPs no longer
+  lead the primary interface; selected rows use semantic accent surfaces in both
+  themes instead of terminal-dark backgrounds.
+- Migrated Services, Incidents, Users, and Notification delivery tables onto the
+  shared semantic table state system and added product labels for settings, security
+  controls, sessions, roles, notification channels, regions, management modes, and
+  missing-data reasons.
 - Rebuilt Approval Center around semantic light/dark surfaces, compact filters,
   productized risk/Dry Run/rollback presentation, list-first tablet/mobile navigation,
   and a sticky audited decision bar.
@@ -57,6 +71,9 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Security
 
+- Audit list/export DTOs are explicit allowlists; technical identifiers, internal
+  addresses, and redacted change evidence are progressively disclosed, while every
+  export and Host batch mutation is independently authorized and audited.
 - High-risk approval and conditional approval now require server-side password
   reauthentication plus explicit rollback confirmation; conditional decisions and
   requests for changes never dispatch Agent tasks.

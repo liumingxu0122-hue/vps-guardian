@@ -6,8 +6,10 @@ import { useI18n } from 'vue-i18n'
 
 import { jsonBody, request } from '../api'
 import DetailDrawer from '../components/v3/DetailDrawer.vue'
+import DataTable from '../components/v3/DataTable.vue'
 import PageHeader from '../components/v3/PageHeader.vue'
 import StatusBadge, { type StatusTone } from '../components/v3/StatusBadge.vue'
+import { productLabel } from '../presentationRegistry'
 import { session } from '../session'
 import type { Agent, Host, ServiceCheck, ServiceCheckResult, ServiceSummary } from '../types'
 import { formatTime, relativeTime } from '../utils'
@@ -175,7 +177,6 @@ const filteredChecks = computed(() => {
     return (right.last_checked_at ?? '').localeCompare(left.last_checked_at ?? '')
   })
 })
-const pageCount = computed(() => Math.max(1, Math.ceil(filteredChecks.value.length / pageSize)))
 const pagedChecks = computed(() =>
   filteredChecks.value.slice((page.value - 1) * pageSize, page.value * pageSize),
 )
@@ -414,27 +415,33 @@ onMounted(load)
       <button class="proto-text-button" type="button" @click="selectedIds = new Set()">{{ zh ? '清除选择' : 'Clear' }}</button>
     </div>
 
-    <div v-if="error" class="v3-module-state error-state" role="alert"><strong>{{ error }}</strong><button class="proto-button secondary" type="button" @click="load">{{ zh ? '重试' : 'Retry' }}</button></div>
-    <div v-else-if="loading" class="v3-table-skeleton" aria-label="正在加载检查"><span v-for="index in 7" :key="index"></span></div>
-    <div v-else-if="filteredChecks.length" class="proto-table-shell">
-      <table class="proto-table services-table" :class="{ 'is-compact': compact }">
-        <thead><tr><th>{{ zh ? '状态' : 'Status' }}</th><th>{{ zh ? '检查' : 'Check' }}</th><th>{{ zh ? '目标' : 'Target' }}</th><th>{{ zh ? '类型' : 'Type' }}</th><th>{{ zh ? '周期' : 'Interval' }}</th><th>{{ zh ? '连续失败' : 'Failures' }}</th><th>{{ zh ? '最近结果' : 'Latest result' }}</th><th>{{ zh ? '延迟' : 'Latency' }}</th><th>{{ zh ? '更新时间' : 'Updated' }}</th><th>{{ zh ? '成功率' : 'Success rate' }}</th><th><label class="v3-row-check"><input type="checkbox" :checked="allPageSelected" :aria-label="zh ? '选择当前页' : 'Select current page'" @change="togglePageSelection" /></label></th></tr></thead>
-        <tbody>
-          <tr v-for="check in pagedChecks" :key="check.id" :class="{ selected: selectedCheck?.id === check.id, 'batch-selected': selectedIds.has(check.id) }" tabindex="0" @click="selectCheck(check)" @keydown.enter="selectCheck(check)">
+    <DataTable
+      :label="zh ? '服务检查' : 'Service checks'"
+      table-class="services-table"
+      :density="compact ? 'compact' : 'comfortable'"
+      :loading="loading"
+      :error="error"
+      :empty="!filteredChecks.length"
+      :page="page"
+      :page-size="pageSize"
+      :total="filteredChecks.length"
+      @retry="load"
+      @previous="page -= 1"
+      @next="page += 1"
+    >
+      <template #head><tr><th>{{ zh ? '状态' : 'Status' }}</th><th>{{ zh ? '检查' : 'Check' }}</th><th>{{ zh ? '目标' : 'Target' }}</th><th>{{ zh ? '类型' : 'Type' }}</th><th>{{ zh ? '周期' : 'Interval' }}</th><th>{{ zh ? '连续失败' : 'Failures' }}</th><th>{{ zh ? '最近结果' : 'Latest result' }}</th><th>{{ zh ? '延迟' : 'Latency' }}</th><th>{{ zh ? '更新时间' : 'Updated' }}</th><th>{{ zh ? '成功率' : 'Success rate' }}</th><th><label class="v3-row-check"><input type="checkbox" :checked="allPageSelected" :aria-label="zh ? '选择当前页' : 'Select current page'" @change="togglePageSelection" /></label></th></tr></template>
+      <tr v-for="check in pagedChecks" :key="check.id" :class="{ selected: selectedCheck?.id === check.id, 'is-selected': selectedCheck?.id === check.id, 'batch-selected': selectedIds.has(check.id) }" :aria-selected="selectedCheck?.id === check.id" tabindex="0" @click="selectCheck(check)" @keydown.enter="selectCheck(check)">
             <td><StatusBadge :tone="checkTone(check)" :label="statusLabel(checkTone(check))" compact /></td>
             <td><strong>{{ displayName(check) }}</strong><small>{{ check.name }}</small></td>
-            <td>{{ targetName(check) }}</td><td>{{ check.kind.toUpperCase() }}</td><td>{{ check.interval_seconds }}s</td>
+            <td>{{ targetName(check) }}</td><td>{{ productLabel('check', check.kind, locale) }}</td><td>{{ check.interval_seconds }}s</td>
             <td><span :class="{ 'warning-text': consecutiveFailures(check) }">{{ consecutiveFailures(check) }}</span></td>
             <td>{{ latestResult(check) }}</td>
             <td>{{ latestResults.get(check.id)?.latency_ms == null ? '—' : `${latestResults.get(check.id)?.latency_ms?.toFixed(0)} ms` }}</td>
             <td>{{ relativeTime(check.last_checked_at) }}</td><td>{{ successRate(check) }}</td>
             <td class="v3-row-actions"><label class="v3-row-check" @click.stop><input type="checkbox" :checked="selectedIds.has(check.id)" :aria-label="`${zh ? '选择' : 'Select'} ${displayName(check)}`" @change="toggleSelection(check.id)" /></label><button class="proto-icon-button small" type="button" :aria-label="`${displayName(check)} ${zh ? '操作' : 'actions'}`"><Ellipsis :size="17" /></button></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <div v-else class="v3-empty-inline"><span>{{ zh ? '当前筛选没有匹配检查。' : 'No checks match the current filters.' }}</span><button class="proto-text-button" type="button" @click="clearFilters">{{ zh ? '清除筛选' : 'Clear filters' }}</button></div>
-    <div v-if="filteredChecks.length > pageSize" class="v3-pagination"><span>{{ page }} / {{ pageCount }}</span><button class="proto-button secondary" type="button" :disabled="page <= 1" @click="page -= 1">{{ zh ? '上一页' : 'Previous' }}</button><button class="proto-button secondary" type="button" :disabled="page >= pageCount" @click="page += 1">{{ zh ? '下一页' : 'Next' }}</button></div>
+      </tr>
+      <template #empty><span>{{ zh ? '当前筛选没有匹配检查。' : 'No checks match the current filters.' }}</span><button class="proto-text-button" type="button" @click="clearFilters">{{ zh ? '清除筛选' : 'Clear filters' }}</button></template>
+    </DataTable>
   </section>
 
   <section class="proto-section observation-section">
@@ -471,7 +478,7 @@ onMounted(load)
         <div><span>{{ zh ? '失败阈值' : 'Failure threshold' }}</span><strong>{{ selectedCheck.failure_threshold }}</strong></div>
         <div><span>{{ zh ? '恢复阈值' : 'Recovery threshold' }}</span><strong>{{ selectedCheck.recovery_threshold }}</strong></div>
       </section>
-      <section class="proto-drawer-section"><h3>{{ zh ? '配置' : 'Configuration' }}</h3><dl class="v3-config-list"><div><dt>ID</dt><dd>{{ selectedCheck.name }}</dd></div><div><dt>{{ zh ? '类型' : 'Type' }}</dt><dd>{{ selectedCheck.kind }}</dd></div><div><dt>{{ zh ? '等级' : 'Severity' }}</dt><dd>{{ selectedCheck.severity }}</dd></div></dl></section>
+      <section class="proto-drawer-section"><h3>{{ zh ? '配置' : 'Configuration' }}</h3><dl class="v3-config-list"><div><dt>{{ zh ? '名称' : 'Name' }}</dt><dd>{{ selectedCheck.name }}</dd></div><div><dt>{{ zh ? '类型' : 'Type' }}</dt><dd>{{ productLabel('check', selectedCheck.kind, locale) }}</dd></div><div><dt>{{ zh ? '等级' : 'Severity' }}</dt><dd>{{ productLabel('severity', selectedCheck.severity, locale) }}</dd></div></dl></section>
       <section v-if="canManage" class="proto-drawer-section v3-danger-zone"><h3>{{ zh ? '危险操作' : 'Danger zone' }}</h3><p>{{ zh ? '删除会同时移除关联告警规则，并写入审计日志。' : 'Deletion also removes linked alert rules and is audited.' }}</p><button class="proto-button secondary" type="button" @click="deleteSelectedCheck">{{ zh ? '删除检查…' : 'Delete check…' }}</button></section>
     </template>
     <template v-else-if="selectedObservation">

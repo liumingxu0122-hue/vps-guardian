@@ -30,6 +30,9 @@ export default {
     observed: 'Observed', verified: 'Verified', passed: 'Passed', valid: 'Valid', expiring: 'Expiring soon',
     revoked: 'Revoked', missing: 'Not enrolled', enforced: 'Enforced', operational: 'Operational',
     available: 'Available', append_only: 'Append-only', deployed: 'Deployed', not_deployed: 'Not deployed',
+    detected: 'Detected', skipped: 'Skipped', partial: 'Partially completed',
+    delivered: 'Delivered', retrying: 'Retrying', dead_letter: 'Delivery stopped', sending: 'Sending',
+    viewer: 'Viewer', operator: 'Operator', admin: 'Administrator', owner: 'Owner',
   },
   nav: {
     alerts: 'Alerts',
@@ -157,6 +160,7 @@ export default {
   },
   approvals: {
     title: 'Approval center', description: 'Review risk, impact, execution, and rollback before making an auditable decision',
+    unknownAction: 'Unknown approval action',
     summary: 'Approval summary', total: 'Total requests', pending: 'Awaiting decision',
     expiringSoon: 'Expiring soon', awaitingExecution: 'Awaiting execution',
     recentFailures: 'Recent failures', completedWeek: 'Completed this week',
@@ -166,6 +170,7 @@ export default {
     allRisks: 'All risk levels', queue: 'Approval request queue', requestLabel: 'Approval request',
     backToQueue: 'Back to requests', unknownTarget: 'Target not specified', systemRequester: 'System',
     requester: 'Requester', approver: 'Approver', notDecided: 'Not decided', expires: 'Expires',
+    columnAction: 'Action', columnRisk: 'Risk', columnStatus: 'Status', requestedAt: 'Requested',
     execution: 'Execution', managedTarget: 'Managed target', executionSteps: 'Execution plan',
     noStructuredSteps: 'No executable steps are available for this request.',
     dryRunAvailable: 'Dry Run available', dryRunPreview: 'Preview the signed plan without applying changes.',

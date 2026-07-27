@@ -42,6 +42,7 @@ const router = createRouter({
         },
         {
           path: 'recovery',
+          alias: 'backup',
           name: 'recovery',
           component: () => import('./views/RecoveryView.vue'),
           meta: { minimumRole: 'operator' },

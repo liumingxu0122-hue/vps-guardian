@@ -21,6 +21,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { jsonBody, request } from '../api'
 import { filterApprovalSummaries, shouldLoadApprovalEvidence } from '../approvalPresentation'
 import EmptyState from '../components/EmptyState.vue'
+import DataTable from '../components/v3/DataTable.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import { session } from '../session'
@@ -30,7 +31,7 @@ import type {
   ApprovalStatus,
   ApprovalSummary,
 } from '../types'
-import { formatTime, titleize } from '../utils'
+import { formatTime } from '../utils'
 
 type Decision =
   | 'approved'
@@ -105,12 +106,12 @@ const evidenceLines = computed(() => {
 
 function actionLabel(value: string): string {
   const key = `approvals.actions.${value}`
-  return te(key) ? t(key) : titleize(value)
+  return te(key) ? t(key) : t('approvals.unknownAction')
 }
 
 function statusLabel(value: string): string {
   const key = `status.${value}`
-  return te(key) ? t(key) : titleize(value)
+  return te(key) ? t(key) : t('common.unknown')
 }
 
 function riskLabel(level: number): string {
@@ -289,38 +290,41 @@ onBeforeUnmount(() => {
     </button>
   </div>
 
-  <p v-if="listError" class="approval-error" role="alert">{{ listError }}</p>
-  <div v-if="loading" class="approval-loading" aria-live="polite">{{ t('common.loading') }}</div>
   <div
-    v-else-if="filtered.length"
     class="approval-workspace"
     :class="{ 'detail-open': selected }"
   >
-    <section class="approval-queue" role="listbox" tabindex="0" :aria-label="t('approvals.queue')">
-      <button
+    <DataTable
+      :label="t('approvals.queue')"
+      table-class="approval-table"
+      :loading="loading"
+      :error="listError"
+      :empty="!filtered.length"
+      :total="filtered.length"
+      @retry="loadList"
+    >
+      <template #head><tr><th>{{ t('approvals.columnAction') }}</th><th>{{ t('approvals.columnRisk') }}</th><th>{{ t('approvals.columnStatus') }}</th><th>{{ t('approvals.requester') }}</th><th>{{ t('approvals.requestedAt') }}</th></tr></template>
+      <tr
         v-for="approval in filtered"
         :key="approval.id"
-        type="button"
-        role="option"
         class="approval-row"
-        :class="{ selected: selected?.id === approval.id }"
+        :class="{ selected: selected?.id === approval.id, 'is-selected': selected?.id === approval.id }"
         :aria-selected="selected?.id === approval.id"
+        tabindex="0"
         @click="selectApproval(approval.id)"
+        @keydown.enter="selectApproval(approval.id)"
       >
-        <span class="approval-row-main">
+        <td :data-label="t('approvals.columnAction')"><span class="approval-row-main">
           <span class="approval-row-title">{{ actionLabel(approval.action_name) }}</span>
           <span class="approval-row-target">{{ targetLabel(approval) }}</span>
-        </span>
-        <span class="approval-row-meta">
-          <span class="risk-pill" :data-level="approval.risk_level">{{ riskLabel(approval.risk_level) }}</span>
-          <StatusBadge :status="approval.status" />
-        </span>
-        <span class="approval-row-foot">
-          <span>{{ approval.requester?.label || t('approvals.systemRequester') }}</span>
-          <time :datetime="approval.requested_at">{{ formatTime(approval.requested_at) }}</time>
-        </span>
-      </button>
-    </section>
+        </span></td>
+        <td :data-label="t('approvals.columnRisk')"><span class="risk-pill" :data-level="approval.risk_level">{{ riskLabel(approval.risk_level) }}</span></td>
+        <td :data-label="t('approvals.columnStatus')"><StatusBadge :status="approval.status" /></td>
+        <td :data-label="t('approvals.requester')">{{ approval.requester?.label || t('approvals.systemRequester') }}</td>
+        <td :data-label="t('approvals.requestedAt')"><time :datetime="approval.requested_at">{{ formatTime(approval.requested_at) }}</time></td>
+      </tr>
+      <template #empty><EmptyState :title="t('approvals.noItems')" /></template>
+    </DataTable>
 
     <article v-if="selected" class="approval-product-detail" :aria-busy="detailLoading">
       <button class="approval-back" type="button" @click="closeMobileDetail">
@@ -355,7 +359,7 @@ onBeforeUnmount(() => {
         <h3>{{ t('approvals.impact') }}</h3>
         <div v-if="selected.impact_facts.length" class="impact-fact-grid">
           <div v-for="fact in selected.impact_facts" :key="fact.key">
-            <span>{{ t(`approvals.factKeys.${fact.key}`, titleize(fact.key)) }}</span>
+            <span>{{ te(`approvals.factKeys.${fact.key}`) ? t(`approvals.factKeys.${fact.key}`) : t('common.unknown') }}</span>
             <strong>{{ fact.value }}</strong>
           </div>
         </div>
@@ -450,7 +454,6 @@ onBeforeUnmount(() => {
       </div>
     </article>
   </div>
-  <EmptyState v-else-if="!loading" :title="t('approvals.noItems')" />
 
   <dialog ref="decisionDialog" class="modal-dialog compact">
     <form method="dialog" class="dialog-header">

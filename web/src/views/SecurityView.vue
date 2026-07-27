@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { CheckCircle2, RefreshCw, ShieldAlert, ShieldCheck } from '@lucide/vue'
 import { onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import { request } from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
+import { configurationLabel } from '../presentationRegistry'
 import type { DashboardSecurity } from '../dashboard'
 import type { User } from '../types'
-import { formatTime, titleize } from '../utils'
+import { formatTime } from '../utils'
 
+const { locale } = useI18n()
 const security = ref<DashboardSecurity | null>(null)
 const users = ref<User[]>([])
 const error = ref('')
@@ -42,7 +45,7 @@ onMounted(load)
       <div class="section-heading"><div><h2>{{ $t('security.controls') }}</h2><span>{{ $t('security.serverEnforced') }}</span></div></div>
       <div class="security-control-table">
         <div v-for="(value, key) in security.controls" :key="key">
-          <CheckCircle2 :size="16" /><strong>{{ titleize(String(key)) }}</strong>
+          <CheckCircle2 :size="16" /><strong>{{ configurationLabel(String(key), locale) }}</strong>
           <StatusBadge v-if="typeof value === 'string' && !String(key).endsWith('_at')" :status="String(value)" />
           <span v-else>{{ value ?? $t('common.unknown') }}</span>
         </div>

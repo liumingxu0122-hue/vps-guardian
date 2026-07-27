@@ -40,6 +40,7 @@ const { locale, t } = useI18n()
 const mobileOpen = ref(false)
 const accountOpen = ref(false)
 const paletteOpen = ref(false)
+const systemInfoOpen = ref(false)
 const paletteQuery = ref('')
 const paletteInput = ref<HTMLInputElement | null>(null)
 const sidebarCollapsed = ref(false)
@@ -100,6 +101,12 @@ const visibleGroups = computed(() =>
 )
 const stage = computed(() => dashboard.data?.environment.stage ?? 'staging')
 const version = computed(() => dashboard.data?.environment.version ?? '…')
+const releaseLabel = computed(() => {
+  const rc = version.value.match(/rc(\d+)/i)
+  if (rc) return `RC${rc[1]}`
+  return version.value.match(/v?(\d+\.\d+\.\d+)/)?.[1] ?? 'Build'
+})
+const buildLabel = computed(() => version.value.match(/-([a-f0-9]{7,40})$/i)?.[1]?.slice(0, 7) ?? '')
 const productionLabel = computed(() =>
   dashboard.data?.environment.production_deployed
     ? locale.value === 'zh-CN'
@@ -190,6 +197,7 @@ function handleEscape(event: KeyboardEvent): void {
   }
   if (event.key !== 'Escape') return
   if (paletteOpen.value) closePalette()
+  else if (systemInfoOpen.value) systemInfoOpen.value = false
   else if (accountOpen.value) accountOpen.value = false
   else closeMobileNavigation()
 }
@@ -306,10 +314,15 @@ onBeforeUnmount(() => {
     <div class="proto-workspace">
       <header class="proto-topbar">
         <button ref="mobileMenuButton" class="proto-icon-button proto-mobile-menu" type="button" :aria-label="t('nav.open')" @click="mobileOpen = true"><Menu :size="20" /></button>
-        <div class="proto-environment">
+        <button class="proto-environment rc5-environment-button" type="button" :aria-expanded="systemInfoOpen" @click="systemInfoOpen = !systemInfoOpen">
           <span class="proto-environment-dot"></span>
-          <strong>{{ stage }}</strong><span>·</span><span>{{ version }}</span><span>·</span><span>{{ productionLabel }}</span>
-        </div>
+          <strong>{{ stage }}</strong><span>·</span><span>{{ releaseLabel }}</span><span v-if="buildLabel">·</span><span v-if="buildLabel" class="mono">{{ buildLabel }}</span><CircleHelp :size="14" aria-hidden="true" />
+        </button>
+        <section v-if="systemInfoOpen" class="rc5-system-popover" role="dialog" :aria-label="locale === 'zh-CN' ? '系统信息' : 'System information'">
+          <div><span>{{ locale === 'zh-CN' ? '环境' : 'Environment' }}</span><strong>{{ stage }}</strong></div>
+          <div><span>{{ locale === 'zh-CN' ? '版本' : 'Release' }}</span><strong>{{ version }}</strong></div>
+          <div><span>Production</span><strong>{{ productionLabel }}</strong></div>
+        </section>
         <div class="proto-top-actions">
           <button class="proto-search-trigger" type="button" :aria-label="t('nav.search')" @click="openPalette"><Search :size="16" /><span>{{ t('nav.search') }}</span><kbd>Ctrl K</kbd></button>
           <a class="proto-icon-button" href="/docs" target="_blank" rel="noreferrer" :aria-label="t('nav.apiDocs')"><CircleHelp :size="18" /></a>

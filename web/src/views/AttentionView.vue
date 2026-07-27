@@ -2,14 +2,17 @@
 import { ArrowUpRight, Clock3, RefreshCw, TriangleAlert } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 
 import { request } from '../api'
 import EmptyState from '../components/EmptyState.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
+import { productLabel } from '../presentationRegistry'
 import type { AttentionResponse } from '../types'
-import { relativeTime, titleize } from '../utils'
+import { relativeTime } from '../utils'
 
+const { locale } = useI18n()
 const data = ref<AttentionResponse | null>(null)
 const loading = ref(true)
 const error = ref(false)
@@ -56,7 +59,7 @@ onMounted(load)
     </select>
     <select v-model="kind" :aria-label="$t('attention.type')">
       <option value="all">{{ $t('attention.allTypes') }}</option>
-      <option v-for="value in kinds" :key="value" :value="value">{{ titleize(value) }}</option>
+      <option v-for="value in kinds" :key="value" :value="value">{{ productLabel('attention', value, locale) }}</option>
     </select>
     <span>{{ $t('attention.count', { count: items.length }) }}</span>
   </div>
@@ -70,7 +73,7 @@ onMounted(load)
       <div>
         <strong>{{ item.object }}</strong>
         <p>{{ item.reason }}</p>
-        <small><Clock3 :size="13" />{{ relativeTime(item.observed_at) }} · {{ titleize(item.type) }}</small>
+        <small><Clock3 :size="13" />{{ relativeTime(item.observed_at) }} · {{ productLabel('attention', item.type, locale) }}</small>
       </div>
       <p class="attention-action">{{ item.suggested_action }}</p>
       <RouterLink :to="item.href" class="secondary-button">

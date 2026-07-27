@@ -5,8 +5,11 @@ import { onMounted, ref } from 'vue'
 import { request } from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
+import { resourceTypeLabel } from '../presentationRegistry'
 import type { DashboardTopology } from '../dashboard'
+import { useI18n } from 'vue-i18n'
 
+const { locale } = useI18n()
 const data = ref<DashboardTopology | null>(null)
 const error = ref('')
 async function load(): Promise<void> {
@@ -29,7 +32,7 @@ onMounted(load)
     <div class="topology-stage">
       <article v-for="node in data.nodes" :key="node.id" class="topology-card">
         <component :is="node.kind === 'database' ? Database : node.kind === 'gateway' ? ShieldCheck : node.kind === 'agent' ? Server : Network" :size="19" />
-        <div><strong>{{ node.label }}</strong><small>{{ node.kind }}</small></div>
+        <div><strong>{{ node.label }}</strong><small>{{ resourceTypeLabel(node.kind, locale) }}</small></div>
         <StatusBadge :status="node.status" />
       </article>
     </div>

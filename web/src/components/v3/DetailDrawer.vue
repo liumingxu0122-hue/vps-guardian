@@ -84,7 +84,7 @@ onBeforeUnmount(() => {
           <p>{{ eyebrow }}</p>
           <h2>{{ title }}</h2>
         </div>
-        <button class="proto-icon-button" type="button" :aria-label="`关闭${eyebrow}`" @click="emit('close')">
+        <button class="proto-icon-button" type="button" aria-label="Close details" @click="emit('close')">
           <X :size="19" />
         </button>
       </header>
