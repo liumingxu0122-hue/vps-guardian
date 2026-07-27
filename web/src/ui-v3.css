@@ -1069,7 +1069,7 @@ input:focus-visible,
   align-items: center;
   gap: 3px;
   padding: 2px 0;
-  color: var(--accent);
+  color: var(--accent-strong);
   background: none;
   border: 0;
   font-size: 12px;
