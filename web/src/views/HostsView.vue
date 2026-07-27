@@ -184,6 +184,17 @@ function resourceSummary(host: HostPresentation): string {
   return parts.join(' · ') || dataReasonLabel(host.data_reason, locale.value)
 }
 
+function hostSubtitle(host: HostPresentation): string {
+  const productContext = [host.purpose, host.provider, host.os_name].filter(
+    (value): value is string => Boolean(value?.trim()),
+  )
+  if (productContext.length) return [...new Set(productContext)].join(' · ')
+  if (host.management === 'komari_only') {
+    return locale.value === 'zh-CN' ? 'Komari 资产记录' : 'Komari inventory record'
+  }
+  return locale.value === 'zh-CN' ? 'Guardian 托管主机' : 'Guardian managed host'
+}
+
 async function deleteHost(host: HostPresentation): Promise<void> {
   if (!window.confirm(t('hosts.deleteConfirm', { name: host.name }))) return
   await request<void>(`/api/v1/hosts/${host.id}`, { method: 'DELETE' })
@@ -261,7 +272,7 @@ onMounted(async () => {
     <template #head><tr><th><input type="checkbox" :checked="allFilteredSelected" :aria-label="locale === 'zh-CN' ? '选择全部主机' : 'Select all hosts'" @change="toggleFiltered" /></th><th :aria-sort="sortBy === 'name' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">{{ t('hosts.name') }}</th><th :aria-sort="sortBy === 'health' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">{{ locale === 'zh-CN' ? '健康状态' : 'Health' }}</th><th>{{ locale === 'zh-CN' ? '管理方式' : 'Management' }}</th><th>{{ locale === 'zh-CN' ? '区域 / 分组' : 'Region / group' }}</th><th>Agent</th><th>{{ locale === 'zh-CN' ? '资源摘要' : 'Resources' }}</th><th :aria-sort="sortBy === 'heartbeat' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">{{ locale === 'zh-CN' ? '最近上报' : 'Last report' }}</th></tr></template>
     <tr v-for="host in pagedHosts" :key="host.id" :class="{ 'is-selected': selected?.id === host.id }" :aria-selected="selected?.id === host.id" tabindex="0" @click="selectHost(host)" @keydown.enter="selectHost(host)">
       <td :data-label="locale === 'zh-CN' ? '选择' : 'Select'" @click.stop><input type="checkbox" :checked="selectedIds.has(host.id)" :aria-label="`${locale === 'zh-CN' ? '选择' : 'Select'} ${host.name}`" @change="toggleSelected(host.id)" /></td>
-      <td :data-label="locale === 'zh-CN' ? '主机' : 'Host'"><span class="rc5-resource"><span class="rc5-resource-icon"><Server :size="17" /></span><span><strong>{{ host.name }}</strong><small>{{ host.primary_address }}</small></span></span></td>
+      <td :data-label="locale === 'zh-CN' ? '主机' : 'Host'"><span class="rc5-resource"><span class="rc5-resource-icon"><Server :size="17" /></span><span><strong>{{ host.name }}</strong><small>{{ hostSubtitle(host) }}</small></span></span></td>
       <td :data-label="locale === 'zh-CN' ? '健康状态' : 'Health'"><StatusBadge :tone="healthTone(host.enabled ? host.data_state : 'disabled')" :label="healthLabel(host.enabled ? host.data_state : 'disabled', locale)" compact /></td>
       <td :data-label="locale === 'zh-CN' ? '管理方式' : 'Management'"><strong>{{ managementLabel(host.management, locale) }}</strong><small>{{ host.purpose || dataReasonLabel(host.data_reason, locale) }}</small></td>
       <td :data-label="locale === 'zh-CN' ? '地区' : 'Region'"><span>{{ regionLabel(host.region, locale) }}</span><small>{{ host.group || t('hosts.ungrouped') }}<template v-if="host.provider"> · {{ host.provider }}</template></small></td>

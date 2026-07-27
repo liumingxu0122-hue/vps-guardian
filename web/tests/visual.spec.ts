@@ -1001,6 +1001,8 @@ test('RC5 hosts uses semantic selection, compact mobile records, and an accessib
   await expect(page.getByRole('table', { name: 'Hosts' }).getByText('Guardian + Komari')).toBeVisible()
   await expect(page.getByRole('table', { name: 'Hosts' }).getByText('Reporting')).toBeVisible()
   await expect(page.getByText('komari-import')).toHaveCount(0)
+  await expect(page.getByRole('table', { name: 'Hosts' })).not.toContainText('192.0.2.10')
+  await expect(page.getByRole('table', { name: 'Hosts' })).not.toContainText('komari:')
   await page.getByRole('row', { name: /edge-hk/ }).click()
   const selected = page.getByRole('row', { name: /edge-hk/ })
   await expect(selected).toHaveAttribute('aria-selected', 'true')
