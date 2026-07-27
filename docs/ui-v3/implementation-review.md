@@ -43,12 +43,23 @@
 - Controller 在输出 Evidence 前处理 plain text、JSON 和 NDJSON Secret
   redaction。
 
-## 仍需真实 Staging 关闭的门禁
+## 真实 Staging 门禁结论
 
-- 真实数据下全部 14 个主要页面的 After 截图和人工复核；
-- 冷缓存至少 3 次性能、Bootstrap p50/p95、HAR/Trace/Coverage；
-- 固定 RC 镜像、部署前 dump/snapshot、真实 smoke 和回滚材料；
-- Agent 与 Telegram 不回退验证。
+- 固定提交 `8722fabd28b3c6127fdfb8e2c630ed8fa94e5cfa` 和
+  `v0.4.0-phase4-ui-v3-rc3-8722fab` 已部署到 Staging。
+- 19 张真实数据 After 截图覆盖主要页面、桌面/移动端和明/暗主题；无横向溢出、
+  `[object Object]` 或 `undefined`。
+- 三次冷启动的中位 FCP 416 ms、LCP 580 ms、数据就绪 1,638 ms；12 个请求，
+  0 个长任务。
+- Bootstrap p50/p95 为 86/136 ms；HAR、Trace、Coverage 和报告已脱敏并生成
+  SHA-256。
+- 登录、TOTP、退出、旧 Cookie、无效 Bearer、普通偏好 Cookie 和深链接回归通过；
+  page/console error 为 0。
+- Overview、Services、Incidents 的 axe serious/critical 为 0。
+- 部署前 PostgreSQL dump、异地 Restic snapshot、`check --read-data` 和回滚材料
+  完成；Controller/Web 最长观测不可用时间 12.413 秒。
+- 2/2 Agent 保持新鲜；Telegram 真实 warning/resolved 投递及审计通过；Discord
+  按批准继续延期。
 
-这些证据完成前，Staging Deployment、Real Staging Cold Load、UI Product
-Quality 与 Phase 4 UI V3 不提前标记 GO；Production 始终 **NO-GO**。
+Staging Deployment、Real Staging Cold Load、UI Product Quality 与 Phase 4 UI V3：
+**GO**。Production：**NO-GO**。

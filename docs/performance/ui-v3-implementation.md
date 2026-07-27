@@ -104,15 +104,61 @@ Production bundle 的匿名登录页、无网络节流 Lighthouse：
 该数据只证明本地 production bundle 和匿名恢复没有静态性能回退，不能替代
 真实 Staging 的跨网 TLS、Controller、PostgreSQL 和已登录数据测量。
 
-## Staging After 待填
+## 真实 Staging After
 
-只有部署固定 RC 后才能填写：
+固定应用提交：`8722fabd28b3c6127fdfb8e2c630ed8fa94e5cfa`
 
-- App Shell、FCP、LCP、CLS、关键数据完成；
-- Bootstrap p50/p95 与 `Server-Timing` 分解；
-- 冷缓存至少 3 次的中位数与最差值；
-- HAR、Trace、Coverage、请求瀑布与长任务；
-- 二次路由和缓存命中；
-- 与 Before 的改善百分比。
+固定 RC：`v0.4.0-phase4-ui-v3-rc3-8722fab`
 
-在这些真实证据完成前，Real Staging Cold Load 和 Phase 4 UI V3 保持 **NO-GO**。
+采集时间：2026-07-27 UTC
+
+在真实、已认证、跨网 TLS 的 Staging 上执行三次禁用浏览器缓存的冷启动：
+
+| 指标 | Run 1 | Run 2 | Run 3 | 中位数 | Before 中位数 | 改善 |
+|---|---:|---:|---:|---:|---:|---:|
+| App Shell 可见 | 411 ms | 391 ms | 367 ms | 391 ms | 2,772 ms | 85.9% |
+| 首屏数据就绪 | 1,781 ms | 1,638 ms | 1,573 ms | 1,638 ms | 17,420 ms | 90.6% |
+| FCP | 432 ms | 416 ms | 388 ms | 416 ms | 1,976 ms | 78.9% |
+| LCP | 604 ms | 580 ms | 552 ms | 580 ms | 17,308 ms | 96.6% |
+| CLS | 0.000657 | 0.000581 | 0.000675 | 0.000657 | 0.0036 | 81.8% |
+| 请求数 | 12 | 12 | 12 | 12 | 21 | 42.9% |
+| 传输字节 | 131,985 | 131,984 | 131,983 | 131,984 | 约 139,200 | 5.2% |
+| >50 ms 主线程长任务 | 0 | 0 | 0 | 0 | 1 | 100% |
+
+真实 API 浏览器墙钟分位数：
+
+| 接口 | p50 | p95 | 备注 |
+|---|---:|---:|---|
+| `/api/v1/auth/me` | 65 ms | 77 ms | 每次冷启动仅一次 |
+| `/api/v1/dashboard/bootstrap` | 86 ms | 136 ms | 首次 miss，随后命中隔离短缓存 |
+| `/api/v1/dashboard/resources/current` | 115 ms | 173 ms | 与 bootstrap 独立加载 |
+
+`Server-Timing` 证实 bootstrap 首次数据库阶段约 58 ms；后两次为用户隔离缓存
+命中，总服务端阶段分别约 0.07 ms 和 0.04 ms。Topology 改用明确字段白名单的
+轻量只读端点后，就绪时间为 1,172 ms；Security 同样不再读取重型 Overview。
+七条抽样路由全部在 2 秒内就绪，最慢为 Hosts 1,977 ms。
+
+真实认证回归通过：登录、TOTP、退出、退出后 Session 401、无效 Bearer 401、
+旧 Session Cookie 返回登录页、普通主题/语言 Cookie 不被当成显式凭据，以及
+`/services?status=issues` 深链接保留。浏览器 page error 和 console error 均为 0。
+Overview、Services、Incidents 的 axe serious/critical 均为 0；19 张桌面、深色和
+390px 移动端截图无横向溢出。
+
+受控证据保存在本地私有目录
+`outputs/ui-v3-staging-after-2026-07-27T134259-711Z`。敏感凭据未持久化，HAR 和
+Coverage 已脱敏：
+
+| 文件 | SHA-256 |
+|---|---|
+| `report.json` | `860396A0B101403F22459D6559350248130CAAEED66BD0C9D198F5C4CD17F41F` |
+| `sanitized.har.json` | `D0B4D574860CECA0DC2288BD5FADBF860F30A8E7CC03282AE60F05DA66C16B1C` |
+| `chrome-trace.json` | `9404D932ACF657D3C79A2E3BD0DD19568C27033805098BDEEDF202D0744798D4` |
+| `coverage-sanitized.json` | `4C4F6B984BE65BF66E9040280CEB337492389ED5D4A7E5EDEC63F5A48605C5AA` |
+
+部署前 PostgreSQL dump、异地 Restic snapshot、`check` 与
+`check --read-data` 全部通过。Controller/Web 切换期间最长观测不可用时间为
+12.413 秒；schema `0011`、2 个 Owner、TOTP、2/2 新鲜 Agent、Telegram、Gateway、
+数据库和 Komari 均保持预期。真实 Telegram warning/resolved 投递和审计通过。
+
+因此 Real Staging Cold Load、UI Product Quality 和 Phase 4 UI V3 为 **GO**。
+该结论只适用于 Staging；Production 仍为 **NO-GO**。

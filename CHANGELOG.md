@@ -28,6 +28,12 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Changed
 
+- Validated UI V3 on real authenticated Staging at fixed commit
+  `8722fabd28b3c6127fdfb8e2c630ed8fa94e5cfa`: median FCP 416 ms,
+  LCP 580 ms and decision-data readiness 1.638 s across three cold runs,
+  with 12 requests, zero long tasks, zero serious/critical axe findings,
+  and successful Telegram warning/recovery delivery. Production remains
+  `NO-GO`.
 - Replaced the heavyweight Overview startup path with a minimal bootstrap followed by
   independently loaded current resource values; full metrics, Topology, Audit and raw
   evidence no longer block the first decision view.
