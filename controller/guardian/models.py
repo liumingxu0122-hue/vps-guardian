@@ -111,10 +111,17 @@ class IncidentStatus(StrEnum):
 class ApprovalStatus(StrEnum):
     pending = "pending"
     approved = "approved"
+    partially_approved = "partially_approved"
+    approved_with_conditions = "approved_with_conditions"
+    changes_requested = "changes_requested"
     rejected = "rejected"
     dry_run_only = "dry_run_only"
+    executing = "executing"
     executed = "executed"
+    failed = "failed"
+    rolled_back = "rolled_back"
     expired = "expired"
+    withdrawn = "withdrawn"
 
 
 class AgentIdentityState(StrEnum):
@@ -147,9 +154,7 @@ class User(Base):
     password_changed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    totp_enabled_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    totp_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     totp_pending_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     totp_pending_created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -186,9 +191,7 @@ class UserSession(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -209,9 +212,7 @@ class RecoveryCode(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     code_hash: Mapped[str] = mapped_column(String(64))
     batch_id: Mapped[str] = mapped_column(String(36))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -249,9 +250,7 @@ class Agent(Base):
     host_id: Mapped[str] = mapped_column(ForeignKey("hosts.id", ondelete="CASCADE"), unique=True)
     signing_public_key: Mapped[str] = mapped_column(Text)
     certificate_fingerprint: Mapped[str] = mapped_column(String(128), unique=True)
-    certificate_serial: Mapped[str | None] = mapped_column(
-        String(128), nullable=True, unique=True
-    )
+    certificate_serial: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
     identity_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(
@@ -290,22 +289,16 @@ class AgentIdentity(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    agent_id: Mapped[str] = mapped_column(
-        ForeignKey("agents.id", ondelete="CASCADE"), index=True
-    )
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
     generation: Mapped[int] = mapped_column(Integer)
     rotation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     state: Mapped[str] = mapped_column(String(16), index=True)
     signing_public_key: Mapped[str] = mapped_column(Text)
     certificate_fingerprint: Mapped[str] = mapped_column(String(128), unique=True)
-    certificate_serial: Mapped[str | None] = mapped_column(
-        String(128), nullable=True, unique=True
-    )
+    certificate_serial: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    successful_heartbeats: Mapped[int] = mapped_column(
-        Integer, default=0, server_default="0"
-    )
+    successful_heartbeats: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     last_pending_heartbeat_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

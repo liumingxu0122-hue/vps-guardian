@@ -2,6 +2,9 @@ import { expect, test, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 
 import type {
+  ApprovalDetail,
+  ApprovalEvidence,
+  ApprovalSummary,
   Host,
   Incident,
   ServiceCheck,
@@ -232,6 +235,66 @@ const incidents: Incident[] = [
   },
 ]
 
+const approvalSummaries: ApprovalSummary[] = [
+  {
+    id: 'approval-pending-1',
+    incident_id: 'incident-1',
+    action_name: 'service_restart',
+    status: 'pending',
+    risk_level: 2,
+    target: { host: 'edge-hk', service: 'gateway', scope: 'staging' },
+    requester: { label: 'operator', role: 'operator' },
+    requested_at: '2026-07-25T07:40:00Z',
+    expires_at: '2026-07-25T09:40:00Z',
+    progress_label: 'awaiting_decision',
+    execution_status: null,
+  },
+  {
+    id: 'approval-executed-2',
+    incident_id: 'incident-test',
+    action_name: 'restricted_cleanup',
+    status: 'executed',
+    risk_level: 3,
+    target: { host: 'worker-hk', service: 'filesystem', scope: 'staging' },
+    requester: { label: 'owner', role: 'owner' },
+    requested_at: '2026-07-24T07:40:00Z',
+    expires_at: '2026-07-24T09:40:00Z',
+    progress_label: 'completed',
+    execution_status: 'completed',
+  },
+]
+
+const approvalDetail: ApprovalDetail = {
+  ...approvalSummaries[0],
+  risk_reason: 'level_2_operational_change',
+  approver: null,
+  decided_at: null,
+  executed_at: null,
+  impact_facts: [
+    { key: 'service', value: 'gateway', tone: 'neutral' },
+    { key: 'downtime', value: 'under 30 seconds', tone: 'warning' },
+  ],
+  steps: [{ order: 1, action: 'service_restart', target: 'gateway.service', dry_run: true }],
+  dry_run_available: true,
+  dry_run_status: null,
+  recovery_point_label: 'verified snapshot',
+  rollback_available: true,
+  rollback_steps: ['Restore the previous service unit', 'Verify loopback health'],
+  timeline: [{
+    at: '2026-07-25T07:40:00Z',
+    event: 'requested',
+    actor: 'operator',
+    outcome: 'pending',
+  }],
+  raw_evidence_available: true,
+}
+
+const approvalEvidence: ApprovalEvidence = {
+  approval_id: approvalDetail.id,
+  parameters: { agent_id: 'agent-1', token: '[REDACTED]' },
+  impact: { service: 'gateway' },
+}
+
 const resources = {
   generated_at: '2026-07-25T08:00:00Z',
   sampled_hosts: 2,
@@ -316,6 +379,30 @@ async function mockAuthenticated(
         status: options.resourceStatus ?? 200,
         contentType: 'application/json',
         body: JSON.stringify(options.resourceStatus ? { code: 'resource_unavailable' } : resources),
+      })
+      return
+    }
+    if (path === '/api/v1/approvals/presentation') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(approvalSummaries),
+      })
+      return
+    }
+    if (path === `/api/v1/approvals/${approvalDetail.id}/presentation`) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(approvalDetail),
+      })
+      return
+    }
+    if (path === `/api/v1/approvals/${approvalDetail.id}/evidence`) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(approvalEvidence),
       })
       return
     }
@@ -414,6 +501,7 @@ test('topology and security use bounded summaries without the legacy overview', 
 })
 
 test('active navigation remains visible in light and dark themes on key routes', async ({ page }) => {
+  test.setTimeout(90_000)
   await mockAuthenticated(page)
   await page.goto('/overview')
   const allNavigationRoutes = [
@@ -435,7 +523,7 @@ test('active navigation remains visible in light and dark themes on key routes',
     '/settings',
   ]
   for (const theme of ['light', 'dark'] as const) {
-    const routes = theme === 'light' ? allNavigationRoutes : ['/overview', '/services', '/incidents']
+    const routes = allNavigationRoutes
     for (const route of routes) {
       await page.goto(route)
       const active = page.locator('.proto-navigation a[aria-current="page"]')
@@ -449,6 +537,97 @@ test('active navigation remains visible in light and dark themes on key routes',
       await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
     }
   }
+})
+
+test('approval center is decision-first, accessible, and does not expose raw JSON by default', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const counts = await mockAuthenticated(page)
+  await page.setViewportSize({ width: 1366, height: 900 })
+  await page.goto('/approvals')
+
+  await expect(page.getByRole('heading', { name: 'Restart service' })).toBeVisible()
+  await expect(page.getByText('gateway.service')).toBeVisible()
+  await expect(page.getByText('Rollback path available')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Request changes' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Approve with conditions' })).toBeVisible()
+  await expect(page.getByText('approval-pending-1')).toHaveCount(0)
+  await expect(page.getByText('"agent_id"')).toHaveCount(0)
+  await expect.poll(() => counts.get('/api/v1/approvals/presentation')).toBe(1)
+  expect(counts.get(`/api/v1/approvals/${approvalDetail.id}/evidence`)).toBeUndefined()
+
+  const accessibility = await new AxeBuilder({ page }).analyze()
+  expect(accessibility.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))).toEqual([])
+  expect(errors).toEqual([])
+  await expectNoHorizontalOverflow(page)
+  await capture(page, 'approvals-1366-light')
+
+  await page.locator('.approval-evidence summary').click()
+  await expect(page.locator('.approval-evidence .approval-evidence-lines').getByText('"agent_id"')).toBeVisible()
+  await expect.poll(() => counts.get(`/api/v1/approvals/${approvalDetail.id}/evidence`)).toBe(1)
+  await page.getByRole('button', { name: 'Request changes' }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.getByRole('dialog').getByText('Changes requested')).toBeVisible()
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
+  await page.getByRole('button', { name: 'Approve execution' }).click()
+  await expect(page.getByRole('dialog').getByLabel('Current password (reauthentication)')).toBeVisible()
+  await expect(page.getByRole('dialog').getByText('I verified the rollback path and recovery requirements.')).toBeVisible()
+})
+
+test('approval filters and mobile master-detail behavior remain usable', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'zh-CN' })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/approvals')
+
+  await expect(page.getByRole('option', { name: /重启服务/ })).toBeVisible()
+  await page.getByRole('option', { name: /重启服务/ }).click()
+  await expect(page.getByRole('heading', { name: '重启服务' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  await capture(page, 'approvals-390-detail-light')
+  await page.getByRole('button', { name: '返回请求列表' }).click()
+  await expect(page.getByRole('option', { name: /重启服务/ })).toBeVisible()
+  await page.getByRole('searchbox', { name: '搜索审批' }).fill('worker')
+  await expect(page.getByRole('option', { name: /受限清理/ })).toBeVisible()
+  await expect(page.getByRole('option', { name: /重启服务/ })).toHaveCount(0)
+  await expectNoHorizontalOverflow(page)
+  await capture(page, 'approvals-390-list-light')
+})
+
+test('approval center dark theme and 768px detail use semantic surfaces', async ({ page }) => {
+  await mockAuthenticated(page, { theme: 'dark' })
+  await page.setViewportSize({ width: 768, height: 900 })
+  await page.goto('/approvals')
+  await expect(page.getByRole('option', { name: /Restart service/ })).toBeVisible()
+  const queueBackground = await page.locator('.approval-queue').evaluate(
+    (element) => getComputedStyle(element).backgroundColor,
+  )
+  expect(queueBackground).not.toBe('rgb(0, 0, 0)')
+  await page.getByRole('option', { name: /Restart service/ }).click()
+  await expect(page.getByRole('heading', { name: 'Restart service' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  const accessibility = await new AxeBuilder({ page }).analyze()
+  expect(accessibility.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))).toEqual([])
+  await capture(page, 'approvals-768-detail-dark')
+})
+
+test('approval route remains bounded and lazy-loads detail and evidence', async ({ page }) => {
+  const counts = await mockAuthenticated(page)
+  await page.goto('/overview')
+  const samples: number[] = []
+  for (let index = 0; index < 3; index += 1) {
+    const started = performance.now()
+    await page.getByRole('link', { name: 'Approvals' }).click()
+    await expect(page.getByRole('heading', { name: 'Restart service' })).toBeVisible()
+    samples.push(performance.now() - started)
+    await page.getByRole('link', { name: 'Operations overview' }).click()
+    await expect(page.getByRole('heading', { name: 'Operational overview' })).toBeVisible()
+  }
+  samples.sort((left, right) => left - right)
+  expect(samples[1]).toBeLessThanOrEqual(300)
+  expect(counts.get('/api/v1/auth/me')).toBe(1)
+  expect(counts.get('/api/v1/approvals/presentation')).toBe(3)
+  expect(counts.get(`/api/v1/approvals/${approvalDetail.id}/presentation`)).toBe(3)
+  expect(counts.get(`/api/v1/approvals/${approvalDetail.id}/evidence`)).toBeUndefined()
 })
 
 test('desktop navigation collapse persists and expansion restores visible labels', async ({ page }) => {

@@ -381,9 +381,7 @@ class NotificationChannelCreate(BaseModel):
     enabled: bool = True
     configuration: dict[str, str]
     event_scope: list[str] = Field(default_factory=list, max_length=32)
-    severity_filter: list[Literal["info", "warning", "critical"]] = Field(
-        default_factory=list
-    )
+    severity_filter: list[Literal["info", "warning", "critical"]] = Field(default_factory=list)
     retry_policy: dict[str, int] = Field(default_factory=dict)
     rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
 
@@ -452,9 +450,7 @@ class IncidentView(ORMModel):
 
 
 class IncidentUpdateRequest(BaseModel):
-    status: Literal[
-        "open", "acknowledged", "investigating", "mitigating", "resolved"
-    ] | None = None
+    status: Literal["open", "acknowledged", "investigating", "mitigating", "resolved"] | None = None
     assigned_to: str | None = Field(default=None, max_length=36)
     note: str = Field(default="", max_length=1000)
     resolution_summary: str | None = Field(default=None, max_length=4000)
@@ -479,9 +475,84 @@ class ApprovalView(ORMModel):
     target_host_id: str | None
 
 
+class ApprovalActorView(BaseModel):
+    label: str
+    role: str | None = None
+
+
+class ApprovalTargetView(BaseModel):
+    host: str | None = None
+    service: str | None = None
+    scope: str | None = None
+
+
+class ApprovalFactView(BaseModel):
+    key: str
+    value: str
+    tone: Literal["neutral", "info", "warning", "critical"] = "neutral"
+
+
+class ApprovalStepView(BaseModel):
+    order: int
+    action: str
+    target: str | None = None
+    dry_run: bool = False
+
+
+class ApprovalTimelineEntryView(BaseModel):
+    at: datetime
+    event: str
+    actor: str | None = None
+    outcome: str | None = None
+
+
+class ApprovalSummaryView(BaseModel):
+    id: str
+    incident_id: str
+    action_name: str
+    status: str
+    risk_level: int
+    target: ApprovalTargetView
+    requester: ApprovalActorView | None
+    requested_at: datetime
+    expires_at: datetime
+    progress_label: str
+    execution_status: str | None
+
+
+class ApprovalDetailView(ApprovalSummaryView):
+    risk_reason: str
+    approver: ApprovalActorView | None
+    decided_at: datetime | None
+    executed_at: datetime | None
+    impact_facts: list[ApprovalFactView]
+    steps: list[ApprovalStepView]
+    dry_run_available: bool
+    dry_run_status: str | None
+    recovery_point_label: str | None
+    rollback_available: bool
+    rollback_steps: list[str]
+    timeline: list[ApprovalTimelineEntryView]
+    raw_evidence_available: bool
+
+
+class ApprovalEvidenceView(BaseModel):
+    approval_id: str
+    parameters: dict[str, Any]
+    impact: dict[str, Any]
+
+
 class ApprovalDecision(BaseModel):
-    decision: Literal["approved", "rejected", "dry_run_only"]
+    decision: Literal[
+        "approved",
+        "approved_with_conditions",
+        "changes_requested",
+        "rejected",
+        "dry_run_only",
+    ]
     confirmation: str = Field(min_length=3, max_length=255)
+    current_password: str | None = Field(default=None, min_length=12, max_length=256)
+    rollback_confirmed: bool = False
 
 
 class AuditView(ORMModel):

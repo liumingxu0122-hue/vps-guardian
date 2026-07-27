@@ -311,7 +311,7 @@ onBeforeUnmount(() => {
           <strong>{{ stage }}</strong><span>·</span><span>{{ version }}</span><span>·</span><span>{{ productionLabel }}</span>
         </div>
         <div class="proto-top-actions">
-          <button class="proto-search-trigger" type="button" @click="openPalette"><Search :size="16" /><span>{{ t('nav.search') }}</span><kbd>Ctrl K</kbd></button>
+          <button class="proto-search-trigger" type="button" :aria-label="t('nav.search')" @click="openPalette"><Search :size="16" /><span>{{ t('nav.search') }}</span><kbd>Ctrl K</kbd></button>
           <a class="proto-icon-button" href="/docs" target="_blank" rel="noreferrer" :aria-label="t('nav.apiDocs')"><CircleHelp :size="18" /></a>
           <button class="proto-icon-button" type="button" :aria-label="theme === 'light' ? t('nav.switchDark') : t('nav.switchLight')" @click="toggleTheme"><Moon v-if="theme === 'light'" :size="18" /><Sun v-else :size="18" /></button>
           <button class="proto-locale-button" type="button" :aria-label="t('locale.select')" @click="changeLocale(locale === 'zh-CN' ? 'en-US' : 'zh-CN')">{{ locale === 'zh-CN' ? '中' : 'EN' }}</button>

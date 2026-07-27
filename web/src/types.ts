@@ -100,6 +100,88 @@ export interface Approval {
   target_host_id: string | null
 }
 
+export type ApprovalStatus =
+  | 'pending'
+  | 'approved'
+  | 'partially_approved'
+  | 'approved_with_conditions'
+  | 'changes_requested'
+  | 'rejected'
+  | 'dry_run_only'
+  | 'executing'
+  | 'executed'
+  | 'failed'
+  | 'rolled_back'
+  | 'expired'
+  | 'withdrawn'
+
+export interface ApprovalActor {
+  label: string
+  role: string | null
+}
+
+export interface ApprovalTarget {
+  host: string | null
+  service: string | null
+  scope: string | null
+}
+
+export interface ApprovalSummary {
+  id: string
+  incident_id: string
+  action_name: string
+  status: ApprovalStatus
+  risk_level: number
+  target: ApprovalTarget
+  requester: ApprovalActor | null
+  requested_at: string
+  expires_at: string
+  progress_label: string
+  execution_status: string | null
+}
+
+export interface ApprovalFact {
+  key: string
+  value: string
+  tone: 'neutral' | 'info' | 'warning' | 'critical'
+}
+
+export interface ApprovalStep {
+  order: number
+  action: string
+  target: string | null
+  dry_run: boolean
+}
+
+export interface ApprovalTimelineEntry {
+  at: string
+  event: string
+  actor: string | null
+  outcome: string | null
+}
+
+export interface ApprovalDetail extends ApprovalSummary {
+  risk_reason: string
+  approver: ApprovalActor | null
+  decided_at: string | null
+  executed_at: string | null
+  impact_facts: ApprovalFact[]
+  steps: ApprovalStep[]
+  dry_run_available: boolean
+  dry_run_status: string | null
+  recovery_point_label: string | null
+  rollback_available: boolean
+  rollback_steps: string[]
+  timeline: ApprovalTimelineEntry[]
+  raw_evidence_available: boolean
+}
+
+export interface ApprovalEvidence {
+  approval_id: string
+  parameters: Record<string, unknown>
+  impact: Record<string, unknown>
+}
+
 export interface EnrollmentToken {
   token: string
   expires_at: string

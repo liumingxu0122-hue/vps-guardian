@@ -21,6 +21,24 @@ describe('locale resources', () => {
     expect(JSON.stringify(enUS)).not.toContain('""')
     expect(JSON.stringify(zhCN)).not.toContain('""')
   })
+
+  it.each([
+    'pending',
+    'partially_approved',
+    'approved',
+    'approved_with_conditions',
+    'changes_requested',
+    'rejected',
+    'expired',
+    'withdrawn',
+    'executing',
+    'executed',
+    'failed',
+    'rolled_back',
+  ])('localizes approval status %s', (status) => {
+    expect(enUS.status[status as keyof typeof enUS.status]).toBeTruthy()
+    expect(zhCN.status[status as keyof typeof zhCN.status]).toBeTruthy()
+  })
 })
 
 describe('locale selection', () => {

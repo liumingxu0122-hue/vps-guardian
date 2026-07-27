@@ -6,6 +6,9 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Added
 
+- Added decision-oriented Approval summary/detail DTOs, bounded lifecycle timelines,
+  structured impact and execution steps, lazy redacted evidence, and bilingual,
+  responsive Approval Center regressions.
 - Added the Phase 4 UI V3 product shell, shared design tokens, responsive/focus-trapped
   navigation and detail drawers, lightweight dashboard bootstrap/current-resource
   APIs, URL-persisted operational filters, and audited Service-check batch updates.
@@ -28,6 +31,9 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Changed
 
+- Rebuilt Approval Center around semantic light/dark surfaces, compact filters,
+  productized risk/Dry Run/rollback presentation, list-first tablet/mobile navigation,
+  and a sticky audited decision bar.
 - Validated UI V3 on real authenticated Staging at fixed commit
   `8722fabd28b3c6127fdfb8e2c630ed8fa94e5cfa`: median FCP 416 ms,
   LCP 580 ms and decision-data readiness 1.638 s across three cold runs,
@@ -51,6 +57,9 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Security
 
+- High-risk approval and conditional approval now require server-side password
+  reauthentication plus explicit rollback confirmation; conditional decisions and
+  requests for changes never dispatch Agent tasks.
 - Redact plain, JSON and NDJSON service evidence before returning it to the browser;
   evidence remains authenticated, escaped, collapsed by default, and downloadable only
   as the already-redacted representation.

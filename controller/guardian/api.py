@@ -116,7 +116,15 @@ from guardian.schemas import (
     AlertSilenceRequest,
     AlertUpdateRequest,
     AlertView,
+    ApprovalActorView,
     ApprovalDecision,
+    ApprovalDetailView,
+    ApprovalEvidenceView,
+    ApprovalFactView,
+    ApprovalStepView,
+    ApprovalSummaryView,
+    ApprovalTargetView,
+    ApprovalTimelineEntryView,
     ApprovalView,
     AuditView,
     EnrollmentTokenIssue,
@@ -204,6 +212,8 @@ def expire_pending_approvals(db: Session, *, now: datetime | None = None) -> int
     if expired:
         db.commit()
     return expired
+
+
 DB = Annotated[Session, Depends(get_db)]
 Config = Annotated[Settings, Depends(get_settings)]
 
@@ -574,9 +584,7 @@ def enable_totp(
     settings: Config,
     user: Annotated[User, Depends(require_role(Role.viewer))],
 ) -> RecoveryCodeBatchView:
-    _require_reauthentication_audited(
-        db, user, payload.current_password, "totp.enable", request
-    )
+    _require_reauthentication_audited(db, user, payload.current_password, "totp.enable", request)
     if not user.totp_pending_secret_encrypted or not user.totp_pending_created_at:
         write_audit(
             db,
@@ -762,9 +770,7 @@ def disable_totp(
     settings: Config,
     user: Annotated[User, Depends(require_role(Role.viewer))],
 ) -> None:
-    _require_reauthentication_audited(
-        db, user, payload.current_password, "totp.disable", request
-    )
+    _require_reauthentication_audited(db, user, payload.current_password, "totp.disable", request)
     if not user.totp_enabled or not verify_totp(user, payload.totp_code, settings):
         write_audit(
             db,
@@ -1065,9 +1071,7 @@ def _require_reauthentication_audited(
 
 
 @router.get("/api/v1/users", response_model=list[UserView], tags=["users"])
-def list_users(
-    db: DB, _: Annotated[User, Depends(require_role(Role.admin))]
-) -> list[User]:
+def list_users(db: DB, _: Annotated[User, Depends(require_role(Role.admin))]) -> list[User]:
     return list(db.scalars(select(User).order_by(User.email)).all())
 
 
@@ -1326,9 +1330,7 @@ def delete_user(
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="user not found")
-    _require_reauthentication_audited(
-        db, actor, payload.current_password, "user.delete", request
-    )
+    _require_reauthentication_audited(db, actor, payload.current_password, "user.delete", request)
     owners = _lock_active_owners(db) if target.role == Role.owner.value and target.is_active else []
     if owners and not any(owner.id != target.id for owner in owners):
         _audit_rejected_owner_operation(
@@ -1840,9 +1842,7 @@ def dashboard_resources_current(
     started = time.perf_counter()
     payload = current_resource_summary(db)
     response.headers["Cache-Control"] = "private, max-age=15"
-    response.headers["Server-Timing"] = (
-        f"total;dur={(time.perf_counter() - started) * 1000:.2f}"
-    )
+    response.headers["Server-Timing"] = f"total;dur={(time.perf_counter() - started) * 1000:.2f}"
     response.headers["Vary"] = "Authorization, Cookie"
     return payload
 
@@ -1856,9 +1856,7 @@ def dashboard_topology(
     started = time.perf_counter()
     payload = topology_summary(db)
     response.headers["Cache-Control"] = "private, max-age=15"
-    response.headers["Server-Timing"] = (
-        f"total;dur={(time.perf_counter() - started) * 1000:.2f}"
-    )
+    response.headers["Server-Timing"] = f"total;dur={(time.perf_counter() - started) * 1000:.2f}"
     response.headers["Vary"] = "Authorization, Cookie"
     return payload
 
@@ -1873,9 +1871,7 @@ def dashboard_security(
     started = time.perf_counter()
     payload = security_summary(db, settings=settings)
     response.headers["Cache-Control"] = "private, max-age=15"
-    response.headers["Server-Timing"] = (
-        f"total;dur={(time.perf_counter() - started) * 1000:.2f}"
-    )
+    response.headers["Server-Timing"] = f"total;dur={(time.perf_counter() - started) * 1000:.2f}"
     response.headers["Vary"] = "Authorization, Cookie"
     return payload
 
@@ -1970,9 +1966,7 @@ def list_services(
     return services
 
 
-@router.get(
-    "/api/v1/service-checks", response_model=list[ServiceCheckView], tags=["monitoring"]
-)
+@router.get("/api/v1/service-checks", response_model=list[ServiceCheckView], tags=["monitoring"])
 def list_service_checks(
     db: DB,
     _: Annotated[User, Depends(require_role(Role.viewer))],
@@ -2004,9 +1998,7 @@ def list_service_check_results(
         statement = statement.where(ServiceCheckResult.check_id == check_id)
     return list(
         db.scalars(
-            statement.order_by(desc(ServiceCheckResult.checked_at))
-            .limit(limit)
-            .offset(offset)
+            statement.order_by(desc(ServiceCheckResult.checked_at)).limit(limit).offset(offset)
         ).all()
     )
 
@@ -2190,16 +2182,12 @@ def list_alerts(
         statement = statement.where(AlertInstance.state == state)
     return list(
         db.scalars(
-            statement.order_by(desc(AlertInstance.last_observed_at))
-            .limit(limit)
-            .offset(offset)
+            statement.order_by(desc(AlertInstance.last_observed_at)).limit(limit).offset(offset)
         ).all()
     )
 
 
-@router.post(
-    "/api/v1/alerts/{alert_id}/acknowledge", response_model=AlertView, tags=["alerts"]
-)
+@router.post("/api/v1/alerts/{alert_id}/acknowledge", response_model=AlertView, tags=["alerts"])
 def acknowledge_alert_api(
     alert_id: str,
     request: Request,
@@ -2239,9 +2227,7 @@ def silence_alert_api(
     if alert is None:
         raise HTTPException(status_code=404, detail="alert not found")
     try:
-        silence_alert(
-            db, alert=alert, actor=user, reason=payload.reason, until=payload.until
-        )
+        silence_alert(db, alert=alert, actor=user, reason=payload.reason, until=payload.until)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     write_audit(
@@ -2489,10 +2475,7 @@ def list_incidents(
 ) -> list[Incident]:
     return list(
         db.scalars(
-            select(Incident)
-            .order_by(desc(Incident.first_seen_at))
-            .limit(limit)
-            .offset(offset)
+            select(Incident).order_by(desc(Incident.first_seen_at)).limit(limit).offset(offset)
         ).all()
     )
 
@@ -2571,6 +2554,289 @@ def update_incident(
     return incident
 
 
+def _approval_actor(user: User | None) -> ApprovalActorView | None:
+    if user is None:
+        return None
+    local_part = user.email.partition("@")[0]
+    return ApprovalActorView(label=local_part or "operator", role=user.role)
+
+
+def _approval_target(approval: Approval, host: Host | None) -> ApprovalTargetView:
+    impact = approval.impact if isinstance(approval.impact, dict) else {}
+    return ApprovalTargetView(
+        host=host.name if host else None,
+        service=str(impact["service"])[:120]
+        if isinstance(impact.get("service"), str | int | float)
+        else None,
+        scope=str(impact["scope"])[:160]
+        if isinstance(impact.get("scope"), str | int | float)
+        else None,
+    )
+
+
+def _approval_task_state(tasks: list[AgentTask]) -> str | None:
+    if not tasks:
+        return None
+    states = {task.status for task in tasks}
+    if any(state in {"failed", "error"} for state in states):
+        return "failed"
+    if any(state in {"running", "executing"} for state in states):
+        return "executing"
+    if states <= {"completed", "succeeded"}:
+        return "completed"
+    return "queued"
+
+
+def _approval_summary(
+    approval: Approval,
+    *,
+    requester: User | None,
+    host: Host | None,
+    tasks: list[AgentTask],
+) -> ApprovalSummaryView:
+    progress = {
+        ApprovalStatus.pending.value: "awaiting_decision",
+        ApprovalStatus.approved.value: "decision_recorded",
+        ApprovalStatus.partially_approved.value: "decision_recorded",
+        ApprovalStatus.approved_with_conditions.value: "decision_recorded",
+        ApprovalStatus.changes_requested.value: "changes_requested",
+        ApprovalStatus.rejected.value: "closed",
+        ApprovalStatus.dry_run_only.value: "dry_run_requested",
+        ApprovalStatus.executing.value: "executing",
+        ApprovalStatus.executed.value: "completed",
+        ApprovalStatus.failed.value: "failed",
+        ApprovalStatus.rolled_back.value: "rolled_back",
+        ApprovalStatus.expired.value: "expired",
+        ApprovalStatus.withdrawn.value: "withdrawn",
+    }.get(approval.status, approval.status)
+    return ApprovalSummaryView(
+        id=approval.id,
+        incident_id=approval.incident_id,
+        action_name=approval.action_name,
+        status=approval.status,
+        risk_level=approval.risk_level,
+        target=_approval_target(approval, host),
+        requester=_approval_actor(requester),
+        requested_at=approval.requested_at,
+        expires_at=approval.expires_at,
+        progress_label=progress,
+        execution_status=_approval_task_state(tasks),
+    )
+
+
+_APPROVAL_IMPACT_FIELDS: tuple[tuple[str, str], ...] = (
+    ("service", "service"),
+    ("scope", "scope"),
+    ("downtime", "downtime"),
+    ("affected_hosts", "affected_hosts"),
+    ("affected_services", "affected_services"),
+    ("estimated_duration", "estimated_duration"),
+)
+
+
+def _approval_impact_facts(approval: Approval) -> list[ApprovalFactView]:
+    impact = approval.impact if isinstance(approval.impact, dict) else {}
+    facts: list[ApprovalFactView] = []
+    for source, key in _APPROVAL_IMPACT_FIELDS:
+        value = impact.get(source)
+        if isinstance(value, str | int | float | bool):
+            facts.append(ApprovalFactView(key=key, value=str(value)[:240]))
+        elif isinstance(value, list):
+            safe_items = [
+                str(item)[:80] for item in value[:20] if isinstance(item, str | int | float)
+            ]
+            if safe_items:
+                facts.append(ApprovalFactView(key=key, value=", ".join(safe_items)[:500]))
+    return facts
+
+
+def _approval_steps(approval: Approval) -> list[ApprovalStepView]:
+    parameters = approval.parameters if isinstance(approval.parameters, dict) else {}
+    raw_actions = parameters.get("actions")
+    if not isinstance(raw_actions, list):
+        return []
+    steps: list[ApprovalStepView] = []
+    for index, raw_action in enumerate(raw_actions[:50], start=1):
+        if not isinstance(raw_action, dict):
+            continue
+        action = raw_action.get("type")
+        action_parameters = raw_action.get("parameters")
+        if not isinstance(action, str) or not isinstance(action_parameters, dict):
+            continue
+        target = action_parameters.get("target")
+        dry_run = action_parameters.get("dry_run")
+        steps.append(
+            ApprovalStepView(
+                order=index,
+                action=action[:120],
+                target=str(target)[:240] if isinstance(target, str | int | float) else None,
+                dry_run=str(dry_run).casefold() == "true" if dry_run is not None else False,
+            )
+        )
+    return steps
+
+
+@router.get(
+    "/api/v1/approvals/presentation",
+    response_model=list[ApprovalSummaryView],
+    tags=["repairs"],
+)
+def list_approval_summaries(
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.operator))],
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[ApprovalSummaryView]:
+    expire_pending_approvals(db)
+    approvals = list(
+        db.scalars(
+            select(Approval).order_by(desc(Approval.requested_at)).limit(limit).offset(offset)
+        ).all()
+    )
+    requester_ids = {item.requested_by for item in approvals if item.requested_by}
+    host_ids = {item.target_host_id for item in approvals if item.target_host_id}
+    approval_ids = {item.id for item in approvals}
+    users = (
+        {item.id: item for item in db.scalars(select(User).where(User.id.in_(requester_ids))).all()}
+        if requester_ids
+        else {}
+    )
+    hosts = (
+        {item.id: item for item in db.scalars(select(Host).where(Host.id.in_(host_ids))).all()}
+        if host_ids
+        else {}
+    )
+    tasks_by_approval: dict[str, list[AgentTask]] = {}
+    if approval_ids:
+        for task in db.scalars(
+            select(AgentTask).where(AgentTask.approval_id.in_(approval_ids))
+        ).all():
+            if task.approval_id:
+                tasks_by_approval.setdefault(task.approval_id, []).append(task)
+    return [
+        _approval_summary(
+            approval,
+            requester=users.get(approval.requested_by) if approval.requested_by else None,
+            host=hosts.get(approval.target_host_id) if approval.target_host_id else None,
+            tasks=tasks_by_approval.get(approval.id, []),
+        )
+        for approval in approvals
+    ]
+
+
+@router.get(
+    "/api/v1/approvals/{approval_id}/presentation",
+    response_model=ApprovalDetailView,
+    tags=["repairs"],
+)
+def get_approval_presentation(
+    approval_id: str,
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.operator))],
+) -> ApprovalDetailView:
+    approval = db.get(Approval, approval_id)
+    if approval is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+    requester = db.get(User, approval.requested_by) if approval.requested_by else None
+    approver = db.get(User, approval.decided_by) if approval.decided_by else None
+    host = db.get(Host, approval.target_host_id) if approval.target_host_id else None
+    tasks = list(
+        db.scalars(
+            select(AgentTask)
+            .where(AgentTask.approval_id == approval.id)
+            .order_by(AgentTask.created_at)
+            .limit(100)
+        ).all()
+    )
+    audit_entries = list(
+        db.scalars(
+            select(AuditLog)
+            .where(
+                AuditLog.resource_type == "approval",
+                AuditLog.resource_id == approval.id,
+            )
+            .order_by(AuditLog.created_at)
+            .limit(100)
+        ).all()
+    )
+    audit_actor_ids = {entry.actor_id for entry in audit_entries if entry.actor_id}
+    audit_actors = (
+        {
+            actor.id: actor
+            for actor in db.scalars(select(User).where(User.id.in_(audit_actor_ids))).all()
+        }
+        if audit_actor_ids
+        else {}
+    )
+    requester_actor = _approval_actor(requester)
+    timeline = [
+        ApprovalTimelineEntryView(
+            at=approval.requested_at,
+            event="requested",
+            actor=requester_actor.label if requester_actor else None,
+            outcome="pending",
+        )
+    ]
+    for entry in audit_entries:
+        entry_actor = _approval_actor(audit_actors.get(entry.actor_id)) if entry.actor_id else None
+        timeline.append(
+            ApprovalTimelineEntryView(
+                at=entry.created_at,
+                event=entry.action,
+                actor=entry_actor.label if entry_actor else None,
+                outcome=entry.outcome,
+            )
+        )
+    completed_times = [task.completed_at for task in tasks if task.completed_at is not None]
+    summary = _approval_summary(approval, requester=requester, host=host, tasks=tasks)
+    impact = approval.impact if isinstance(approval.impact, dict) else {}
+    risk_reason = impact.get("risk_reason")
+    return ApprovalDetailView(
+        **summary.model_dump(),
+        risk_reason=str(risk_reason)[:500]
+        if isinstance(risk_reason, str | int | float)
+        else f"level_{approval.risk_level}_operational_change",
+        approver=_approval_actor(approver),
+        decided_at=approval.decided_at,
+        executed_at=max(completed_times) if completed_times else None,
+        impact_facts=_approval_impact_facts(approval),
+        steps=_approval_steps(approval),
+        dry_run_available=bool(impact.get("dry_run_available", False)),
+        dry_run_status=_approval_task_state(tasks)
+        if approval.status == ApprovalStatus.dry_run_only.value
+        else None,
+        recovery_point_label=approval.recovery_point_id,
+        rollback_available=bool(approval.rollback_plan or approval.recovery_point_id),
+        rollback_steps=[
+            str(step)[:500] for step in approval.rollback_plan[:50] if isinstance(step, str)
+        ],
+        timeline=timeline,
+        raw_evidence_available=bool(approval.parameters or approval.impact),
+    )
+
+
+@router.get(
+    "/api/v1/approvals/{approval_id}/evidence",
+    response_model=ApprovalEvidenceView,
+    tags=["repairs"],
+)
+def get_approval_evidence(
+    approval_id: str,
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.admin))],
+) -> ApprovalEvidenceView:
+    approval = db.get(Approval, approval_id)
+    if approval is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+    parameters = redact_structure(approval.parameters)
+    impact = redact_structure(approval.impact)
+    return ApprovalEvidenceView(
+        approval_id=approval.id,
+        parameters=parameters if isinstance(parameters, dict) else {},
+        impact=impact if isinstance(impact, dict) else {},
+    )
+
+
 @router.get("/api/v1/approvals", response_model=list[ApprovalView], tags=["repairs"])
 def list_approvals(
     db: DB,
@@ -2581,10 +2847,7 @@ def list_approvals(
     expire_pending_approvals(db)
     return list(
         db.scalars(
-            select(Approval)
-            .order_by(desc(Approval.requested_at))
-            .limit(limit)
-            .offset(offset)
+            select(Approval).order_by(desc(Approval.requested_at)).limit(limit).offset(offset)
         ).all()
     )
 
@@ -2623,7 +2886,12 @@ async def decide_approval(
     if approval.status != ApprovalStatus.pending.value:
         raise HTTPException(status_code=404, detail="pending approval not found")
     if (
-        payload.decision in {ApprovalStatus.approved.value, ApprovalStatus.dry_run_only.value}
+        payload.decision
+        in {
+            ApprovalStatus.approved.value,
+            ApprovalStatus.approved_with_conditions.value,
+            ApprovalStatus.dry_run_only.value,
+        }
         and approval.risk_level >= 2
         and approval.requested_by == user.id
     ):
@@ -2639,8 +2907,36 @@ async def decide_approval(
         )
         db.commit()
         raise HTTPException(status_code=403, detail="requester cannot approve this high-risk task")
+    if (
+        payload.decision
+        in {
+            ApprovalStatus.approved.value,
+            ApprovalStatus.approved_with_conditions.value,
+        }
+        and approval.risk_level >= 2
+    ):
+        if not payload.rollback_confirmed:
+            raise HTTPException(
+                status_code=422,
+                detail="high-risk approval requires rollback confirmation",
+            )
+        if payload.current_password is None:
+            raise HTTPException(
+                status_code=422,
+                detail="high-risk approval requires reauthentication",
+            )
+        _require_reauthentication_audited(
+            db,
+            user,
+            payload.current_password,
+            "approval.reauthenticate",
+            request,
+        )
     task_ids: list[str] = []
-    if payload.decision in {ApprovalStatus.approved.value, ApprovalStatus.dry_run_only.value}:
+    if payload.decision in {
+        ApprovalStatus.approved.value,
+        ApprovalStatus.dry_run_only.value,
+    }:
         agent_id = str(approval.parameters.get("agent_id", ""))
         agent = db.get(Agent, agent_id)
         raw_actions = approval.parameters.get("actions", [])
@@ -2652,9 +2948,7 @@ async def decide_approval(
             ):
                 raise HTTPException(status_code=409, detail="approval Agent plan is invalid")
             action = str(raw_action.get("type", ""))
-            parameters = {
-                str(key): str(value) for key, value in raw_action["parameters"].items()
-            }
+            parameters = {str(key): str(value) for key, value in raw_action["parameters"].items()}
             parameters["dry_run"] = (
                 "true" if payload.decision == ApprovalStatus.dry_run_only.value else "false"
             )
@@ -2721,17 +3015,12 @@ def list_audit(
 ) -> list[AuditLog]:
     return list(
         db.scalars(
-            select(AuditLog)
-            .order_by(desc(AuditLog.created_at))
-            .limit(limit)
-            .offset(offset)
+            select(AuditLog).order_by(desc(AuditLog.created_at)).limit(limit).offset(offset)
         ).all()
     )
 
 
-@router.get(
-    "/api/v1/recovery-points", response_model=list[RecoveryPointView], tags=["recovery"]
-)
+@router.get("/api/v1/recovery-points", response_model=list[RecoveryPointView], tags=["recovery"])
 def list_recovery_points(
     db: DB,
     _: Annotated[User, Depends(require_role(Role.operator))],
@@ -2908,9 +3197,7 @@ def public_settings(
             "database_reference": settings.database_url_file is not None,
             "token_signing_material": settings.jwt_secret.get_secret_value()
             != "development-only-change-me-32-bytes",
-            "field_encryption_material": bool(
-                settings.field_encryption_key.get_secret_value()
-            ),
+            "field_encryption_material": bool(settings.field_encryption_key.get_secret_value()),
             "agent_enrollment_material": settings.agent_enrollment_token.get_secret_value()
             != "development-enrollment-token",
             "trusted_proxy_header_secret": bool(
@@ -2969,7 +3256,7 @@ def claim_agent_identity_version(db: Session, agent: Agent, expected_version: in
             )
             .values(identity_version=Agent.identity_version + 1)
             .execution_options(synchronize_session=False)
-        )
+        ),
     )
     if result.rowcount != 1:
         db.rollback()
@@ -3067,9 +3354,7 @@ def prepare_agent_identity(
         )
         db.commit()
         return existing_rotation
-    if db.scalar(
-        select(AgentIdentity).where(AgentIdentity.certificate_fingerprint == fingerprint)
-    ):
+    if db.scalar(select(AgentIdentity).where(AgentIdentity.certificate_fingerprint == fingerprint)):
         raise HTTPException(status_code=409, detail="certificate already enrolled")
     if db.scalar(
         select(AgentIdentity).where(AgentIdentity.certificate_serial == certificate_serial)
@@ -3131,8 +3416,7 @@ def prepare_agent_identity(
             signing_public_key=payload.signing_public_key,
             certificate_fingerprint=fingerprint,
             certificate_serial=certificate_serial,
-            expires_at=created_at
-            + timedelta(minutes=settings.agent_pending_identity_ttl_minutes),
+            expires_at=created_at + timedelta(minutes=settings.agent_pending_identity_ttl_minutes),
         )
         db.add(identity)
         db.flush()
@@ -3628,9 +3912,7 @@ def enroll_agent(
         )
         if not secrets.compare_digest(fingerprint, trusted_fingerprint):
             raise HTTPException(status_code=401, detail="enrollment certificate mismatch")
-    if db.scalar(
-        select(AgentIdentity).where(AgentIdentity.certificate_fingerprint == fingerprint)
-    ):
+    if db.scalar(select(AgentIdentity).where(AgentIdentity.certificate_fingerprint == fingerprint)):
         raise HTTPException(status_code=409, detail="certificate already enrolled")
     if certificate_serial and db.scalar(
         select(AgentIdentity).where(AgentIdentity.certificate_serial == certificate_serial)
@@ -3787,9 +4069,7 @@ async def agent_heartbeat(
         agent.binary_sha256 = payload.build.binary_sha256
     agent.host.last_seen_at = now
     agent.host.status = "healthy"
-    agent.host.data_state = (
-        "agent_error" if payload.metrics.get("collection_error") else "normal"
-    )
+    agent.host.data_state = "agent_error" if payload.metrics.get("collection_error") else "normal"
     if was_offline:
         write_audit(
             db,
