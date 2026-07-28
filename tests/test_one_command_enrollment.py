@@ -195,11 +195,16 @@ def test_enrollment_rbac_and_group_scope_are_enforced(
         headers=auth(edge_admin),
         json={},
     )
+    wrong_group_status = client.get(
+        f"/api/v1/hosts/{second.json()['id']}/enrollment-sessions/latest",
+        headers=auth(edge_admin),
+    )
 
     assert operator_issue.status_code == 201
     assert viewer_denied.status_code == 403
     assert allowed.status_code == 201
     assert wrong_group.status_code == 403
+    assert wrong_group_status.status_code == 403
     assert "token" not in allowed.json()
     token = command_token(str(allowed.json()["install_command"]))
     status = client.get(

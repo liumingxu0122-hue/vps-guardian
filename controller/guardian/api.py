@@ -2754,18 +2754,24 @@ def _require_enrollment_management(
     host: Host,
     action: Literal["create", "revoke"],
 ) -> None:
+    _require_enrollment_host_scope(user, host)
     if user.role in {Role.owner.value, Role.admin.value}:
-        group_scopes = {
-            scope.removeprefix("group:").removesuffix(":enroll")
-            for scope in user.scopes
-            if scope.startswith("group:") and scope.endswith(":enroll")
-        }
-        if group_scopes and (host.group_name or "") not in group_scopes:
-            raise HTTPException(status_code=403, detail="group enrollment scope denied")
         return
     if user.role == Role.operator.value and action == "create":
         return
     raise HTTPException(status_code=403, detail="enrollment permission denied")
+
+
+def _require_enrollment_host_scope(user: User, host: Host) -> None:
+    if user.role not in {Role.owner.value, Role.admin.value}:
+        return
+    group_scopes = {
+        scope.removeprefix("group:").removesuffix(":enroll")
+        for scope in user.scopes
+        if scope.startswith("group:") and scope.endswith(":enroll")
+    }
+    if group_scopes and (host.group_name or "") not in group_scopes:
+        raise HTTPException(status_code=403, detail="group enrollment scope denied")
 
 
 def _enrollment_session_view(db: Session, token: EnrollmentToken) -> EnrollmentSessionView:
@@ -2834,8 +2840,10 @@ def latest_enrollment_session(
         )
     except EnrollmentRateLimitError as exc:
         raise HTTPException(status_code=429, detail="enrollment rate limit exceeded") from exc
-    if db.get(Host, host_id) is None:
+    host = db.get(Host, host_id)
+    if host is None:
         raise HTTPException(status_code=404, detail="host not found")
+    _require_enrollment_host_scope(user, host)
     token = latest_host_enrollment(db, host_id)
     if token is None:
         raise HTTPException(status_code=404, detail="enrollment session not found")
