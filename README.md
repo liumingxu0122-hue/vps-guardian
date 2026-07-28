@@ -96,9 +96,9 @@ The UI generates the complete command; this non-runnable shape intentionally use
 umask 077; guardian_tmp="$(mktemp -d)" && \
   curl --fail --show-error --location --proto '=https' \
   https://downloads.example.invalid/v0.4.0/install-agent.sh
-# The real UI command verifies the exact SHA-256 before execution and supplies
-# a short-lived <ONE_TIME_ENROLLMENT_TOKEN> through a root-only temporary file.
 ```
+
+The real UI command also verifies the exact SHA-256 before execution and supplies a short-lived `<ONE_TIME_ENROLLMENT_TOKEN>` through a root-only temporary file.
 
 ## Dashboard access
 

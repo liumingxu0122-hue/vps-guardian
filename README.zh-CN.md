@@ -97,9 +97,9 @@ Admin 或 Owner 可在 **主机 → 添加服务器** 中创建与 Host 绑定�
 umask 077; guardian_tmp="$(mktemp -d)" && \
   curl --fail --show-error --location --proto '=https' \
   https://downloads.example.invalid/v0.4.0/install-agent.sh
-# 页面生成的真实命令还会在执行前校验精确 SHA-256，并通过 root-only
-# 临时文件传入短期 <ONE_TIME_ENROLLMENT_TOKEN>。
 ```
+
+页面生成的真实命令还会在执行前校验精确 SHA-256，并通过 root-only 临时文件传入短期 `<ONE_TIME_ENROLLMENT_TOKEN>`。
 
 ## Dashboard 访问
 
