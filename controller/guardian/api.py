@@ -2652,6 +2652,13 @@ def create_enrollment_token(
     user: Annotated[User, Depends(require_role(Role.operator))],
 ) -> EnrollmentTokenView:
     _require_step_up(request)
+    try:
+        enrollment_limiter.check(
+            f"management:issue:{user.id}",
+            settings.enrollment_attempts_per_10m * 10,
+        )
+    except EnrollmentRateLimitError as exc:
+        raise HTTPException(status_code=429, detail="enrollment rate limit exceeded") from exc
     host = db.get(Host, host_id)
     if host is None:
         raise HTTPException(status_code=404, detail="host not found")
@@ -2709,9 +2716,17 @@ def revoke_host_enrollment_token(
     token_id: str,
     request: Request,
     db: DB,
+    settings: Config,
     user: Annotated[User, Depends(require_role(Role.admin))],
 ) -> None:
     _require_step_up(request)
+    try:
+        enrollment_limiter.check(
+            f"management:revoke:{user.id}",
+            settings.enrollment_attempts_per_10m * 10,
+        )
+    except EnrollmentRateLimitError as exc:
+        raise HTTPException(status_code=429, detail="enrollment rate limit exceeded") from exc
     host = db.get(Host, host_id)
     if host is None:
         raise HTTPException(status_code=404, detail="host not found")
@@ -2809,8 +2824,16 @@ def _enrollment_session_view(db: Session, token: EnrollmentToken) -> EnrollmentS
 def latest_enrollment_session(
     host_id: str,
     db: DB,
-    _: Annotated[User, Depends(require_role(Role.viewer))],
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
 ) -> EnrollmentSessionView:
+    try:
+        enrollment_limiter.check(
+            f"management:status:{user.id}",
+            settings.enrollment_attempts_per_10m * 60,
+        )
+    except EnrollmentRateLimitError as exc:
+        raise HTTPException(status_code=429, detail="enrollment rate limit exceeded") from exc
     if db.get(Host, host_id) is None:
         raise HTTPException(status_code=404, detail="host not found")
     token = latest_host_enrollment(db, host_id)
@@ -2942,6 +2965,12 @@ def bootstrap_agent(
     settings: Config,
     enrollment_token: Annotated[str | None, Header(alias="X-Enrollment-Token")] = None,
 ) -> AgentBootstrapResponse:
+    source = _enrollment_source_ip(request, settings)
+    limiter_key = f"{source}:{token_digest(enrollment_token or 'missing')[:16]}"
+    try:
+        enrollment_limiter.check(limiter_key, settings.enrollment_attempts_per_10m)
+    except EnrollmentRateLimitError as exc:
+        raise HTTPException(status_code=429, detail="enrollment rate limit exceeded") from exc
     if settings.environment == "production":
         try:
             require_trusted_agent_gateway(request, settings)
@@ -2958,15 +2987,6 @@ def bootstrap_agent(
             db, request=request, host_id=payload.host_id, reason_code="token_missing"
         )
         raise HTTPException(status_code=401, detail="invalid enrollment token")
-    source = _enrollment_source_ip(request, settings)
-    limiter_key = f"{source}:{token_digest(enrollment_token)[:16]}"
-    try:
-        enrollment_limiter.check(limiter_key, settings.enrollment_attempts_per_10m)
-    except EnrollmentRateLimitError as exc:
-        _record_bootstrap_failure(
-            db, request=request, host_id=payload.host_id, reason_code="rate_limited"
-        )
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
     try:
         validate_agent_csr(payload.csr_pem)
         verify_signing_key_proof(
