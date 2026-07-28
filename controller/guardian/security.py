@@ -168,22 +168,18 @@ def _coded_error(status_code: int, code: str) -> HTTPException:
 
 
 def _same_origin(request: Request, settings: Settings) -> bool:
-    del settings
     origin = request.headers.get("origin")
-    if not origin:
+    if not origin or any(character in origin for character in ", \t\r\n"):
         return False
-    scheme = request.url.scheme.lower()
-    forwarded_proto = request.headers.get("x-forwarded-proto")
-    if forwarded_proto:
-        forwarded_proto = forwarded_proto.strip().lower()
-        if forwarded_proto not in {"http", "https"}:
-            return False
-        scheme = forwarded_proto
-    host = request.headers.get("host", request.url.netloc).strip().lower()
-    if not host or any(character in host for character in "/@, \t\r\n"):
-        return False
-    own_origin = f"{scheme}://{host}".rstrip("/")
-    return secrets.compare_digest(origin.rstrip("/"), own_origin)
+    normalized_origin = origin.rstrip("/")
+    configured_origins = (value.rstrip("/") for value in settings.allowed_origins)
+    if any(
+        secrets.compare_digest(normalized_origin, configured)
+        for configured in configured_origins
+    ):
+        return True
+    own_origin = f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
+    return secrets.compare_digest(normalized_origin, own_origin)
 
 
 def enforce_csrf(request: Request, session: UserSession, settings: Settings) -> None:

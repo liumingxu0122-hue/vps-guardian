@@ -9,8 +9,10 @@ from guardian.config import Settings
 from guardian.database import SessionLocal
 from guardian.main import app
 from guardian.models import User, UserSession
+from guardian.security import _same_origin
 from pydantic import ValidationError
 from sqlalchemy import select
+from starlette.requests import Request
 
 PASSWORD = "correct-horse-battery-staple"
 ORIGIN = "http://testserver"
@@ -122,56 +124,43 @@ def test_preference_cookies_are_not_mistaken_for_authentication(
     assert response.json()["detail"]["code"] == "SESSION_MISSING"
 
 
-def test_csrf_accepts_exact_https_origin_behind_the_staging_proxy(
-    client: TestClient, owner: User
-) -> None:
-    session_secret, csrf = browser_login(client, owner)
-    response = client.post(
-        "/api/v1/auth/activity",
-        headers={
-            "Host": "testserver",
-            "Origin": "https://testserver",
-            "X-Forwarded-Proto": "https",
-            "X-CSRF-Token": csrf,
-            "X-Guardian-Activity-Type": "pointer",
-            "Cookie": (
-                f"guardian_browser_session={session_secret}; guardian_csrf={csrf}"
-            ),
-        },
+def origin_request(origin: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "scheme": "http",
+            "server": ("controller", 8090),
+            "path": "/api/v1/auth/activity",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"controller:8090"),
+                (b"origin", origin.encode()),
+            ],
+        }
     )
-    assert response.status_code == 204
+
+
+def test_csrf_accepts_explicit_staging_origin_behind_reverse_proxies() -> None:
+    settings = Settings(
+        allowed_origins=[
+            "https://guardian.example.test",
+            "https://panel.liuwave.com",
+        ]
+    )
+    assert _same_origin(origin_request("https://panel.liuwave.com"), settings)
 
 
 @pytest.mark.parametrize(
-    ("origin", "forwarded_proto"),
+    "origin",
     [
-        ("https://attacker.example", "https"),
-        ("https://testserver", "https,http"),
-        ("https://testserver", "javascript"),
+        "https://attacker.example",
+        "https://panel.liuwave.com,https://attacker.example",
+        "https://panel.liuwave.com javascript:",
     ],
 )
-def test_csrf_rejects_foreign_origin_and_ambiguous_forwarded_protocol(
-    client: TestClient,
-    owner: User,
-    origin: str,
-    forwarded_proto: str,
-) -> None:
-    session_secret, csrf = browser_login(client, owner)
-    response = client.post(
-        "/api/v1/auth/activity",
-        headers={
-            "Host": "testserver",
-            "Origin": origin,
-            "X-Forwarded-Proto": forwarded_proto,
-            "X-CSRF-Token": csrf,
-            "X-Guardian-Activity-Type": "pointer",
-            "Cookie": (
-                f"guardian_browser_session={session_secret}; guardian_csrf={csrf}"
-            ),
-        },
-    )
-    assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "CSRF_INVALID"
+def test_csrf_rejects_foreign_and_ambiguous_origins(origin: str) -> None:
+    settings = Settings(allowed_origins=["https://panel.liuwave.com"])
+    assert not _same_origin(origin_request(origin), settings)
 
 
 def test_idle_and_absolute_expiry_have_stable_codes(
