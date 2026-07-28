@@ -11,7 +11,7 @@ import type { DashboardSecurity } from '../dashboard'
 import type { User } from '../types'
 import { formatTime } from '../utils'
 
-const { locale } = useI18n()
+const { locale, t } = useI18n()
 const security = ref<DashboardSecurity | null>(null)
 const users = ref<User[]>([])
 const error = ref('')
@@ -23,7 +23,7 @@ async function load(): Promise<void> {
       request<User[]>('/api/v1/users'),
     ])
   } catch {
-    error.value = 'Security summary is temporarily unavailable.'
+    error.value = t('security.unavailable')
   }
 }
 onMounted(load)
@@ -33,13 +33,13 @@ onMounted(load)
   <PageHeader :title="$t('security.title')" :description="$t('security.description')">
     <template #actions><button class="icon-button bordered" type="button" :aria-label="$t('common.refresh')" @click="load"><RefreshCw :size="17" /></button></template>
   </PageHeader>
-  <div v-if="error" class="v3-module-state error-state" role="alert"><strong>{{ error }}</strong><button class="proto-button secondary" type="button" @click="load">Retry</button></div>
+  <div v-if="error" class="v3-module-state error-state" role="alert"><strong>{{ error }}</strong><button class="proto-button secondary" type="button" @click="load">{{ $t('common.retry') }}</button></div>
   <template v-if="security">
     <section class="security-summary-grid">
-      <article><ShieldAlert :size="18" /><span>Uncovered Critical</span><strong>{{ security.controls.uncovered_critical ?? '—' }}</strong></article>
-      <article><ShieldAlert :size="18" /><span>Uncovered High</span><strong>{{ security.controls.uncovered_high ?? '—' }}</strong></article>
-      <article><ShieldCheck :size="18" /><span>Last scan</span><strong>{{ formatTime(security.controls.last_scan_at) }}</strong></article>
-      <article><ShieldCheck :size="18" /><span>Owner TOTP</span><strong>{{ users.filter((user) => user.role === 'owner' && user.totp_enabled).length }} / {{ users.filter((user) => user.role === 'owner').length }}</strong></article>
+      <article><ShieldAlert :size="18" /><span>{{ $t('security.uncoveredCritical') }}</span><strong>{{ security.controls.uncovered_critical ?? '—' }}</strong></article>
+      <article><ShieldAlert :size="18" /><span>{{ $t('security.uncoveredHigh') }}</span><strong>{{ security.controls.uncovered_high ?? '—' }}</strong></article>
+      <article><ShieldCheck :size="18" /><span>{{ $t('security.lastScan') }}</span><strong>{{ formatTime(security.controls.last_scan_at) }}</strong></article>
+      <article><ShieldCheck :size="18" /><span>{{ $t('security.ownerTotp') }}</span><strong>{{ users.filter((user) => user.role === 'owner' && user.totp_enabled).length }} / {{ users.filter((user) => user.role === 'owner').length }}</strong></article>
     </section>
     <section class="settings-section">
       <div class="section-heading"><div><h2>{{ $t('security.controls') }}</h2><span>{{ $t('security.serverEnforced') }}</span></div></div>

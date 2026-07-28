@@ -101,27 +101,39 @@ export function healthTone(value: string): PresentationTone {
 }
 
 export function auditActionLabel(actionCode: string, fallback: string, locale: string): string {
-  const zh: Record<string, string> = {
-    'auth.login': '用户登录',
-    'auth.logout': '用户退出',
-    'auth.login_failed': '登录被拒绝',
-    'session.revoke': '撤销会话',
-    'host.create': '添加主机',
-    'host.update': '更新主机',
-    'host.delete': '移除主机',
-    'host.stale': '主机数据不新鲜',
-    'host.offline': '主机离线',
-    'host.register': '注册主机',
-    'user.create': '创建用户',
-    'user.update': '更新用户',
-    'user.delete': '移除用户',
-    'approval.approved': '批准操作',
-    'approval.created': '创建审批',
-    'approval.rejected': '拒绝操作',
-    'notification.phase4_acceptance': '发送 Phase 4 验收通知',
+  const registry: Record<string, readonly [string, string]> = {
+    'auth.login': ['User signed in', '用户登录'],
+    'auth.logout': ['User signed out', '用户退出'],
+    'auth.login_failed': ['Sign-in rejected', '登录被拒绝'],
+    'auth.recovery_code': ['Recovery code used', '使用恢复码登录'],
+    'auth.step_up': ['Identity confirmed', '完成身份确认'],
+    'session.rename': ['Session device renamed', '重命名会话设备'],
+    'session.revoke': ['Session revoked', '撤销会话'],
+    'session.revoke_others': ['Other sessions revoked', '撤销其他会话'],
+    'totp.setup_begin': ['TOTP setup started', '开始设置 TOTP'],
+    'totp.enable': ['TOTP enabled', '启用 TOTP'],
+    'totp.disable': ['TOTP disabled', '停用 TOTP'],
+    'recovery_codes.generate': ['Recovery codes generated', '生成恢复码'],
+    'recovery_codes.regenerate': ['Recovery codes regenerated', '重新生成恢复码'],
+    'recovery_codes.confirm_saved': ['Recovery codes confirmed saved', '确认恢复码已保存'],
+    'host.create': ['Host added', '添加主机'],
+    'host.update': ['Host updated', '更新主机'],
+    'host.delete': ['Host removed', '移除主机'],
+    'host.stale': ['Host data became stale', '主机数据不新鲜'],
+    'host.offline': ['Host went offline', '主机离线'],
+    'host.register': ['Host registered', '注册主机'],
+    'user.create': ['User created', '创建用户'],
+    'user.update': ['User updated', '更新用户'],
+    'user.delete': ['User removed', '移除用户'],
+    'approval.approved': ['Operation approved', '批准操作'],
+    'approval.created': ['Approval created', '创建审批'],
+    'approval.rejected': ['Operation rejected', '拒绝操作'],
+    'notification.phase4_acceptance': ['Phase 4 acceptance notification sent', '发送 Phase 4 验收通知'],
   }
-  if (locale === 'zh-CN') return zh[actionCode] ?? '未知审计动作'
-  return fallback === 'Unknown audit action' ? 'Unknown audit action' : fallback
+  const pair = registry[actionCode]
+  if (pair) return localized(pair, locale)
+  if (locale === 'zh-CN') return '未知审计动作'
+  return fallback === 'Unknown audit action' ? fallback : 'Unknown audit action'
 }
 
 export function resourceTypeLabel(value: string, locale: string): string {
@@ -192,6 +204,47 @@ const productLabels: Record<string, Record<string, readonly [string, string]>> =
 export function productLabel(domain: keyof typeof productLabels, value: string, locale: string): string {
   const pair = productLabels[domain]?.[value]
   return pair ? localized(pair, locale) : localized(['Other', '其他'], locale)
+}
+
+export function sessionDeviceLabel(value: string, locale: string): string {
+  const [device = 'unknown', browser = 'unknown'] = value.split(':', 2)
+  const devices: Record<string, readonly [string, string]> = {
+    desktop: ['Desktop device', '桌面设备'],
+    mobile: ['Mobile device', '移动设备'],
+    tablet: ['Tablet', '平板设备'],
+    api: ['API client', 'API 客户端'],
+    unknown: ['Unknown device', '未知设备'],
+  }
+  const browsers: Record<string, readonly [string, string]> = {
+    chrome: ['Chrome', 'Chrome'],
+    edge: ['Edge', 'Edge'],
+    firefox: ['Firefox', 'Firefox'],
+    safari: ['Safari', 'Safari'],
+    client: ['Client', '客户端'],
+    unknown: ['Unknown browser', '未知浏览器'],
+  }
+  return `${localized(devices[device] ?? devices.unknown, locale)} / ${localized(browsers[browser] ?? browsers.unknown, locale)}`
+}
+
+export function sessionNetworkLabel(value: string, locale: string): string {
+  const registry: Record<string, readonly [string, string]> = {
+    private: ['Private network', '私有网络'],
+    public_ipv4: ['Public IPv4 network', '公网 IPv4 网络'],
+    public_ipv6: ['Public IPv6 network', '公网 IPv6 网络'],
+    protected: ['Protected network', '受保护网络'],
+  }
+  return localized(registry[value] ?? registry.protected, locale)
+}
+
+export function sessionSignInMethodLabel(value: string, locale: string): string {
+  const registry: Record<string, readonly [string, string]> = {
+    password: ['Password', '密码'],
+    password_totp: ['Password + TOTP', '密码 + TOTP'],
+    recovery_code: ['Recovery code', '恢复码'],
+    api_token: ['API token', 'API Token'],
+    legacy: ['Existing session', '迁移前会话'],
+  }
+  return localized(registry[value] ?? ['Unknown sign-in method', '未知登录方式'], locale)
 }
 
 export function configurationLabel(value: string, locale: string): string {

@@ -188,12 +188,23 @@ class UserSession(Base):
     __table_args__ = (
         CheckConstraint("session_version >= 1", name="ck_user_session_version"),
         CheckConstraint("expires_at > issued_at", name="ck_user_session_expiry"),
+        CheckConstraint(
+            "idle_expires_at <= absolute_expires_at",
+            name="ck_user_session_idle_absolute",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), index=True, unique=True)
+    csrf_secret_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    idle_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    absolute_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    remember_me: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    step_up_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -201,6 +212,12 @@ class UserSession(Base):
     revoke_reason: Mapped[str | None] = mapped_column(String(160), nullable=True)
     user_agent_digest: Mapped[str] = mapped_column(String(64))
     ip_digest: Mapped[str] = mapped_column(String(64))
+    user_agent_summary: Mapped[str] = mapped_column(String(160), default="unknown:unknown")
+    ip_summary: Mapped[str] = mapped_column(String(80), default="protected")
+    created_via: Mapped[str] = mapped_column(String(32), default="api_token")
+    last_activity_type: Mapped[str] = mapped_column(String(64), default="sign_in")
+    device_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    rotated_from_session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     session_version: Mapped[int] = mapped_column(Integer)
 
 

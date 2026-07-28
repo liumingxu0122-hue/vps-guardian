@@ -6,6 +6,14 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Added
 
+- Added RC6 opaque, hash-only browser sessions with independently enforced idle and
+  absolute lifetimes, optional remembered-device lifetime, bounded activity touches,
+  device/session management, current-session step-up, strict same-origin CSRF binding,
+  and reversible migration `0012_persistent_sessions`.
+- Added complete RC6 runtime language preference handling, an accessible anchored
+  language menu, matching `zh-CN`/`en-US` resources, stable localized authentication
+  error codes, test-only pseudo-localization, and bilingual Account Security and
+  identity setup flows.
 - Added the RC5 semantic token layer, compact light/dark App Shell environment
   presentation, shared accessible DataTable, centralized bilingual Presentation
   Registry, responsive Host/Audit records, and progressive-disclosure detail drawers.
@@ -71,6 +79,12 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Security
 
+- Browser authentication no longer stores or sends JWTs from Web Storage. An invalid
+  explicit Bearer credential never falls back to a browser session; database rows
+  store only session/CSRF hashes and privacy-safe device/network summaries.
+- Password, TOTP/recovery, all-session, identity/role, high-risk approval, Agent
+  identity, recovery verification, and notification-secret mutations require a
+  short-lived step-up window in the current browser session.
 - Audit list/export DTOs are explicit allowlists; technical identifiers, internal
   addresses, and redacted change evidence are progressively disclosed, while every
   export and Host batch mutation is independently authorized and audited.

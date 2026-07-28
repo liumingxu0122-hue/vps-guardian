@@ -21,10 +21,18 @@ export interface UserSession {
   user_id: string
   issued_at: string
   expires_at: string
+  last_seen_at: string
+  idle_expires_at: string
+  absolute_expires_at: string
+  remember_me: boolean
+  step_up_until: string | null
   revoked_at: string | null
   revoke_reason: string | null
-  user_agent_digest: string
-  ip_digest: string
+  user_agent_summary: string
+  ip_summary: string
+  created_via: string
+  last_activity_type: string | null
+  device_name: string | null
   current: boolean
 }
 

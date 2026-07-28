@@ -31,7 +31,8 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { dashboard } from '../dashboard'
-import { setLocale, type SupportedLocale } from '../i18n'
+import LanguageMenu from '../components/LanguageMenu.vue'
+import StepUpDialog from '../components/StepUpDialog.vue'
 import { session } from '../session'
 
 const route = useRoute()
@@ -100,19 +101,24 @@ const visibleGroups = computed(() =>
     .filter((group) => group.items.length),
 )
 const stage = computed(() => dashboard.data?.environment.stage ?? 'staging')
+const stageLabel = computed(() =>
+  stage.value === 'staging'
+    ? t('overview.staging')
+    : stage.value === 'production'
+      ? t('overview.production')
+      : t('common.unknown'),
+)
 const version = computed(() => dashboard.data?.environment.version ?? '…')
 const releaseLabel = computed(() => {
   const rc = version.value.match(/rc(\d+)/i)
   if (rc) return `RC${rc[1]}`
-  return version.value.match(/v?(\d+\.\d+\.\d+)/)?.[1] ?? 'Build'
+  return version.value.match(/v?(\d+\.\d+\.\d+)/)?.[1] ?? t('shell.build')
 })
 const buildLabel = computed(() => version.value.match(/-([a-f0-9]{7,40})$/i)?.[1]?.slice(0, 7) ?? '')
 const productionLabel = computed(() =>
   dashboard.data?.environment.production_deployed
-    ? locale.value === 'zh-CN'
-      ? 'Production 已部署'
-      : 'Production deployed'
-    : `Production ${t('overview.notDeployed')}`,
+    ? t('shell.productionDeployed')
+    : t('overview.productionStatus', { status: t('overview.notDeployed') }),
 )
 const paletteItems = computed(() => {
   const query = paletteQuery.value.trim().toLocaleLowerCase()
@@ -149,10 +155,6 @@ function toggleTheme(): void {
 function toggleSidebar(): void {
   sidebarCollapsed.value = !sidebarCollapsed.value
   localStorage.setItem('guardian_sidebar_collapsed', String(sidebarCollapsed.value))
-}
-
-function changeLocale(value: SupportedLocale): void {
-  setLocale(value)
 }
 
 function closeMobileNavigation(): void {
@@ -257,7 +259,7 @@ onBeforeUnmount(() => {
         <button
           class="proto-icon-button proto-sidebar-collapse"
           type="button"
-          :aria-label="sidebarCollapsed ? (locale === 'zh-CN' ? '展开导航' : 'Expand navigation') : (locale === 'zh-CN' ? '折叠导航' : 'Collapse navigation')"
+          :aria-label="sidebarCollapsed ? t('shell.expandNavigation') : t('shell.collapseNavigation')"
           @click="toggleSidebar"
         >
           <PanelLeftOpen v-if="sidebarCollapsed" :size="18" />
@@ -267,7 +269,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="proto-controller-state">
         <span class="proto-health-dot"></span>
-        <div><strong>Controller</strong><span>{{ t('nav.authenticated') }} · {{ dashboard.data?.agents.online ?? '—' }} Agent</span></div>
+        <div><strong>Controller</strong><span>{{ t('nav.authenticated') }} · {{ t('shell.controllerSummary', { count: dashboard.data?.agents.online ?? '—' }) }}</span></div>
       </div>
       <nav class="proto-navigation" :aria-label="t('nav.main')">
         <section v-for="group in visibleGroups" :key="group.label" class="proto-nav-group">
@@ -304,7 +306,7 @@ onBeforeUnmount(() => {
         <div v-if="accountOpen" class="v3-account-menu">
           <RouterLink to="/account-security" @click="accountOpen = false"><ShieldCheck :size="16" />{{ t('nav.accountSecurity') }}</RouterLink>
           <button type="button" @click="toggleTheme"><Sun v-if="theme === 'dark'" :size="16" /><Moon v-else :size="16" />{{ theme === 'dark' ? t('nav.light') : t('nav.dark') }}</button>
-          <button type="button" @click="changeLocale(locale === 'zh-CN' ? 'en-US' : 'zh-CN')"><span class="v3-language-icon">{{ locale === 'zh-CN' ? 'EN' : '中' }}</span>{{ locale === 'zh-CN' ? 'English' : '简体中文' }}</button>
+          <LanguageMenu />
           <a href="/docs" target="_blank" rel="noreferrer"><BookOpenCheck :size="16" />{{ t('nav.apiDocs') }}</a>
           <button type="button" @click="logout"><LogOut :size="16" />{{ t('nav.logout') }}</button>
         </div>
@@ -316,18 +318,18 @@ onBeforeUnmount(() => {
         <button ref="mobileMenuButton" class="proto-icon-button proto-mobile-menu" type="button" :aria-label="t('nav.open')" @click="mobileOpen = true"><Menu :size="20" /></button>
         <button class="proto-environment rc5-environment-button" type="button" :aria-expanded="systemInfoOpen" @click="systemInfoOpen = !systemInfoOpen">
           <span class="proto-environment-dot"></span>
-          <strong>{{ stage }}</strong><span>·</span><span>{{ releaseLabel }}</span><span v-if="buildLabel">·</span><span v-if="buildLabel" class="mono">{{ buildLabel }}</span><CircleHelp :size="14" aria-hidden="true" />
+          <strong>{{ stageLabel }}</strong><span>·</span><span>{{ releaseLabel }}</span><span v-if="buildLabel">·</span><span v-if="buildLabel" class="mono">{{ buildLabel }}</span><CircleHelp :size="14" aria-hidden="true" />
         </button>
-        <section v-if="systemInfoOpen" class="rc5-system-popover" role="dialog" :aria-label="locale === 'zh-CN' ? '系统信息' : 'System information'">
-          <div><span>{{ locale === 'zh-CN' ? '环境' : 'Environment' }}</span><strong>{{ stage }}</strong></div>
-          <div><span>{{ locale === 'zh-CN' ? '版本' : 'Release' }}</span><strong>{{ version }}</strong></div>
-          <div><span>Production</span><strong>{{ productionLabel }}</strong></div>
+        <section v-if="systemInfoOpen" class="rc5-system-popover" role="dialog" :aria-label="t('shell.systemInformation')">
+          <div><span>{{ t('shell.environment') }}</span><strong>{{ stageLabel }}</strong></div>
+          <div><span>{{ t('shell.release') }}</span><strong>{{ version }}</strong></div>
+          <div><span>{{ t('overview.production') }}</span><strong>{{ productionLabel }}</strong></div>
         </section>
         <div class="proto-top-actions">
           <button class="proto-search-trigger" type="button" :aria-label="t('nav.search')" @click="openPalette"><Search :size="16" /><span>{{ t('nav.search') }}</span><kbd>Ctrl K</kbd></button>
           <a class="proto-icon-button" href="/docs" target="_blank" rel="noreferrer" :aria-label="t('nav.apiDocs')"><CircleHelp :size="18" /></a>
           <button class="proto-icon-button" type="button" :aria-label="theme === 'light' ? t('nav.switchDark') : t('nav.switchLight')" @click="toggleTheme"><Moon v-if="theme === 'light'" :size="18" /><Sun v-else :size="18" /></button>
-          <button class="proto-locale-button" type="button" :aria-label="t('locale.select')" @click="changeLocale(locale === 'zh-CN' ? 'en-US' : 'zh-CN')">{{ locale === 'zh-CN' ? '中' : 'EN' }}</button>
+          <LanguageMenu />
         </div>
       </header>
 
@@ -349,7 +351,7 @@ onBeforeUnmount(() => {
           class="v3-palette"
           role="dialog"
           aria-modal="true"
-          :aria-label="locale === 'zh-CN' ? '搜索与导航' : 'Search and navigate'"
+          :aria-label="t('shell.searchNavigate')"
         >
           <label class="v3-palette-search">
             <Search :size="18" aria-hidden="true" />
@@ -357,7 +359,7 @@ onBeforeUnmount(() => {
               ref="paletteInput"
               v-model="paletteQuery"
               type="search"
-              :placeholder="locale === 'zh-CN' ? '搜索页面与操作…' : 'Search pages and actions…'"
+              :placeholder="t('nav.searchPlaceholder')"
             />
             <kbd>Esc</kbd>
           </label>
@@ -372,10 +374,11 @@ onBeforeUnmount(() => {
               <span><strong>{{ item.label }}</strong><small>{{ item.group }}</small></span>
               <ChevronRight :size="15" aria-hidden="true" />
             </button>
-            <p v-if="!paletteItems.length">{{ locale === 'zh-CN' ? '没有匹配页面' : 'No matching pages' }}</p>
+            <p v-if="!paletteItems.length">{{ t('shell.noMatchingPages') }}</p>
           </div>
         </section>
       </div>
     </Teleport>
+    <StepUpDialog />
   </div>
 </template>

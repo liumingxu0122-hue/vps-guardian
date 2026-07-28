@@ -20,31 +20,42 @@ def test_readiness_is_public_and_queries_critical_tables(client: TestClient) -> 
 
 def test_login_sets_secure_shape_cookies(client: TestClient, owner: User) -> None:
     response = client.post(
-        "/api/v1/auth/login",
-        json={"email": owner.email, "password": "correct-horse-battery-staple"},
+        "/api/v1/auth/browser/login",
+        json={
+            "email": owner.email,
+            "password": "correct-horse-battery-staple",
+            "remember_me": False,
+        },
     )
     assert response.status_code == 200
     cookies = response.headers.get_list("set-cookie")
-    assert any("guardian_session=" in cookie and "HttpOnly" in cookie for cookie in cookies)
-    assert any("SameSite=strict" in cookie for cookie in cookies)
-    assert response.json()["token_type"] == "bearer"
+    assert any("guardian_browser_session=" in cookie and "HttpOnly" in cookie for cookie in cookies)
+    assert any("guardian_csrf=" in cookie and "HttpOnly" not in cookie for cookie in cookies)
+    assert any("SameSite=lax" in cookie for cookie in cookies)
+    assert "access_token" not in response.json()
 
 
 def test_csrf_required_for_cookie_mutation(client: TestClient, owner: User) -> None:
     login = client.post(
-        "/api/v1/auth/login",
-        json={"email": owner.email, "password": "correct-horse-battery-staple"},
+        "/api/v1/auth/browser/login",
+        json={
+            "email": owner.email,
+            "password": "correct-horse-battery-staple",
+            "remember_me": False,
+        },
     )
     assert login.status_code == 200
+    csrf = client.cookies.get("guardian_csrf")
     response = client.post(
         "/api/v1/hosts",
         json={"name": "node-1", "address": "192.0.2.10"},
+        headers={"X-CSRF-Token": csrf, "Origin": "https://not-guardian.example"},
     )
     assert response.status_code == 403
     response = client.post(
         "/api/v1/hosts",
         json={"name": "node-1", "address": "192.0.2.10"},
-        headers={"X-CSRF-Token": login.json()["csrf_token"]},
+        headers={"X-CSRF-Token": csrf, "Origin": "http://testserver"},
     )
     assert response.status_code == 201
 

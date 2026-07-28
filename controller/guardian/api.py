@@ -63,6 +63,7 @@ from guardian.enrollment import (
 from guardian.events import event_broker
 from guardian.identity import (
     active_recovery_code_count,
+    as_utc,
     consume_recovery_code,
     create_user_session,
     forced_setup_required,
@@ -133,6 +134,8 @@ from guardian.schemas import (
     AuditEvidenceView,
     AuditPresentationView,
     AuditView,
+    BrowserLoginRequest,
+    BrowserLoginResponse,
     EnrollmentTokenIssue,
     EnrollmentTokenView,
     HealthResponse,
@@ -160,6 +163,9 @@ from guardian.schemas import (
     ServiceCheckResultView,
     ServiceCheckUpdate,
     ServiceCheckView,
+    SessionDeviceRename,
+    StepUpRequest,
+    StepUpView,
     TotpConfirmRequest,
     TotpSetupView,
     UserCreate,
@@ -183,6 +189,14 @@ from guardian.security import (
     verify_user_password,
 )
 from guardian.service_semantics import classify_service_observation
+from guardian.sessions import (
+    BROWSER_SESSION_COOKIE,
+    CSRF_COOKIE,
+    create_browser_session,
+    rotate_browser_session,
+    session_cookie_ttl,
+    touch_browser_session,
+)
 from guardian.stability import StabilityWindow, build_stability_report
 from guardian.tasking import create_agent_task, serialize_agent_task
 
@@ -239,14 +253,12 @@ def readiness(db: DB) -> HealthResponse:
     return HealthResponse(version=__version__)
 
 
-@router.post("/api/v1/auth/login", response_model=LoginResponse, tags=["auth"])
-def login(
+def _authenticate_login(
     payload: LoginRequest,
     request: Request,
-    response: Response,
     db: DB,
     settings: Config,
-) -> LoginResponse:
+) -> tuple[User, int | None, str, str]:
     source_ip = request.client.host if request.client else "unknown"
     email = payload.email.strip().lower()
     limiter_key = f"{source_ip}:{email}"
@@ -278,7 +290,10 @@ def login(
             source_ip=source_ip,
         )
         db.commit()
-        raise HTTPException(status_code=401, detail="invalid credentials")
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "AUTH_INVALID_CREDENTIALS", "params": {}},
+        )
     if payload.totp_code and payload.recovery_code:
         write_audit(
             db,
@@ -291,7 +306,10 @@ def login(
             source_ip=source_ip,
         )
         db.commit()
-        raise HTTPException(status_code=401, detail="invalid credentials")
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "AUTH_INVALID_CREDENTIALS", "params": {}},
+        )
 
     recovery_remaining: int | None = None
     if payload.recovery_code:
@@ -316,7 +334,10 @@ def login(
         )
         if not recovered:
             db.commit()
-            raise HTTPException(status_code=401, detail="invalid credentials")
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "AUTH_INVALID_CREDENTIALS", "params": {}},
+            )
     elif user.totp_enabled:
         if not verify_totp(user, payload.totp_code, settings):
             write_audit(
@@ -330,7 +351,10 @@ def login(
                 source_ip=source_ip,
             )
             db.commit()
-            raise HTTPException(status_code=401, detail="invalid credentials")
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "AUTH_INVALID_CREDENTIALS", "params": {}},
+            )
         secret = decrypt_sensitive(user.totp_secret_encrypted or "", settings)
         user.last_totp_counter = totp_counter_for_code(secret, payload.totp_code)
     elif payload.totp_code:
@@ -345,8 +369,26 @@ def login(
             source_ip=source_ip,
         )
         db.commit()
-        raise HTTPException(status_code=401, detail="invalid credentials")
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "AUTH_INVALID_CREDENTIALS", "params": {}},
+        )
 
+    return user, recovery_remaining, limiter_key, source_ip
+
+
+@router.post("/api/v1/auth/login", response_model=LoginResponse, tags=["auth"])
+def login(
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    db: DB,
+    settings: Config,
+) -> LoginResponse:
+    del response
+    user, recovery_remaining, limiter_key, source_ip = _authenticate_login(
+        payload, request, db, settings
+    )
     user.last_login_at = datetime.now(UTC)
     auth_session = create_user_session(
         db,
@@ -356,24 +398,6 @@ def login(
     )
     token, ttl = create_access_token(user, settings, session_id=auth_session.id)
     csrf = generate_csrf_token()
-    response.set_cookie(
-        "guardian_session",
-        token,
-        max_age=ttl,
-        httponly=True,
-        secure=settings.secure_cookies,
-        samesite="strict",
-        path="/",
-    )
-    response.set_cookie(
-        "guardian_csrf",
-        csrf,
-        max_age=ttl,
-        httponly=False,
-        secure=settings.secure_cookies,
-        samesite="strict",
-        path="/",
-    )
     write_audit(
         db,
         actor=user,
@@ -394,11 +418,122 @@ def login(
     )
 
 
+def _set_browser_cookies(
+    response: Response,
+    *,
+    session_secret: str,
+    csrf_secret: str,
+    row: UserSession,
+    settings: Settings,
+) -> None:
+    ttl = session_cookie_ttl(row)
+    expires = datetime.now(UTC) + timedelta(seconds=ttl)
+    response.set_cookie(
+        BROWSER_SESSION_COOKIE,
+        session_secret,
+        max_age=ttl,
+        expires=expires,
+        httponly=True,
+        secure=settings.secure_cookies,
+        samesite="lax",
+        path="/",
+    )
+    response.set_cookie(
+        CSRF_COOKIE,
+        csrf_secret,
+        max_age=ttl,
+        expires=expires,
+        httponly=False,
+        secure=settings.secure_cookies,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _delete_browser_cookies(response: Response, settings: Settings) -> None:
+    response.delete_cookie(
+        BROWSER_SESSION_COOKIE,
+        path="/",
+        secure=settings.secure_cookies,
+        httponly=True,
+        samesite="lax",
+    )
+    response.delete_cookie(
+        CSRF_COOKIE,
+        path="/",
+        secure=settings.secure_cookies,
+        httponly=False,
+        samesite="lax",
+    )
+    # Retire the pre-RC6 browser JWT cookie with its original deletion scope.
+    response.delete_cookie("guardian_session", path="/")
+
+
+@router.post(
+    "/api/v1/auth/browser/login",
+    response_model=BrowserLoginResponse,
+    tags=["auth"],
+)
+def browser_login(
+    payload: BrowserLoginRequest,
+    request: Request,
+    response: Response,
+    db: DB,
+    settings: Config,
+) -> BrowserLoginResponse:
+    user, recovery_remaining, limiter_key, source_ip = _authenticate_login(
+        payload, request, db, settings
+    )
+    user.last_login_at = datetime.now(UTC)
+    created_via = (
+        "recovery_code"
+        if payload.recovery_code
+        else "password_totp"
+        if payload.totp_code
+        else "password"
+    )
+    credentials = create_browser_session(
+        db,
+        user=user,
+        request=request,
+        settings=settings,
+        remember_me=payload.remember_me,
+        created_via=created_via,
+        device_name=payload.device_name,
+    )
+    write_audit(
+        db,
+        actor=user,
+        action="auth.login",
+        resource_type="user",
+        resource_id=user.id,
+        outcome="success",
+        source_ip=source_ip,
+    )
+    db.commit()
+    login_limiter.reset(limiter_key)
+    _set_browser_cookies(
+        response,
+        session_secret=credentials.session_secret,
+        csrf_secret=credentials.csrf_secret,
+        row=credentials.row,
+        settings=settings,
+    )
+    return BrowserLoginResponse(
+        identity_setup_required=forced_setup_required(user),
+        recovery_codes_remaining=recovery_remaining,
+        remember_me=credentials.row.remember_me,
+        idle_expires_at=credentials.row.idle_expires_at,
+        absolute_expires_at=credentials.row.absolute_expires_at,
+    )
+
+
 @router.post("/api/v1/auth/logout", status_code=204, tags=["auth"])
 def logout(
     request: Request,
     response: Response,
     db: DB,
+    settings: Config,
     user: Annotated[User, Depends(require_role(Role.viewer))],
 ) -> None:
     auth_session = cast(UserSession, request.state.auth_session)
@@ -416,8 +551,7 @@ def logout(
         source_ip=request.client.host if request.client else None,
     )
     db.commit()
-    response.delete_cookie("guardian_session", path="/")
-    response.delete_cookie("guardian_csrf", path="/")
+    _delete_browser_cookies(response, settings)
 
 
 @router.get("/api/v1/auth/me", response_model=UserView, tags=["auth"])
@@ -425,37 +559,82 @@ def me(user: Annotated[User, Depends(require_role(Role.viewer))]) -> User:
     return user
 
 
-def _replace_auth_cookies(
-    response: Response,
-    *,
-    token: str,
-    csrf: str,
-    ttl: int,
-    settings: Settings,
+@router.post("/api/v1/auth/activity", status_code=204, tags=["auth"])
+def record_browser_activity(
+    request: Request,
+    db: DB,
+    settings: Config,
+    _: Annotated[User, Depends(require_role(Role.viewer))],
+    activity_type: Annotated[
+        Literal["pointer", "keyboard"],
+        Header(alias="X-Guardian-Activity-Type"),
+    ],
 ) -> None:
-    response.set_cookie(
-        "guardian_session",
-        token,
-        max_age=ttl,
-        httponly=True,
-        secure=settings.secure_cookies,
-        samesite="strict",
-        path="/",
+    if getattr(request.state, "auth_method", "") != "browser":
+        return
+    current = cast(UserSession, request.state.auth_session)
+    if touch_browser_session(
+        db,
+        row=current,
+        settings=settings,
+        activity_type=activity_type,
+    ):
+        db.commit()
+
+
+@router.post("/api/v1/auth/step-up", response_model=StepUpView, tags=["auth"])
+def create_step_up_window(
+    payload: StepUpRequest,
+    request: Request,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> StepUpView:
+    if getattr(request.state, "auth_method", "") != "browser":
+        raise HTTPException(status_code=403, detail={"code": "STEP_UP_REQUIRED", "params": {}})
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=401, detail={"code": "PASSWORD_INVALID", "params": {}})
+    if user.totp_enabled:
+        if not verify_totp(user, payload.totp_code, settings):
+            raise HTTPException(status_code=401, detail={"code": "TOTP_INVALID", "params": {}})
+        secret = decrypt_sensitive(user.totp_secret_encrypted or "", settings)
+        user.last_totp_counter = totp_counter_for_code(secret, payload.totp_code)
+    current = cast(UserSession, request.state.auth_session)
+    now = datetime.now(UTC)
+    current.step_up_until = min(
+        now + timedelta(minutes=settings.session_step_up_minutes),
+        as_utc(current.absolute_expires_at),
     )
-    response.set_cookie(
-        "guardian_csrf",
-        csrf,
-        max_age=ttl,
-        httponly=False,
-        secure=settings.secure_cookies,
-        samesite="strict",
-        path="/",
+    write_audit(
+        db,
+        actor=user,
+        action="auth.step_up",
+        resource_type="session",
+        resource_id=current.id,
+        outcome="success",
+        details={"window_minutes": settings.session_step_up_minutes},
+        source_ip=request.client.host if request.client else None,
     )
+    db.commit()
+    return StepUpView(step_up_until=current.step_up_until)
+
+
+def _require_step_up(request: Request) -> None:
+    if getattr(request.state, "auth_method", "") != "browser":
+        return
+    current = cast(UserSession, request.state.auth_session)
+    if current.step_up_until is None:
+        raise HTTPException(status_code=403, detail={"code": "STEP_UP_REQUIRED", "params": {}})
+    expires_at = current.step_up_until
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at <= datetime.now(UTC):
+        raise HTTPException(status_code=403, detail={"code": "STEP_UP_EXPIRED", "params": {}})
 
 
 @router.post(
     "/api/v1/auth/change-password",
-    response_model=LoginResponse,
+    response_model=LoginResponse | BrowserLoginResponse,
     tags=["auth"],
 )
 def change_password(
@@ -465,7 +644,8 @@ def change_password(
     db: DB,
     settings: Config,
     user: Annotated[User, Depends(require_role(Role.viewer))],
-) -> LoginResponse:
+) -> LoginResponse | BrowserLoginResponse:
+    _require_step_up(request)
     source_ip = request.client.host if request.client else None
     db.refresh(user, with_for_update=True)
     if not verify_password(payload.current_password, user.password_hash):
@@ -507,9 +687,18 @@ def change_password(
         except_session_id=current.id,
     )
     current.session_version = user.session_version
-    token, ttl = create_access_token(user, settings, session_id=current.id)
-    csrf = generate_csrf_token()
-    _replace_auth_cookies(response, token=token, csrf=csrf, ttl=ttl, settings=settings)
+    browser_credentials = None
+    if getattr(request.state, "auth_method", "") == "browser":
+        browser_credentials = rotate_browser_session(
+            db,
+            row=current,
+            user=user,
+            request=request,
+            settings=settings,
+            reason="password_changed_rotated",
+        )
+    else:
+        current.session_version = user.session_version
     write_audit(
         db,
         actor=user,
@@ -521,6 +710,22 @@ def change_password(
         source_ip=source_ip,
     )
     db.commit()
+    if browser_credentials is not None:
+        _set_browser_cookies(
+            response,
+            session_secret=browser_credentials.session_secret,
+            csrf_secret=browser_credentials.csrf_secret,
+            row=browser_credentials.row,
+            settings=settings,
+        )
+        return BrowserLoginResponse(
+            identity_setup_required=forced_setup_required(user),
+            remember_me=browser_credentials.row.remember_me,
+            idle_expires_at=browser_credentials.row.idle_expires_at,
+            absolute_expires_at=browser_credentials.row.absolute_expires_at,
+        )
+    token, ttl = create_access_token(user, settings, session_id=current.id)
+    csrf = generate_csrf_token()
     return LoginResponse(
         access_token=token,
         csrf_token=csrf,
@@ -695,7 +900,10 @@ def confirm_recovery_codes(
             source_ip=request.client.host if request.client else None,
         )
         db.commit()
-        raise HTTPException(status_code=409, detail="recovery codes are not available")
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "RECOVERY_CODES_EMPTY", "params": {"remaining": 0}},
+        )
     user.recovery_codes_confirmed_at = datetime.now(UTC)
     write_audit(
         db,
@@ -739,7 +947,10 @@ def regenerate_recovery_codes(
     _require_reauthentication_audited(
         db, user, payload.current_password, "recovery_codes.regenerate", request
     )
-    if not verify_totp(user, payload.totp_code, settings):
+    if (
+        getattr(request.state, "auth_method", "") != "browser"
+        and not verify_totp(user, payload.totp_code, settings)
+    ):
         write_audit(
             db,
             actor=user,
@@ -752,8 +963,9 @@ def regenerate_recovery_codes(
         )
         db.commit()
         raise HTTPException(status_code=401, detail="TOTP confirmation is invalid")
-    secret = decrypt_sensitive(user.totp_secret_encrypted or "", settings)
-    user.last_totp_counter = totp_counter_for_code(secret, payload.totp_code)
+    if getattr(request.state, "auth_method", "") != "browser":
+        secret = decrypt_sensitive(user.totp_secret_encrypted or "", settings)
+        user.last_totp_counter = totp_counter_for_code(secret, payload.totp_code)
     codes = generate_recovery_code_batch(db, user=user, settings=settings)
     user.recovery_codes_confirmed_at = None
     write_audit(
@@ -779,7 +991,10 @@ def disable_totp(
     user: Annotated[User, Depends(require_role(Role.viewer))],
 ) -> None:
     _require_reauthentication_audited(db, user, payload.current_password, "totp.disable", request)
-    if not user.totp_enabled or not verify_totp(user, payload.totp_code, settings):
+    if not user.totp_enabled or (
+        getattr(request.state, "auth_method", "") != "browser"
+        and not verify_totp(user, payload.totp_code, settings)
+    ):
         write_audit(
             db,
             actor=user,
@@ -842,16 +1057,98 @@ def own_sessions(
     user: Annotated[User, Depends(require_role(Role.viewer))],
 ) -> list[UserSessionView]:
     current = cast(UserSession, request.state.auth_session)
+    now = datetime.now(UTC)
     rows = db.scalars(
         select(UserSession)
         .where(
             UserSession.user_id == user.id,
             UserSession.revoked_at.is_(None),
-            UserSession.expires_at > datetime.now(UTC),
+            UserSession.idle_expires_at > now,
+            UserSession.absolute_expires_at > now,
         )
         .order_by(desc(UserSession.issued_at))
     ).all()
     return [_session_view(row, current.id) for row in rows]
+
+
+@router.post("/api/v1/auth/sessions/revoke-others", status_code=204, tags=["auth"])
+def revoke_own_other_sessions(
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> None:
+    _require_step_up(request)
+    current = cast(UserSession, request.state.auth_session)
+    revoke_sessions(
+        db,
+        user_id=user.id,
+        actor_id=user.id,
+        reason="self_revoke_others",
+        except_session_id=current.id,
+    )
+    write_audit(
+        db,
+        actor=user,
+        action="session.revoke_others",
+        resource_type="session",
+        resource_id=current.id,
+        outcome="success",
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+
+
+@router.post("/api/v1/auth/sessions/current/revoke", status_code=204, tags=["auth"])
+def revoke_current_session(
+    request: Request,
+    response: Response,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> None:
+    current = cast(UserSession, request.state.auth_session)
+    current.revoked_at = datetime.now(UTC)
+    current.revoked_by = user.id
+    current.revoke_reason = "self_revoke_current"
+    write_audit(
+        db,
+        actor=user,
+        action="session.revoke",
+        resource_type="session",
+        resource_id=current.id,
+        outcome="success",
+        details={"reason": "self_revoke_current"},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    _delete_browser_cookies(response, settings)
+
+
+@router.patch(
+    "/api/v1/auth/sessions/current",
+    response_model=UserSessionView,
+    tags=["auth"],
+)
+def rename_current_session(
+    payload: SessionDeviceRename,
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> UserSessionView:
+    current = cast(UserSession, request.state.auth_session)
+    current.device_name = payload.device_name.strip()
+    current.last_activity_type = "device_renamed"
+    write_audit(
+        db,
+        actor=user,
+        action="session.rename",
+        resource_type="session",
+        resource_id=current.id,
+        outcome="success",
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return _session_view(current, current.id)
 
 
 @router.delete("/api/v1/auth/sessions/{session_id}", status_code=204, tags=["auth"])
@@ -861,6 +1158,7 @@ def revoke_own_other_session(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.viewer))],
 ) -> None:
+    _require_step_up(request)
     current = cast(UserSession, request.state.auth_session)
     if session_id == current.id:
         raise HTTPException(status_code=409, detail="use logout to revoke the current session")
@@ -901,6 +1199,7 @@ def list_user_sessions(
 ) -> list[UserSessionView]:
     if db.get(User, user_id) is None:
         raise HTTPException(status_code=404, detail="user not found")
+    now = datetime.now(UTC)
     return [
         _session_view(row)
         for row in db.scalars(
@@ -908,7 +1207,8 @@ def list_user_sessions(
             .where(
                 UserSession.user_id == user_id,
                 UserSession.revoked_at.is_(None),
-                UserSession.expires_at > datetime.now(UTC),
+                UserSession.idle_expires_at > now,
+                UserSession.absolute_expires_at > now,
             )
             .order_by(desc(UserSession.issued_at))
         ).all()
@@ -927,14 +1227,17 @@ def revoke_user_session(
     db: DB,
     actor: Annotated[User, Depends(require_role(Role.admin))],
 ) -> None:
+    _require_step_up(request)
     target_user = db.get(User, user_id)
+    now = datetime.now(UTC)
     active_sessions = list(
         db.scalars(
             select(UserSession)
             .where(
                 UserSession.user_id == user_id,
                 UserSession.revoked_at.is_(None),
-                UserSession.expires_at > datetime.now(UTC),
+                UserSession.idle_expires_at > now,
+                UserSession.absolute_expires_at > now,
             )
             .order_by(UserSession.id)
             .with_for_update()
@@ -1062,6 +1365,9 @@ def _require_reauthentication_audited(
     action: str,
     request: Request,
 ) -> None:
+    _require_step_up(request)
+    if getattr(request.state, "auth_method", "") == "browser":
+        return
     if verify_password(password, actor.password_hash):
         return
     write_audit(
@@ -1090,6 +1396,7 @@ def create_user(
     db: DB,
     actor: Annotated[User, Depends(require_role(Role.owner))],
 ) -> User:
+    _require_step_up(request)
     if db.scalar(select(User).where(User.email == payload.email)):
         write_audit(
             db,
@@ -1159,6 +1466,7 @@ def update_user(
     db: DB,
     actor: Annotated[User, Depends(require_role(Role.owner))],
 ) -> User:
+    _require_step_up(request)
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="user not found")
@@ -1236,6 +1544,7 @@ def revoke_user_sessions(
     db: DB,
     actor: Annotated[User, Depends(require_role(Role.admin))],
 ) -> None:
+    _require_step_up(request)
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="user not found")
@@ -1707,6 +2016,7 @@ def create_enrollment_token(
     settings: Config,
     user: Annotated[User, Depends(require_role(Role.admin))],
 ) -> EnrollmentTokenView:
+    _require_step_up(request)
     host = db.get(Host, host_id)
     if host is None:
         raise HTTPException(status_code=404, detail="host not found")
@@ -1761,6 +2071,7 @@ def revoke_host_enrollment_token(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.admin))],
 ) -> None:
+    _require_step_up(request)
     try:
         token = revoke_enrollment_token(db, token_id=token_id, host_id=host_id)
     except EnrollmentTokenError as exc:
@@ -2504,6 +2815,7 @@ def create_notification_channel(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.admin))],
 ) -> NotificationChannel:
+    _require_step_up(request)
     if db.scalar(select(NotificationChannel).where(NotificationChannel.name == payload.name)):
         raise HTTPException(status_code=409, detail="notification channel name already exists")
     channel = NotificationChannel(**payload.model_dump())
@@ -3101,6 +3413,7 @@ async def decide_approval(
         }
         and approval.risk_level >= 2
     ):
+        _require_step_up(request)
         if not payload.rollback_confirmed:
             raise HTTPException(
                 status_code=422,
@@ -3536,6 +3849,7 @@ def verify_recovery_point(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.owner))],
 ) -> RecoveryPointPromotionView:
+    _require_step_up(request)
     attestation = RecoveryVerificationAttestation(
         schema_version=payload.attestation.schema_version,
         verifier=payload.attestation.verifier,
@@ -3793,6 +4107,7 @@ def prepare_agent_identity(
     settings: Config,
     user: Annotated[User, Depends(require_role(Role.owner))],
 ) -> AgentIdentity:
+    _require_step_up(request)
     agent = lock_active_agent(db, agent_id)
     fingerprint = normalize_certificate_fingerprint(payload.certificate_fingerprint)
     certificate_serial = normalize_certificate_serial(payload.certificate_serial)
@@ -4056,6 +4371,7 @@ def activate_agent_identity(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.owner))],
 ) -> AgentIdentity:
+    _require_step_up(request)
     agent = lock_active_agent(db, agent_id)
     identity = db.scalar(
         select(AgentIdentity).where(
@@ -4151,6 +4467,7 @@ def revoke_retiring_agent_identity(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.owner))],
 ) -> AgentIdentity:
+    _require_step_up(request)
     agent = lock_active_agent(db, agent_id)
     identity = db.scalar(
         select(AgentIdentity).where(
@@ -4226,6 +4543,7 @@ def retire_pending_agent_identity(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.owner))],
 ) -> AgentIdentity:
+    _require_step_up(request)
     agent = lock_active_agent(db, agent_id)
     identity = db.scalar(
         select(AgentIdentity).where(
@@ -4329,6 +4647,7 @@ def revoke_agent(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.owner))],
 ) -> None:
+    _require_step_up(request)
     agent = lock_active_agent(db, agent_id)
     active_identity = db.scalar(
         select(AgentIdentity).where(

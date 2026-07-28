@@ -13,7 +13,7 @@ import { auditActionLabel, auditActorLabel, auditSourceLabel, healthTone, produc
 import type { AuditEvidence, AuditPresentation } from '../types'
 import { formatTime } from '../utils'
 
-const { locale } = useI18n()
+const { locale, t } = useI18n()
 const entries = ref<AuditPresentation[]>([])
 const selected = ref<AuditPresentation | null>(null)
 const evidence = ref<AuditEvidence | null>(null)
@@ -60,7 +60,7 @@ async function load(): Promise<void> {
   try {
     entries.value = await request<AuditPresentation[]>(`/api/v1/audit/presentation?limit=${pageSize}&offset=${(page.value - 1) * pageSize}`)
   } catch {
-    loadError.value = locale.value === 'zh-CN' ? '无法载入审计记录。' : 'Could not load audit records.'
+    loadError.value = t('audit.loadFailed')
   } finally {
     loading.value = false
   }
@@ -121,7 +121,7 @@ onMounted(load)
     <span class="rc5-result-count">{{ filtered.length }} / {{ entries.length }}</span>
   </div>
   <p v-if="loadError" class="inline-error" role="alert">{{ loadError }}</p>
-  <div v-else-if="loading" class="row-skeletons" aria-label="Loading"><span v-for="item in 8" :key="item"></span></div>
+  <div v-else-if="loading" class="row-skeletons" :aria-label="$t('audit.loading')"><span v-for="item in 8" :key="item"></span></div>
   <DataTable v-else-if="filtered.length" :label="$t('audit.title')" :selected-key="selected?.event_id" :page="page" :page-size="pageSize" :total="totalHint" @previous="changePage(-1)" @next="changePage(1)">
     <template #head><tr><th aria-sort="descending">{{ $t('audit.time') }}</th><th>{{ locale === 'zh-CN' ? '严重程度' : 'Severity' }}</th><th>{{ $t('audit.action') }}</th><th>{{ $t('audit.resource') }}</th><th>{{ $t('audit.actor') }}</th><th>{{ $t('audit.source') }}</th><th>{{ $t('audit.outcome') }}</th></tr></template>
     <tr v-for="entry in filtered" :key="entry.event_id" :class="{ 'is-selected': selected?.event_id === entry.event_id }" :aria-selected="selected?.event_id === entry.event_id" tabindex="0" @click="selectEntry(entry)" @keydown.enter="selectEntry(entry)">

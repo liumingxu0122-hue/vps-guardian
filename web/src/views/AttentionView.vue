@@ -54,8 +54,8 @@ onMounted(load)
     <select v-model="severity" :aria-label="$t('attention.severity')">
       <option value="all">{{ $t('common.all') }}</option>
       <option value="critical">{{ $t('status.critical') }}</option>
-      <option value="warning">Warning</option>
-      <option value="info">Info</option>
+      <option value="warning">{{ $t('attention.warning') }}</option>
+      <option value="info">{{ $t('attention.info') }}</option>
     </select>
     <select v-model="kind" :aria-label="$t('attention.type')">
       <option value="all">{{ $t('attention.allTypes') }}</option>

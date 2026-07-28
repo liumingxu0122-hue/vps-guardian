@@ -131,7 +131,7 @@ onMounted(load)
       <td :data-label="locale === 'zh-CN' ? '操作' : 'Actions'"><span class="row-actions">
         <button v-if="isOwner" class="icon-button bordered" type="button" :aria-label="$t('users.manage')" @click="openEdit(user)"><Pencil :size="14" /></button>
         <button v-if="isOwner" class="icon-button bordered" type="button" :aria-label="$t('users.rotatePassword')" @click="openPassword(user)"><KeyRound :size="14" /></button>
-        <button class="icon-button bordered" type="button" aria-label="View active sessions" @click="openSessions(user)"><Monitor :size="14" /></button>
+        <button class="icon-button bordered" type="button" :aria-label="$t('users.viewSessions')" @click="openSessions(user)"><Monitor :size="14" /></button>
         <button class="secondary-button" type="button" @click="revokeSessions(user)">{{ $t('users.revokeSessions') }}</button>
       </span></td>
     </tr>
@@ -139,9 +139,9 @@ onMounted(load)
   <dialog ref="dialog" class="modal-dialog compact">
     <form method="dialog" class="dialog-header"><div><h2>{{ $t('users.add') }}</h2><p>{{ $t('users.ownerOnly') }}</p></div><button class="icon-button"><X :size="18" /></button></form>
     <form class="dialog-form" @submit.prevent="createUser">
-      <label><span>Email</span><input v-model="form.email" type="email" required /></label>
+      <label><span>{{ $t('users.email') }}</span><input v-model="form.email" type="email" required /></label>
       <label><span>{{ $t('login.password') }}</span><input v-model="form.password" type="password" minlength="14" required /></label>
-      <label><span>{{ $t('users.role') }}</span><select v-model="form.role"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="admin">Admin</option><option value="owner">Owner</option></select></label>
+      <label><span>{{ $t('users.role') }}</span><select v-model="form.role"><option value="viewer">{{ $t('status.viewer') }}</option><option value="operator">{{ $t('status.operator') }}</option><option value="admin">{{ $t('status.admin') }}</option><option value="owner">{{ $t('status.owner') }}</option></select></label>
       <label><span>{{ $t('users.scopes') }}</span><input v-model="form.scopes" placeholder="hosts:read, alerts:read" /></label>
       <div class="dialog-actions"><button class="secondary-button" type="button" @click="dialog?.close()">{{ $t('common.cancel') }}</button><button class="primary-button" type="submit" :disabled="submitting">{{ $t('users.create') }}</button></div>
     </form>
@@ -149,7 +149,7 @@ onMounted(load)
   <dialog ref="editDialog" class="modal-dialog compact">
     <form method="dialog" class="dialog-header"><div><h2>{{ $t('users.manage') }}</h2><p>{{ selected?.email }}</p></div><button class="icon-button"><X :size="18" /></button></form>
     <form class="dialog-form" @submit.prevent="saveUser">
-      <label><span>{{ $t('users.role') }}</span><select v-model="editForm.role"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="admin">Admin</option><option value="owner">Owner</option></select></label>
+      <label><span>{{ $t('users.role') }}</span><select v-model="editForm.role"><option value="viewer">{{ $t('status.viewer') }}</option><option value="operator">{{ $t('status.operator') }}</option><option value="admin">{{ $t('status.admin') }}</option><option value="owner">{{ $t('status.owner') }}</option></select></label>
       <label class="toggle-line"><input v-model="editForm.is_active" type="checkbox" /><span>{{ $t('users.activeAccount') }}</span></label>
       <label><span>{{ $t('users.scopes') }}</span><input v-model="editForm.scopes" /></label>
       <label><span>{{ $t('users.currentPassword') }}</span><input v-model="editForm.current_password" type="password" minlength="12" required /></label>
@@ -167,14 +167,14 @@ onMounted(load)
     </form>
   </dialog>
   <dialog ref="sessionsDialog" class="modal-dialog compact">
-    <form method="dialog" class="dialog-header"><div><h2>Active sessions</h2><p>{{ selected?.email }}</p></div><button class="icon-button"><X :size="18" /></button></form>
+    <form method="dialog" class="dialog-header"><div><h2>{{ $t('users.activeSessions') }}</h2><p>{{ selected?.email }}</p></div><button class="icon-button" :aria-label="$t('common.close')"><X :size="18" /></button></form>
     <div class="dialog-form">
-      <p class="permission-note">Session identifiers are opaque; browser and IP values are stored only as keyed digests.</p>
+      <p class="permission-note">{{ $t('users.sessionsHint') }}</p>
       <div v-for="row in activeSessions" :key="row.id" class="session-row">
-        <span><strong>{{ row.current ? 'Current session' : 'Other signed-in session' }}</strong><small>{{ formatTime(row.issued_at) }} → {{ formatTime(row.expires_at) }}</small></span>
-        <button class="danger-button" type="button" @click="revokeSingleSession(row.id)">Revoke</button>
+        <span><strong>{{ row.device_name || (row.current ? $t('accountSecurity.current') : $t('accountSecurity.other')) }}</strong><small>{{ formatTime(row.last_seen_at) }} → {{ formatTime(row.absolute_expires_at) }}</small></span>
+        <button class="danger-button" type="button" @click="revokeSingleSession(row.id)">{{ $t('users.revoke') }}</button>
       </div>
-      <p v-if="!activeSessions.length">No active sessions.</p>
+      <p v-if="!activeSessions.length">{{ $t('users.noActiveSessions') }}</p>
     </div>
   </dialog>
 </template>

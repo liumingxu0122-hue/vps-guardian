@@ -15,7 +15,7 @@ const hosts = ref<Host[]>([])
 const verifiedOnly = ref(true)
 const copied = ref('')
 const filtered = computed(() => points.value.filter((point) => !verifiedOnly.value || point.verified))
-const hostName = (id: string): string => hosts.value.find((host) => host.id === id)?.name ?? 'Unavailable host'
+const hostName = (id: string): string => hosts.value.find((host) => host.id === id)?.name ?? '—'
 
 async function load(): Promise<void> {
   ;[points.value, hosts.value] = await Promise.all([
@@ -46,7 +46,7 @@ onMounted(load)
     <label class="toggle-control"><input v-model="verifiedOnly" type="checkbox" /><span></span>{{ $t('recovery.verifiedOnly') }}</label>
   </div>
   <DataTable :label="$t('recovery.title')" :empty="!filtered.length" :total="filtered.length">
-    <template #head><tr><th>Service</th><th>Host</th><th>Status</th><th>{{ $t('recovery.created') }}</th><th>Restore</th></tr></template>
+    <template #head><tr><th>{{ $t('recovery.service') }}</th><th>{{ $t('recovery.host') }}</th><th>{{ $t('recovery.status') }}</th><th>{{ $t('recovery.created') }}</th><th>{{ $t('recovery.restore') }}</th></tr></template>
     <tr v-for="point in filtered" :key="point.id">
       <td><span class="rc5-resource"><span class="rc5-resource-icon"><DatabaseBackup :size="18" /></span><strong>{{ point.service_name }}</strong></span></td>
       <td>{{ hostName(point.host_id) }}</td>

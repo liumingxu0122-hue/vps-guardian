@@ -13,6 +13,9 @@ import {
   regionLabel,
   resourceTypeLabel,
   resultLabel,
+  sessionDeviceLabel,
+  sessionNetworkLabel,
+  sessionSignInMethodLabel,
 } from './presentationRegistry'
 
 describe('presentation registry', () => {
@@ -77,5 +80,14 @@ describe('presentation registry', () => {
     expect(productLabel('attention', 'private_state', 'zh-CN')).toBe('其他')
     expect(auditSourceLabel('internal_service', 'zh-CN')).toBe('Controller 内部服务')
     expect(auditActorLabel('system', 'Controller service', 'zh-CN')).toBe('Controller 服务')
+  })
+
+  it('localizes structured browser-session presentation values', () => {
+    expect(sessionDeviceLabel('desktop:chrome', 'zh-CN')).toBe('桌面设备 / Chrome')
+    expect(sessionNetworkLabel('private', 'zh-CN')).toBe('私有网络')
+    expect(sessionSignInMethodLabel('password_totp', 'zh-CN')).toBe('密码 + TOTP')
+    expect(sessionDeviceLabel('new-device:new-browser', 'en-US')).toBe(
+      'Unknown device / Unknown browser',
+    )
   })
 })

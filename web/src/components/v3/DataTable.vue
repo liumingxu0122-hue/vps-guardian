@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = withDefaults(defineProps<{
   label: string
@@ -27,6 +28,7 @@ const props = withDefaults(defineProps<{
   tableClass: '',
 })
 const emit = defineEmits<{ previous: []; next: []; retry: [] }>()
+const { t } = useI18n()
 const region = ref<HTMLElement | null>(null)
 const pageCount = computed(() => Math.max(1, Math.ceil(props.total / props.pageSize)))
 
@@ -47,16 +49,16 @@ function onKeydown(event: KeyboardEvent): void {
 
 <template>
   <div ref="region" class="rc5-data-region" :class="[`density-${density}`, { 'has-sticky-header': stickyHeader, virtualized }]" @keydown="onKeydown">
-    <div v-if="error" class="rc5-table-state" role="alert"><strong>{{ error }}</strong><button type="button" class="secondary-button" @click="emit('retry')">Retry</button></div>
+    <div v-if="error" class="rc5-table-state" role="alert"><strong>{{ error }}</strong><button type="button" class="secondary-button" @click="emit('retry')">{{ t('common.retry') }}</button></div>
     <div v-else-if="loading" class="rc5-table-state" aria-live="polite"><span v-for="row in 5" :key="row" class="rc5-table-skeleton"></span></div>
-    <div v-else-if="empty" class="rc5-table-state"><slot name="empty">No matching records.</slot></div>
+    <div v-else-if="empty" class="rc5-table-state"><slot name="empty">{{ t('common.noMatchingRecords') }}</slot></div>
     <table v-else class="rc5-data-table" :class="tableClass" :aria-label="label" :aria-rowcount="total || undefined">
       <thead><slot name="head"></slot></thead>
       <tbody><slot></slot></tbody>
     </table>
     <footer v-if="total > pageSize" class="rc5-table-pagination">
-      <span>{{ page }} / {{ pageCount }}</span>
-      <div><button type="button" class="secondary-button" :disabled="page <= 1" @click="emit('previous')">Previous</button><button type="button" class="secondary-button" :disabled="page >= pageCount" @click="emit('next')">Next</button></div>
+      <span>{{ t('common.pageOf', { page, pageCount }) }}</span>
+      <div><button type="button" class="secondary-button" :disabled="page <= 1" @click="emit('previous')">{{ t('common.previous') }}</button><button type="button" class="secondary-button" :disabled="page >= pageCount" @click="emit('next')">{{ t('common.next') }}</button></div>
     </footer>
   </div>
 </template>

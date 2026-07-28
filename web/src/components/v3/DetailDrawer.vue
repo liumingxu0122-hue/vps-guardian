@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { X } from '@lucide/vue'
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   open: boolean
@@ -8,6 +9,7 @@ const props = defineProps<{
   title: string
 }>()
 const emit = defineEmits<{ close: [] }>()
+const { t } = useI18n()
 const drawer = ref<HTMLElement | null>(null)
 let previousFocus: HTMLElement | null = null
 
@@ -84,7 +86,7 @@ onBeforeUnmount(() => {
           <p>{{ eyebrow }}</p>
           <h2>{{ title }}</h2>
         </div>
-        <button class="proto-icon-button" type="button" aria-label="Close details" @click="emit('close')">
+        <button class="proto-icon-button" type="button" :aria-label="t('common.close')" @click="emit('close')">
           <X :size="19" />
         </button>
       </header>

@@ -44,6 +44,32 @@ class LoginResponse(BaseModel):
     recovery_codes_remaining: int | None = None
 
 
+class BrowserLoginRequest(LoginRequest):
+    remember_me: bool = False
+    device_name: str | None = Field(default=None, max_length=120)
+
+
+class BrowserLoginResponse(BaseModel):
+    identity_setup_required: bool
+    recovery_codes_remaining: int | None = None
+    remember_me: bool
+    idle_expires_at: datetime
+    absolute_expires_at: datetime
+
+
+class StepUpRequest(BaseModel):
+    current_password: str = Field(min_length=12, max_length=256)
+    totp_code: str | None = Field(default=None, pattern=r"^\d{6}$")
+
+
+class StepUpView(BaseModel):
+    step_up_until: datetime
+
+
+class SessionDeviceRename(BaseModel):
+    device_name: str = Field(min_length=1, max_length=120)
+
+
 class UserView(ORMModel):
     id: str
     email: str
@@ -157,10 +183,18 @@ class UserSessionView(ORMModel):
     user_id: str
     issued_at: datetime
     expires_at: datetime
+    last_seen_at: datetime
+    idle_expires_at: datetime
+    absolute_expires_at: datetime
+    remember_me: bool
+    step_up_until: datetime | None
     revoked_at: datetime | None
     revoke_reason: str | None
-    user_agent_digest: str
-    ip_digest: str
+    user_agent_summary: str
+    ip_summary: str
+    created_via: str
+    last_activity_type: str | None
+    device_name: str | None
     current: bool = False
 
 

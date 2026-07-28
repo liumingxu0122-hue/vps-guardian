@@ -403,9 +403,15 @@ async function mockAuthenticated(
   options: MockOptions = {},
 ): Promise<Map<string, number>> {
   const counts = new Map<string, number>()
+  if (options.locale) {
+    await page.context().addCookies([{
+      name: 'guardian_locale',
+      value: options.locale,
+      url: 'http://127.0.0.1:4173',
+      sameSite: 'Lax',
+    }])
+  }
   await page.addInitScript(({ locale, theme }) => {
-    sessionStorage.setItem('guardian_token', 'playwright-session')
-    if (locale && !localStorage.getItem('guardian_locale')) localStorage.setItem('guardian_locale', locale)
     if (!localStorage.getItem('guardian_theme')) localStorage.setItem('guardian_theme', theme)
   }, { locale: options.locale, theme: options.theme ?? 'light' })
   await page.route('**/api/v1/**', async (route) => {
@@ -849,6 +855,13 @@ test('anonymous and stale sessions are quiet, single-shot, and preserve deep lin
   page.on('request', (request) => {
     if (new URL(request.url()).pathname === '/api/v1/auth/me') meRequests += 1
   })
+  await page.context().addCookies([{
+    name: 'guardian_browser_session',
+    value: 'stale-opaque-session',
+    url: 'http://127.0.0.1:4173',
+    sameSite: 'Lax',
+    httpOnly: true,
+  }])
   await mockAnonymous(page)
   await page.goto('/users')
   await expect(page).toHaveURL(/\/login\?redirect=\/users$/)
@@ -885,16 +898,17 @@ test('login and logout return to a protected, quiet signed-out state', async ({ 
       })
       return
     }
-    if (path === '/api/v1/auth/login') {
+    if (path === '/api/v1/auth/browser/login') {
       authenticated = true
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          access_token: 'new-session',
-          csrf_token: 'new-csrf',
           identity_setup_required: false,
           recovery_codes_remaining: null,
+          remember_me: false,
+          idle_expires_at: '2026-07-28T20:00:00Z',
+          absolute_expires_at: '2026-08-04T08:00:00Z',
         }),
       })
       return
@@ -951,13 +965,270 @@ test('mobile navigation locks background, closes with Escape, and returns focus'
 test('locale and theme controls persist after reload', async ({ page }) => {
   await mockAuthenticated(page, { theme: 'dark' })
   await page.goto('/overview')
-  await page.locator('.proto-locale-button').click()
+  await page.getByRole('button', { name: 'Language' }).click()
+  await page.getByRole('menuitemradio', { name: /Simplified Chinese/ }).click()
   await expect(page.getByRole('heading', { name: '运行概览' })).toBeVisible()
   await page.getByRole('button', { name: '切换到亮色模式' }).click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
   await page.reload()
   await expect(page.getByRole('heading', { name: '运行概览' })).toBeVisible()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+})
+
+test('language popover switches in place and preserves route, query, and focus', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'en-US', theme: 'light' })
+  await page.goto('/hosts?group=core')
+  const trigger = page.getByRole('button', { name: 'Language' })
+  await trigger.click()
+  await expect(page.getByRole('menu')).toBeVisible()
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL(/\/hosts\?group=core$/)
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
+  await expect(page.getByRole('button', { name: '语言' })).toBeFocused()
+  await page.reload()
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
+})
+
+test('account security session management captures both locales at desktop and mobile widths', async ({ browser }) => {
+  for (const locale of ['zh-CN', 'en-US'] as const) {
+    for (const viewport of [{ width: 1366, height: 900 }, { width: 390, height: 844 }]) {
+      const context = await browser.newContext({ viewport })
+      const page = await context.newPage()
+      const runtimeErrors: string[] = []
+      page.on('pageerror', (error) => runtimeErrors.push(error.message))
+      page.on('console', (message) => {
+        if (message.type() === 'error') runtimeErrors.push(message.text())
+      })
+      await mockAuthenticated(page, { locale, theme: 'light' })
+      await page.route('**/api/v1/auth/sessions', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([{
+            id: 'session-current',
+            user_id: user.id,
+            issued_at: '2026-07-28T08:00:00Z',
+            expires_at: '2026-08-04T08:00:00Z',
+            last_seen_at: '2026-07-28T08:20:00Z',
+            idle_expires_at: '2026-07-28T20:20:00Z',
+            absolute_expires_at: '2026-08-04T08:00:00Z',
+            remember_me: false,
+            step_up_until: null,
+            revoked_at: null,
+            revoke_reason: null,
+            user_agent_summary: 'desktop:chrome',
+            ip_summary: 'private',
+            created_via: 'password_totp',
+            last_activity_type: 'pointer',
+            device_name: 'Workstation',
+            current: true,
+          }]),
+        })
+      })
+      await page.route('**/api/v1/auth/recovery-codes', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ remaining: 8, low: false }),
+        })
+      })
+      await page.goto('/account-security')
+      await expect(page.getByRole('heading', {
+        name: locale === 'zh-CN' ? '账户安全' : 'Account security',
+      })).toBeVisible()
+      await expect(page.locator('html')).toHaveAttribute('lang', locale)
+      await expectNoHorizontalOverflow(page)
+      if (locale === 'en-US' && viewport.width === 390) {
+        const summary = page.locator('.rc6-session-summary small')
+        await expect(summary).toContainText('Password + TOTP')
+        await expect(summary).toContainText('Standard')
+        expect(await summary.evaluate((element) => ({
+          fits: element.scrollWidth <= element.clientWidth,
+          whiteSpace: getComputedStyle(element).whiteSpace,
+        }))).toEqual({ fits: true, whiteSpace: 'normal' })
+        expect(await summary.evaluate((element) => {
+          const parent = element.getBoundingClientRect()
+          return [...element.children].every((child) => {
+            const bounds = child.getBoundingClientRect()
+            return bounds.left >= parent.left
+              && bounds.right <= parent.right + 1
+              && bounds.top >= parent.top
+              && bounds.bottom <= parent.bottom + 1
+          })
+        })).toBe(true)
+      }
+      expect(runtimeErrors).toEqual([])
+      await capture(page, `rc6-account-security-${locale}-${viewport.width}`)
+      if (locale === 'zh-CN' && viewport.width === 1366) {
+        await page.getByRole('button', { name: '语言' }).click()
+        await expect(page.getByRole('menu')).toBeVisible()
+        await capture(page, 'rc6-language-menu-expanded-zh-1366')
+      }
+      await context.close()
+    }
+  }
+})
+
+test('test-only en-XA exposes clipping across critical routes without entering the language menu', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  const page = await context.newPage()
+  await mockAuthenticated(page, { locale: 'en-US', theme: 'light' })
+  await page.goto('/overview?__locale=en-XA')
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en-XA')
+  for (const route of ['/overview', '/hosts', '/audit', '/approvals', '/account-security']) {
+    await page.goto(`${route}?__locale=en-XA`)
+    await expectNoHorizontalOverflow(page)
+    const languageButton = page.locator('button[aria-haspopup="menu"]')
+    await expect(languageButton).toBeVisible()
+    await languageButton.click()
+    await expect(page.getByRole('menuitemradio')).toHaveCount(2)
+    await expect(page.getByRole('menu')).not.toContainText('en-XA')
+    await page.keyboard.press('Escape')
+    await capture(page, `rc6-pseudo-${route.slice(1)}-390`)
+  }
+  await context.close()
+
+  const anonymousContext = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  const anonymousPage = await anonymousContext.newPage()
+  await mockAnonymous(anonymousPage)
+  await anonymousPage.goto('/login?__locale=en-XA')
+  await expect(anonymousPage.locator('html')).toHaveAttribute('lang', 'en-XA')
+  await expectNoHorizontalOverflow(anonymousPage)
+  await capture(anonymousPage, 'rc6-pseudo-login-390')
+  await anonymousContext.close()
+})
+
+test('sensitive browser action opens localized step-up and returns focus', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'en-US', theme: 'light' })
+  await page.route('**/api/v1/auth/sessions', async (route) => {
+    if (route.request().method() === 'GET') {
+      const base = {
+        user_id: user.id,
+        issued_at: '2026-07-28T08:00:00Z',
+        expires_at: '2026-08-04T08:00:00Z',
+        last_seen_at: '2026-07-28T08:20:00Z',
+        idle_expires_at: '2026-07-28T20:20:00Z',
+        absolute_expires_at: '2026-08-04T08:00:00Z',
+        remember_me: false,
+        step_up_until: null,
+        revoked_at: null,
+        revoke_reason: null,
+        user_agent_summary: 'desktop:chrome',
+        ip_summary: 'private',
+        created_via: 'password_totp',
+        last_activity_type: 'pointer',
+        device_name: null,
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          { ...base, id: 'session-current', current: true, device_name: 'Workstation' },
+          { ...base, id: 'session-other', current: false, device_name: 'Laptop' },
+        ]),
+      })
+      return
+    }
+    await route.fallback()
+  })
+  await page.route('**/api/v1/auth/sessions/revoke-others', async (route) => {
+    await route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: { code: 'STEP_UP_REQUIRED', params: {} } }),
+    })
+  })
+  await page.route('**/api/v1/auth/step-up', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ step_up_until: '2026-07-28T08:30:00Z' }),
+    })
+  })
+  page.on('dialog', (dialog) => dialog.accept())
+  await page.goto('/account-security')
+  const action = page.getByRole('button', { name: 'Sign out other devices' })
+  await action.click()
+  const stepUpDialog = page.getByRole('dialog', { name: 'Confirm your identity' })
+  await expect(stepUpDialog).toBeVisible()
+  await page.keyboard.press('Shift+Tab')
+  await expect(stepUpDialog.getByRole('button', { name: 'Close' })).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(stepUpDialog.getByRole('button', { name: 'Confirm identity' })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(stepUpDialog.getByRole('button', { name: 'Close' })).toBeFocused()
+  const accessibility = await new AxeBuilder({ page }).include('.rc6-step-up-dialog').analyze()
+  expect(
+    accessibility.violations.filter((violation) =>
+      ['critical', 'serious'].includes(violation.impact ?? ''),
+    ),
+  ).toEqual([])
+  await page.getByLabel('Current password').last().fill('a-long-owner-password')
+  await page.getByLabel('Fresh TOTP code').last().fill('123456')
+  await stepUpDialog.getByRole('button', { name: 'Confirm identity' }).click()
+  await expect(stepUpDialog).toBeHidden()
+  await expect(action).toBeFocused()
+  await capture(page, 'rc6-account-security-step-up-en-1366')
+})
+
+test('step-up dialog is localized in Chinese', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'zh-CN', theme: 'light' })
+  await page.route('**/api/v1/auth/sessions', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{
+        id: 'session-current',
+        user_id: user.id,
+        issued_at: '2026-07-28T08:00:00Z',
+        expires_at: '2026-08-04T08:00:00Z',
+        last_seen_at: '2026-07-28T08:20:00Z',
+        idle_expires_at: '2026-07-28T20:20:00Z',
+        absolute_expires_at: '2026-08-04T08:00:00Z',
+        remember_me: false,
+        step_up_until: null,
+        revoked_at: null,
+        revoke_reason: null,
+        user_agent_summary: 'desktop:chrome',
+        ip_summary: 'private',
+        created_via: 'password_totp',
+        last_activity_type: 'pointer',
+        device_name: 'Workstation',
+        current: true,
+      }, {
+        id: 'session-other',
+        user_id: user.id,
+        issued_at: '2026-07-27T08:00:00Z',
+        expires_at: '2026-08-03T08:00:00Z',
+        last_seen_at: '2026-07-28T07:20:00Z',
+        idle_expires_at: '2026-07-28T19:20:00Z',
+        absolute_expires_at: '2026-08-03T08:00:00Z',
+        remember_me: false,
+        step_up_until: null,
+        revoked_at: null,
+        revoke_reason: null,
+        user_agent_summary: 'mobile:safari',
+        ip_summary: 'protected',
+        created_via: 'password_totp',
+        last_activity_type: 'pointer',
+        device_name: 'Phone',
+        current: false,
+      }]),
+    })
+  })
+  await page.route('**/api/v1/auth/sessions/revoke-others', async (route) => {
+    await route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: { code: 'STEP_UP_REQUIRED', params: {} } }),
+    })
+  })
+  page.on('dialog', (dialog) => dialog.accept())
+  await page.goto('/account-security')
+  await page.getByRole('button', { name: '退出其他设备' }).click()
+  await expect(page.getByRole('dialog', { name: '确认身份' })).toBeVisible()
+  await capture(page, 'rc6-account-security-step-up-zh-1366')
 })
 
 test('critical V3 routes have no serious axe accessibility violations', async ({ page }) => {
