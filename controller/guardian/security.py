@@ -172,7 +172,17 @@ def _same_origin(request: Request, settings: Settings) -> bool:
     origin = request.headers.get("origin")
     if not origin:
         return False
-    own_origin = f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
+    scheme = request.url.scheme.lower()
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    if forwarded_proto:
+        forwarded_proto = forwarded_proto.strip().lower()
+        if forwarded_proto not in {"http", "https"}:
+            return False
+        scheme = forwarded_proto
+    host = request.headers.get("host", request.url.netloc).strip().lower()
+    if not host or any(character in host for character in "/@, \t\r\n"):
+        return False
+    own_origin = f"{scheme}://{host}".rstrip("/")
     return secrets.compare_digest(origin.rstrip("/"), own_origin)
 
 

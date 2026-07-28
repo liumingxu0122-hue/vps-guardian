@@ -122,6 +122,58 @@ def test_preference_cookies_are_not_mistaken_for_authentication(
     assert response.json()["detail"]["code"] == "SESSION_MISSING"
 
 
+def test_csrf_accepts_exact_https_origin_behind_the_staging_proxy(
+    client: TestClient, owner: User
+) -> None:
+    session_secret, csrf = browser_login(client, owner)
+    response = client.post(
+        "/api/v1/auth/activity",
+        headers={
+            "Host": "testserver",
+            "Origin": "https://testserver",
+            "X-Forwarded-Proto": "https",
+            "X-CSRF-Token": csrf,
+            "X-Guardian-Activity-Type": "pointer",
+            "Cookie": (
+                f"guardian_browser_session={session_secret}; guardian_csrf={csrf}"
+            ),
+        },
+    )
+    assert response.status_code == 204
+
+
+@pytest.mark.parametrize(
+    ("origin", "forwarded_proto"),
+    [
+        ("https://attacker.example", "https"),
+        ("https://testserver", "https,http"),
+        ("https://testserver", "javascript"),
+    ],
+)
+def test_csrf_rejects_foreign_origin_and_ambiguous_forwarded_protocol(
+    client: TestClient,
+    owner: User,
+    origin: str,
+    forwarded_proto: str,
+) -> None:
+    session_secret, csrf = browser_login(client, owner)
+    response = client.post(
+        "/api/v1/auth/activity",
+        headers={
+            "Host": "testserver",
+            "Origin": origin,
+            "X-Forwarded-Proto": forwarded_proto,
+            "X-CSRF-Token": csrf,
+            "X-Guardian-Activity-Type": "pointer",
+            "Cookie": (
+                f"guardian_browser_session={session_secret}; guardian_csrf={csrf}"
+            ),
+        },
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "CSRF_INVALID"
+
+
 def test_idle_and_absolute_expiry_have_stable_codes(
     client: TestClient, owner: User
 ) -> None:
