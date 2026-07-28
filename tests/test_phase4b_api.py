@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from datetime import UTC, datetime, timedelta
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -25,6 +26,12 @@ def auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def enrollment_token(command: str) -> str:
+    match = re.search(r"printf %s ([A-Za-z0-9._~-]{32,512}) ", command)
+    assert match is not None
+    return match.group(1)
+
+
 def test_host_lifecycle_and_one_time_agent_enrollment(
     client: TestClient, owner_token: str
 ) -> None:
@@ -46,8 +53,9 @@ def test_host_lifecycle_and_one_time_agent_enrollment(
         json={"expires_in_minutes": 10},
     )
     assert issued.status_code == 201
-    one_time_token = issued.json()["token"]
-    assert one_time_token not in issued.json()["install_command"]
+    assert "token" not in issued.json()
+    one_time_token = enrollment_token(issued.json()["install_command"])
+    assert issued.json()["install_command"].count(one_time_token) == 1
     assert "--enrollment-token-file" in issued.json()["install_command"]
 
     private_key = Ed25519PrivateKey.generate()

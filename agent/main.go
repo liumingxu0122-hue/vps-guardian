@@ -100,6 +100,9 @@ func executeCLI(
 		printBuildInfo(stdout, info)
 		return 0
 	}
+	if len(arguments) > 0 && arguments[0] == "bootstrap" {
+		return executeBootstrapCLI(arguments[1:], stdout, stderr)
+	}
 	flags := flag.NewFlagSet("guardian-agent", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String(

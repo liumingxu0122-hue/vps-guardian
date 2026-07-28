@@ -133,6 +133,25 @@ class AgentIdentityState(StrEnum):
     retired = "retired"
 
 
+class EnrollmentStatus(StrEnum):
+    waiting = "waiting"
+    installer_downloaded = "installer_downloaded"
+    installer_verified = "installer_verified"
+    prerequisites_checked = "prerequisites_checked"
+    agent_downloaded = "agent_downloaded"
+    agent_verified = "agent_verified"
+    local_key_generated = "local_key_generated"
+    csr_submitted = "csr_submitted"
+    certificate_issued = "certificate_issued"
+    service_installed = "service_installed"
+    service_started = "service_started"
+    heartbeat_received = "heartbeat_received"
+    completed = "completed"
+    failed = "failed"
+    expired = "expired"
+    revoked = "revoked"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -254,6 +273,10 @@ class Host(Base):
     group_name: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     tags: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     labels: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    desired_os_family: Mapped[str] = mapped_column(
+        String(32), default="auto", server_default="auto"
+    )
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -534,17 +557,94 @@ class PortTrafficRuntimeState(Base):
 class EnrollmentToken(Base):
     __tablename__ = "enrollment_tokens"
     __table_args__ = (
+        UniqueConstraint(
+            "progress_token_hash",
+            name="uq_enrollment_tokens_progress_token_hash",
+        ),
         CheckConstraint("length(token_hash) = 64", name="ck_enrollment_token_hash_length"),
+        CheckConstraint(
+            "progress_token_hash IS NULL OR length(progress_token_hash) = 64",
+            name="ck_enrollment_progress_token_hash_length",
+        ),
+        CheckConstraint(
+            "status IN ('waiting', 'installer_downloaded', 'installer_verified', "
+            "'prerequisites_checked', 'agent_downloaded', 'agent_verified', "
+            "'local_key_generated', 'csr_submitted', 'certificate_issued', "
+            "'service_installed', 'service_started', 'heartbeat_received', "
+            "'completed', 'failed', 'expired', 'revoked')",
+            name="ck_enrollment_token_status",
+        ),
+        CheckConstraint(
+            "status_sequence >= 0 AND status_sequence <= 12",
+            name="ck_enrollment_token_status_sequence",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     host_id: Mapped[str] = mapped_column(ForeignKey("hosts.id", ondelete="CASCADE"), index=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    progress_token_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    status: Mapped[str] = mapped_column(
+        String(32), default=EnrollmentStatus.waiting.value, server_default="waiting", index=True
+    )
+    status_sequence: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    status_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    source_cidr: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    os_family: Mapped[str] = mapped_column(
+        String(32), default="auto", server_default="auto"
+    )
+    installer_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_step: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    rolled_back: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class EnrollmentEvent(Base):
+    __tablename__ = "enrollment_events"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('waiting', 'installer_downloaded', 'installer_verified', "
+            "'prerequisites_checked', 'agent_downloaded', 'agent_verified', "
+            "'local_key_generated', 'csr_submitted', 'certificate_issued', "
+            "'service_installed', 'service_started', 'heartbeat_received', "
+            "'completed', 'failed', 'expired', 'revoked')",
+            name="ck_enrollment_event_status",
+        ),
+        CheckConstraint(
+            "status_sequence >= 0 AND status_sequence <= 12",
+            name="ck_enrollment_event_status_sequence",
+        ),
+        UniqueConstraint(
+            "enrollment_id",
+            "status",
+            name="uq_enrollment_event_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    enrollment_id: Mapped[str] = mapped_column(
+        ForeignKey("enrollment_tokens.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(32))
+    status_sequence: Mapped[int] = mapped_column(Integer)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    rolled_back: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
 
 class ServiceCheck(Base):

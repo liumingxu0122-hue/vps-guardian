@@ -13,6 +13,15 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
   dedicated nftables table and TC handle, while the Agent remains non-root with
   `NoNewPrivileges`; enforcement, reset, and egress shaping require independent
   high-risk approval and host-bound expiring signed tasks.
+- Added fail-closed, host-bound 10-minute Agent enrollment sessions, hash-only
+  bootstrap and progress credentials, optional source CIDR restriction, monotonic
+  installation timelines, immediate revoke/regenerate, and reversible migration
+  `0013_agent_enrollment`.
+- Added the bilingual **Add server** wizard and a fixed-version `amd64`/`arm64`
+  installer for Ubuntu, Debian, Rocky/Alma/RHEL, Fedora, and Alpine. The Agent
+  generates TLS/signing keys and its CSR locally, verifies returned identity
+  material, runs non-root under systemd/OpenRC, and performs Agent-scoped rollback.
+
 - Added RC6 opaque, hash-only browser sessions with independently enforced idle and
   absolute lifetimes, optional remembered-device lifetime, bounded activity touches,
   device/session management, current-session step-up, strict same-origin CSRF binding,

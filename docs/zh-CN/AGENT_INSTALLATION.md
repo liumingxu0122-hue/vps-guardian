@@ -2,11 +2,13 @@
 
 [English](../en/AGENT_INSTALLATION.md) | [简体中文](AGENT_INSTALLATION.md)
 
+Staging 首选流程为 [Agent 一条命令注册](ONE_COMMAND_AGENT_ENROLLMENT.md)。以下步骤继续作为受保护的手工兜底方案。
+
 先在 Dashboard 创建主机记录，再生成该主机的短期注册包。通过受保护通道传输固定版本的 Agent 二进制、校验和、Controller 公钥、服务器 CA，以及权限为 `0600` 的注册 Token 文件。禁止把 Token 放入命令参数或长期配置。
 
 以 root 身份执行生成的 `scripts/install-agent.sh` 命令。安装器会校验二进制和服务器 CA，在 Agent 主机本地生成 P-256 TLS 私钥、CSR 和 Ed25519 签名私钥，再通过 Agent Gateway 提交 CSR。私钥永远不会离开 Agent 主机。请求完成后 Token 文件会被删除，而且不能重复使用。
 
-身份文件按代际保存在 `/etc/vps-guardian-agent/identities` 下，`current` 符号链接选择当前生效代际。密钥不允许其他用户读取；续签后保留上一代身份用于受控回滚。公开 CA 文件单独保存在 trust 目录。
+身份文件按代际保存在 `/etc/vps-guardian/agent/identities` 下，`current` 符号链接选择当前生效代际。密钥不允许其他用户读取；续签后保留上一代身份用于受控回滚。公开 CA 文件单独保存在 `/etc/vps-guardian/agent/trust`。
 
 按端口流量统计默认关闭。仅按[端口流量运维](PORT_TRAFFIC_OPERATIONS.md)安装经过
 独立 SHA-256 校验的 socket 激活 helper；Agent 必须保持非 root，禁止授予

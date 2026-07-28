@@ -47,6 +47,8 @@ export interface Host {
   address: string
   os_name: string | null
   location: string | null
+  notes: string | null
+  desired_os_family: string
   status: 'healthy' | 'degraded' | 'offline' | 'unknown'
   data_state: 'normal' | 'no_data' | 'stale' | 'offline' | 'agent_error'
   enabled: boolean
@@ -285,9 +287,38 @@ export interface ApprovalEvidence {
 }
 
 export interface EnrollmentToken {
-  token: string
+  id: string
+  host_id: string
   expires_at: string
   install_command: string
+  status: string
+}
+
+export interface EnrollmentEvent {
+  status: string
+  sequence: number
+  occurred_at: string
+  error_code: string | null
+  error_summary: string | null
+  rolled_back: boolean
+}
+
+export interface EnrollmentSession {
+  id: string
+  host_id: string
+  status: string
+  sequence: number
+  expires_at: string
+  used_at: string | null
+  revoked_at: string | null
+  completed_at: string | null
+  source_cidr: string | null
+  os_family: string
+  error_code: string | null
+  error_step: string | null
+  error_summary: string | null
+  rolled_back: boolean
+  events: EnrollmentEvent[]
 }
 
 export interface Agent {

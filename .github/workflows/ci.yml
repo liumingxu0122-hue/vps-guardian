@@ -48,6 +48,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Installer shell gate
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+          shellcheck scripts/install-agent.sh scripts/uninstall-agent.sh
+          sh -n scripts/install-agent.sh scripts/uninstall-agent.sh
       - uses: actions/setup-go@v5
         with:
           go-version-file: agent/go.mod
@@ -78,6 +84,7 @@ jobs:
         working-directory: agent
         run: |
           install -d -m 0755 /tmp/vps-guardian-agent-release/sbom
+          install -m 0755 ../scripts/install-agent.sh /tmp/vps-guardian-agent-release/install-agent.sh
           version=0.4.0-ci
           build_time=1970-01-01T00:00:00Z
           build_id_prefix="${version}+$(printf '%s' "$GITHUB_SHA" | cut -c1-12)"
@@ -110,6 +117,14 @@ jobs:
             --dirty false \
             --artifact linux amd64 /tmp/vps-guardian-agent-release/vps-guardian-agent-linux-amd64 \
             --artifact linux arm64 /tmp/vps-guardian-agent-release/vps-guardian-agent-linux-arm64
+          (
+            cd /tmp/vps-guardian-agent-release
+            sha256sum \
+              install-agent.sh \
+              vps-guardian-agent-linux-amd64 \
+              vps-guardian-agent-linux-arm64 \
+              > checksums.sha256
+          )
       - name: Agent release artifacts
         uses: actions/upload-artifact@v4
         with:

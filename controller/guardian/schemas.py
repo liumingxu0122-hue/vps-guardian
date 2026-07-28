@@ -200,13 +200,17 @@ class UserSessionView(ORMModel):
 
 class HostCreate(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,119}$")
-    address: str = Field(min_length=1, max_length=255)
+    address: str = Field(default="pending-enrollment", min_length=1, max_length=255)
     os_name: str | None = Field(default=None, max_length=120)
     location: str | None = Field(default=None, max_length=120)
     enabled: bool = True
     group_name: str | None = Field(default=None, max_length=120)
     tags: list[str] = Field(default_factory=list, max_length=32)
     labels: dict[str, str] = Field(default_factory=dict)
+    notes: str | None = Field(default=None, max_length=500)
+    desired_os_family: Literal[
+        "auto", "debian", "rhel", "fedora", "alpine", "generic"
+    ] = "auto"
 
     @field_validator("labels")
     @classmethod
@@ -232,6 +236,10 @@ class HostUpdate(BaseModel):
     group_name: str | None = Field(default=None, max_length=120)
     tags: list[str] | None = Field(default=None, max_length=32)
     labels: dict[str, str] | None = None
+    notes: str | None = Field(default=None, max_length=500)
+    desired_os_family: Literal[
+        "auto", "debian", "rhel", "fedora", "alpine", "generic"
+    ] | None = None
 
     @field_validator("tags")
     @classmethod
@@ -278,6 +286,8 @@ class HostView(ORMModel):
     group_name: str | None
     tags: list[str]
     labels: dict[str, str]
+    notes: str | None
+    desired_os_family: str
     last_seen_at: datetime | None
     enrolled_at: datetime | None
     disabled_at: datetime | None
@@ -323,14 +333,64 @@ class HostPresentationView(BaseModel):
 
 
 class EnrollmentTokenIssue(BaseModel):
-    expires_in_minutes: int = Field(default=15, ge=1, le=1440)
+    expires_in_minutes: int = Field(default=10, ge=1, le=1440)
+    source_cidr: str | None = Field(default=None, max_length=64)
+    os_family: Literal[
+        "auto", "debian", "rhel", "fedora", "alpine", "generic"
+    ] = "auto"
 
 
 class EnrollmentTokenView(BaseModel):
     id: str
-    token: str
+    host_id: str
     expires_at: datetime
     install_command: str
+    status: str
+
+
+class EnrollmentEventView(BaseModel):
+    status: str
+    sequence: int
+    occurred_at: datetime
+    error_code: str | None = None
+    error_summary: str | None = None
+    rolled_back: bool = False
+
+
+class EnrollmentSessionView(BaseModel):
+    id: str
+    host_id: str
+    status: str
+    sequence: int
+    expires_at: datetime
+    used_at: datetime | None
+    revoked_at: datetime | None
+    completed_at: datetime | None
+    source_cidr: str | None
+    os_family: str
+    error_code: str | None
+    error_step: str | None
+    error_summary: str | None
+    rolled_back: bool
+    events: list[EnrollmentEventView]
+
+
+class EnrollmentProgressReport(BaseModel):
+    status: Literal[
+        "installer_downloaded",
+        "installer_verified",
+        "prerequisites_checked",
+        "agent_downloaded",
+        "agent_verified",
+        "local_key_generated",
+        "csr_submitted",
+        "service_installed",
+        "service_started",
+        "failed",
+    ]
+    error_code: str | None = Field(default=None, pattern=r"^[a-z0-9_]{1,64}$")
+    error_summary: str | None = Field(default=None, max_length=240)
+    rolled_back: bool = False
 
 
 class ServiceCheckCreate(BaseModel):
@@ -787,6 +847,7 @@ class AgentBootstrapRequest(BaseModel):
     host_id: str = Field(min_length=36, max_length=36)
     csr_pem: str = Field(min_length=200, max_length=32768)
     signing_public_key: str = Field(min_length=40, max_length=512)
+    signing_key_proof: str = Field(min_length=80, max_length=128)
     version: str = Field(min_length=1, max_length=64)
 
     @field_validator("signing_public_key")
@@ -803,6 +864,7 @@ class AgentBootstrapResponse(BaseModel):
     certificate_serial: str
     certificate_expires_at: datetime
     agent_gateway_endpoint: str
+    enrollment_progress_token: str = Field(min_length=32, max_length=512)
     heartbeat_interval_seconds: int = 30
 
 

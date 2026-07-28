@@ -5,23 +5,35 @@ from pathlib import Path
 
 def test_agent_installer_verifies_artifact_runs_nonroot_and_rolls_back() -> None:
     installer = Path("scripts/install-agent.sh").read_text(encoding="utf-8")
-    unit = Path("deploy/systemd/vps-guardian-agent.service").read_text(encoding="utf-8")
     assert "sha256sum --check --status" in installer
-    assert "rollback_install()" in installer
-    assert "trap rollback_install EXIT" in installer
-    assert "Agent installation failed; previous installation was restored" in installer
+    assert "rollback()" in installer
+    assert "trap rollback EXIT" in installer
+    assert "prior VPS Guardian files and service state were restored" in installer
     assert "useradd --system" in installer
-    assert "User=vps-guardian-agent" in unit
-    assert "NoNewPrivileges=yes" in unit
-    assert (
-        "ReadWritePaths=/var/lib/vps-guardian-agent "
-        "/etc/vps-guardian-agent/identities" in unit
-    )
-    assert "SupplementaryGroups=docker" not in unit
-    assert "curl |" not in installer
+    assert "User=vps-guardian-agent" in installer
+    assert "NoNewPrivileges=true" in installer
+    assert "CapabilityBoundingSet=" in installer
+    assert "SupplementaryGroups=docker" not in installer
+    assert "curl |" not in installer and "curl|" not in installer
+    assert "rm -rf /etc/vps-guardian\n" not in installer
+    assert "rm -rf /etc/vps-guardian/agent" in installer
     assert installer.index("systemctl stop vps-guardian-agent.service") < installer.index(
-        'install -m 0755 "$binary" /usr/local/sbin/vps-guardian-agent'
+        'install -o root -g root -m 0755 "$work_directory/agent"'
     )
+    for distribution in ("ubuntu", "debian", "rocky", "almalinux", "rhel", "fedora", "alpine"):
+        assert distribution in installer
+    for forbidden in (
+        "apt upgrade",
+        "apt-get upgrade",
+        "dnf upgrade",
+        "yum update",
+        "iptables",
+        "firewall-cmd",
+        "setenforce",
+        "systemctl restart ssh",
+        "systemctl restart komari",
+    ):
+        assert forbidden not in installer
 
 
 def test_agent_uninstall_preserves_state_and_controller_history_by_default() -> None:
@@ -36,24 +48,52 @@ def test_agent_uninstall_preserves_state_and_controller_history_by_default() -> 
 
 
 def test_generated_command_uses_token_file_and_complete_installer_contract() -> None:
-    api = Path("controller/guardian/api.py").read_text(encoding="utf-8")
+    command_builder = Path("controller/guardian/agent_installation.py").read_text(
+        encoding="utf-8"
+    )
     installer = Path("scripts/install-agent.sh").read_text(encoding="utf-8")
     for option in (
-        "--binary",
-        "--sha256",
         "--controller-url",
         "--host-id",
-        "--server-ca",
-        "--controller-public-key",
         "--enrollment-token-file",
+        "--release-version",
+        "--os-family",
+        "--agent-url-amd64",
+        "--agent-sha256-amd64",
+        "--agent-url-arm64",
+        "--agent-sha256-arm64",
+        "--server-ca-url",
+        "--server-ca-sha256",
+        "--controller-public-key-url",
+        "--controller-public-key-sha256",
     ):
-        assert option in api
+        assert option in command_builder
         assert option in installer
-    generated_command = api.split("command = (", 1)[1].split(
-        "return EnrollmentTokenView", 1
-    )[0]
     for forbidden in ("--private-key", "--certificate", "--signing-key"):
-        assert forbidden not in generated_command
+        assert forbidden not in command_builder
+    assert "latest" not in command_builder
+    assert "curl --fail --show-error --location --proto '=https'" in command_builder
+
+
+def test_installer_refuses_redirects_when_sending_short_lived_credentials() -> None:
+    installer = Path("scripts/install-agent.sh").read_text(encoding="utf-8")
+    credential_request_blocks = [
+        block for block in installer.split("\n\n") if '-H "@$header_file"' in block
+    ]
+    assert credential_request_blocks
+    assert all("--location" not in block for block in credential_request_blocks)
+
+
+def test_gateway_allows_only_bounded_unauthenticated_enrollment_paths() -> None:
+    gateway = Path("deploy/agent-gateway.haproxy.cfg").read_text(encoding="utf-8")
+    assert "path -m str /api/v1/agents/bootstrap" in gateway
+    assert "path -m str /api/v1/agents/enrollment-progress" in gateway
+    assert (
+        "deny deny_status 403 if !client_certificate_present "
+        "!bootstrap_path !enrollment_progress_path"
+    ) in gateway
+    assert "set-header X-Guardian-Proxy-Auth" in gateway
+    assert "set-header X-Forwarded-For %[src]" in gateway
 
 
 def test_runtime_entrypoints_are_executable_in_git() -> None:

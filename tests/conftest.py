@@ -8,6 +8,22 @@ os.environ["GUARDIAN_JWT_SECRET"] = "test-jwt-secret-that-is-longer-than-32-byte
 os.environ["GUARDIAN_AGENT_ENROLLMENT_TOKEN"] = "test-enrollment-token"
 os.environ["GUARDIAN_AUTO_CREATE_SCHEMA"] = "true"
 os.environ["GUARDIAN_SECURE_COOKIES"] = "false"
+os.environ["GUARDIAN_ONE_COMMAND_INSTALL_ENABLED"] = "true"
+os.environ["GUARDIAN_AGENT_INSTALL_RELEASE_VERSION"] = "v0.4.0-test"
+os.environ["GUARDIAN_AGENT_INSTALL_ASSETS_BASE_URL"] = (
+    "https://releases.example.test/vps-guardian"
+)
+os.environ["GUARDIAN_AGENT_INSTALLER_SHA256"] = "1" * 64
+os.environ["GUARDIAN_AGENT_BINARY_AMD64_SHA256"] = "2" * 64
+os.environ["GUARDIAN_AGENT_BINARY_ARM64_SHA256"] = "3" * 64
+os.environ["GUARDIAN_AGENT_CONTROLLER_CA_URL"] = (
+    "https://controller.example.test/assets/controller-ca.crt"
+)
+os.environ["GUARDIAN_AGENT_CONTROLLER_CA_SHA256"] = "4" * 64
+os.environ["GUARDIAN_AGENT_CONTROLLER_PUBLIC_KEY_URL"] = (
+    "https://controller.example.test/assets/controller-ed25519.pub"
+)
+os.environ["GUARDIAN_AGENT_CONTROLLER_PUBLIC_KEY_SHA256"] = "5" * 64
 
 import pytest
 from fastapi.testclient import TestClient

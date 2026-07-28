@@ -89,7 +89,17 @@ docker compose exec -it controller controller-entrypoint guardian-admin create-u
 
 ## Agent 注册
 
-创建主机清单，通过授权 Controller 流程生成短期注册包，并安装对应架构的 Agent。Agent 会在本机生成私钥和 CSR。随后验证心跳、证书序列号、指标和离线队列。参见 [Agent 安装](docs/zh-CN/AGENT_INSTALLATION.md)。
+Admin 或 Owner 可在 **主机 → 添加服务器** 中创建与 Host 绑定的 10 分钟注册会话，并复制一条已校验、固定版本的安装命令。Agent 在本机生成私钥和 CSR，Controller 只保存凭据摘要。固定资源地址和 SHA-256 未配置前功能保持关闭。参见 [Agent 一条命令注册](docs/zh-CN/ONE_COMMAND_AGENT_ENROLLMENT.md)和[手工 Agent 安装](docs/zh-CN/AGENT_INSTALLATION.md)。
+
+完整命令由页面生成；下面仅展示不可直接运行的占位结构：
+
+```sh
+umask 077; guardian_tmp="$(mktemp -d)" && \
+  curl --fail --show-error --location --proto '=https' \
+  https://downloads.example.invalid/v0.4.0/install-agent.sh
+# 页面生成的真实命令还会在执行前校验精确 SHA-256，并通过 root-only
+# 临时文件传入短期 <ONE_TIME_ENROLLMENT_TOKEN>。
+```
 
 ## Dashboard 访问
 

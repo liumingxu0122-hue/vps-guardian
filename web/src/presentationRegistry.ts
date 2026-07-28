@@ -274,6 +274,9 @@ export function configurationLabel(value: string, locale: string): string {
     level3_requires_approval: ['Level 3 approval gate', 'Level 3 审批门禁'],
     arbitrary_shell: ['Arbitrary shell execution', '任意 Shell 执行'],
     multi_vps_enrollment: ['Multi-node enrollment', '多节点注册'],
+    one_command_agent_install: ['One-command Agent installation', 'Agent 一条命令安装'],
+    one_command_install_enabled: ['One-command installation', '一条命令安装'],
+    agent_install_release_version: ['Fixed Agent release', '固定 Agent 版本'],
     persistent_alerts: ['Persistent alerts', '持久化告警'],
     notification_retry: ['Notification retry', '通知重试'],
   }

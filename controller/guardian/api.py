@@ -4,7 +4,6 @@ import csv
 import io
 import json
 import secrets
-import shlex
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -20,6 +19,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from guardian import __version__
+from guardian.agent_installation import (
+    AgentInstallationConfigurationError,
+    build_one_command_install,
+)
 from guardian.agent_pki import (
     AgentCertificateError,
     issue_agent_certificate,
@@ -52,11 +55,20 @@ from guardian.dashboard import (
 )
 from guardian.database import get_db
 from guardian.enrollment import (
+    INSTALLER_PROGRESS_STEPS,
+    POST_BOOTSTRAP_PROGRESS_STEPS,
     EnrollmentRateLimitError,
     EnrollmentTokenError,
+    advance_enrollment,
+    authenticate_enrollment_token,
+    authenticate_progress_token,
+    complete_host_enrollment,
     consume_enrollment_token,
     enrollment_limiter,
+    fail_enrollment,
     issue_enrollment_token,
+    issue_progress_token,
+    latest_host_enrollment,
     revoke_enrollment_token,
     token_digest,
 )
@@ -81,6 +93,9 @@ from guardian.models import (
     Approval,
     ApprovalStatus,
     AuditLog,
+    EnrollmentEvent,
+    EnrollmentStatus,
+    EnrollmentToken,
     Host,
     Incident,
     IncidentStatus,
@@ -153,6 +168,9 @@ from guardian.schemas import (
     AuditView,
     BrowserLoginRequest,
     BrowserLoginResponse,
+    EnrollmentEventView,
+    EnrollmentProgressReport,
+    EnrollmentSessionView,
     EnrollmentTokenIssue,
     EnrollmentTokenView,
     HealthResponse,
@@ -2631,21 +2649,36 @@ def create_enrollment_token(
     request: Request,
     db: DB,
     settings: Config,
-    user: Annotated[User, Depends(require_role(Role.admin))],
+    user: Annotated[User, Depends(require_role(Role.operator))],
 ) -> EnrollmentTokenView:
     _require_step_up(request)
     host = db.get(Host, host_id)
     if host is None:
         raise HTTPException(status_code=404, detail="host not found")
+    _require_enrollment_management(user, host=host, action="create")
     try:
         issued = issue_enrollment_token(
             db,
             host=host,
             actor=user,
             ttl=timedelta(minutes=payload.expires_in_minutes),
+            source_cidr=payload.source_cidr,
+            os_family=payload.os_family,
+            installer_version=settings.agent_install_release_version,
+            agent_version=settings.agent_install_release_version.removeprefix("v"),
+        )
+        command = build_one_command_install(
+            settings=settings,
+            host_id=host.id,
+            enrollment_token=issued.value,
+            os_family=payload.os_family,
         )
     except EnrollmentTokenError as exc:
+        db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AgentInstallationConfigurationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     write_audit(
         db,
         actor=user,
@@ -2657,22 +2690,12 @@ def create_enrollment_token(
         source_ip=request.client.host if request.client else None,
     )
     db.commit()
-    controller_url = validate_agent_gateway_url(settings.agent_gateway_url)
-    command = (
-        "sudo ./scripts/install-agent.sh "
-        "--binary ./agent-bundle/vps-guardian-agent "
-        ' --sha256 "$(cat ./agent-bundle/vps-guardian-agent.sha256)" '
-        f"--controller-url {shlex.quote(controller_url)} "
-        f"--host-id {shlex.quote(host.id)} "
-        "--server-ca ./agent-bundle/controller-ca.crt "
-        ' --controller-public-key "$(cat ./agent-bundle/controller-public-key.txt)" '
-        "--enrollment-token-file ./agent-bundle/enrollment-token"
-    )
     return EnrollmentTokenView(
         id=issued.id,
-        token=issued.value,
+        host_id=host.id,
         expires_at=issued.expires_at,
         install_command=command,
+        status=EnrollmentStatus.waiting.value,
     )
 
 
@@ -2689,6 +2712,10 @@ def revoke_host_enrollment_token(
     user: Annotated[User, Depends(require_role(Role.admin))],
 ) -> None:
     _require_step_up(request)
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    _require_enrollment_management(user, host=host, action="revoke")
     try:
         token = revoke_enrollment_token(db, token_id=token_id, host_id=host_id)
     except EnrollmentTokenError as exc:
@@ -2704,6 +2731,182 @@ def revoke_host_enrollment_token(
         source_ip=request.client.host if request.client else None,
     )
     db.commit()
+
+
+def _require_enrollment_management(
+    user: User,
+    *,
+    host: Host,
+    action: Literal["create", "revoke"],
+) -> None:
+    if user.role in {Role.owner.value, Role.admin.value}:
+        group_scopes = {
+            scope.removeprefix("group:").removesuffix(":enroll")
+            for scope in user.scopes
+            if scope.startswith("group:") and scope.endswith(":enroll")
+        }
+        if group_scopes and (host.group_name or "") not in group_scopes:
+            raise HTTPException(status_code=403, detail="group enrollment scope denied")
+        return
+    if user.role == Role.operator.value and action == "create":
+        return
+    raise HTTPException(status_code=403, detail="enrollment permission denied")
+
+
+def _enrollment_session_view(db: Session, token: EnrollmentToken) -> EnrollmentSessionView:
+    status_value = token.status
+    if (
+        token.used_at is None
+        and token.revoked_at is None
+        and status_value not in {
+            EnrollmentStatus.failed.value,
+            EnrollmentStatus.completed.value,
+        }
+        and as_utc(token.expires_at) <= datetime.now(UTC)
+    ):
+        status_value = EnrollmentStatus.expired.value
+    events = list(
+        db.scalars(
+            select(EnrollmentEvent)
+            .where(EnrollmentEvent.enrollment_id == token.id)
+            .order_by(EnrollmentEvent.occurred_at, EnrollmentEvent.id)
+        ).all()
+    )
+    return EnrollmentSessionView(
+        id=token.id,
+        host_id=token.host_id,
+        status=status_value,
+        sequence=token.status_sequence,
+        expires_at=token.expires_at,
+        used_at=token.used_at,
+        revoked_at=token.revoked_at,
+        completed_at=token.completed_at,
+        source_cidr=token.source_cidr,
+        os_family=token.os_family,
+        error_code=token.error_code,
+        error_step=token.error_step,
+        error_summary=token.error_summary,
+        rolled_back=token.rolled_back,
+        events=[
+            EnrollmentEventView(
+                status=event.status,
+                sequence=event.status_sequence,
+                occurred_at=event.occurred_at,
+                error_code=event.error_code,
+                error_summary=event.error_summary,
+                rolled_back=event.rolled_back,
+            )
+            for event in events
+        ],
+    )
+
+
+@router.get(
+    "/api/v1/hosts/{host_id}/enrollment-sessions/latest",
+    response_model=EnrollmentSessionView,
+    tags=["agent"],
+)
+def latest_enrollment_session(
+    host_id: str,
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.viewer))],
+) -> EnrollmentSessionView:
+    if db.get(Host, host_id) is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    token = latest_host_enrollment(db, host_id)
+    if token is None:
+        raise HTTPException(status_code=404, detail="enrollment session not found")
+    return _enrollment_session_view(db, token)
+
+
+def _enrollment_source_ip(request: Request, settings: Settings) -> str:
+    direct = request.client.host if request.client else "unknown"
+    expected = settings.trusted_proxy_cert_header_secret.get_secret_value()
+    presented = request.headers.get("x-guardian-proxy-auth", "")
+    forwarded = request.headers.get("x-forwarded-for", "").strip()
+    if expected and secrets.compare_digest(presented, expected) and forwarded:
+        try:
+            return str(ip_address(forwarded))
+        except ValueError:
+            return "invalid-forwarded-source"
+    return direct
+
+
+@router.post(
+    "/api/v1/agents/enrollment-progress",
+    status_code=202,
+    tags=["agent"],
+)
+def report_enrollment_progress(
+    payload: EnrollmentProgressReport,
+    request: Request,
+    db: DB,
+    settings: Config,
+    enrollment_token: Annotated[str | None, Header(alias="X-Enrollment-Token")] = None,
+    progress_token: Annotated[
+        str | None, Header(alias="X-Enrollment-Progress-Token")
+    ] = None,
+) -> dict[str, bool]:
+    if bool(enrollment_token) == bool(progress_token):
+        raise HTTPException(status_code=401, detail="invalid enrollment credential")
+    if settings.environment == "production":
+        require_trusted_agent_gateway(request, settings)
+    source = _enrollment_source_ip(request, settings)
+    credential = enrollment_token or progress_token or ""
+    limiter_key = f"progress:{source}:{token_digest(credential)[:16]}"
+    try:
+        enrollment_limiter.check(limiter_key, settings.enrollment_attempts_per_10m * 4)
+        if progress_token:
+            token, _ = authenticate_progress_token(
+                db,
+                value=progress_token,
+                source_ip=source,
+            )
+            allowed_steps = POST_BOOTSTRAP_PROGRESS_STEPS
+        else:
+            token, _ = authenticate_enrollment_token(
+                db,
+                value=credential,
+                source_ip=source,
+                lock=True,
+            )
+            allowed_steps = INSTALLER_PROGRESS_STEPS
+        if payload.status == EnrollmentStatus.failed.value:
+            if not payload.error_code or not payload.error_summary:
+                raise EnrollmentTokenError("failed progress requires a safe error summary")
+            fail_enrollment(
+                db,
+                token=token,
+                error_code=payload.error_code,
+                error_step=token.status,
+                error_summary=payload.error_summary,
+                rolled_back=payload.rolled_back,
+            )
+        elif payload.status in allowed_steps:
+            advance_enrollment(db, token=token, status=payload.status)
+        else:
+            raise EnrollmentTokenError("installer cannot report this progress state")
+    except EnrollmentRateLimitError as exc:
+        raise HTTPException(status_code=429, detail="enrollment rate limit exceeded") from exc
+    except EnrollmentTokenError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    write_audit(
+        db,
+        actor=None,
+        action="agent.enrollment_progress",
+        resource_type="enrollment_token",
+        resource_id=token.id,
+        outcome="failed" if payload.status == EnrollmentStatus.failed.value else "success",
+        details={
+            "status": payload.status,
+            "rolled_back": payload.rolled_back,
+            "error_code": payload.error_code,
+        },
+        source_ip=source,
+    )
+    db.commit()
+    return {"accepted": True}
 
 
 def _record_bootstrap_failure(
@@ -2755,7 +2958,7 @@ def bootstrap_agent(
             db, request=request, host_id=payload.host_id, reason_code="token_missing"
         )
         raise HTTPException(status_code=401, detail="invalid enrollment token")
-    source = request.client.host if request.client else "unknown"
+    source = _enrollment_source_ip(request, settings)
     limiter_key = f"{source}:{token_digest(enrollment_token)[:16]}"
     try:
         enrollment_limiter.check(limiter_key, settings.enrollment_attempts_per_10m)
@@ -2766,6 +2969,11 @@ def bootstrap_agent(
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     try:
         validate_agent_csr(payload.csr_pem)
+        verify_signing_key_proof(
+            csr_pem=payload.csr_pem,
+            signing_public_key=payload.signing_public_key,
+            signing_key_proof=payload.signing_key_proof,
+        )
     except AgentCertificateError as exc:
         _record_bootstrap_failure(
             db, request=request, host_id=payload.host_id, reason_code="csr_rejected"
@@ -2776,6 +2984,7 @@ def bootstrap_agent(
             db,
             value=enrollment_token,
             expected_host_id=payload.host_id,
+            source_ip=source,
         )
     except EnrollmentTokenError as exc:
         _record_bootstrap_failure(
@@ -2838,6 +3047,13 @@ def bootstrap_agent(
         )
         db.add(identity)
         host.enrolled_at = enrolled_at
+        advance_enrollment(
+            db,
+            token=token,
+            status=EnrollmentStatus.certificate_issued.value,
+            now=enrolled_at,
+        )
+        progress_credential = issue_progress_token(token)
         write_audit(
             db,
             actor=None,
@@ -2869,6 +3085,7 @@ def bootstrap_agent(
         certificate_serial=issued.serial,
         certificate_expires_at=issued.expires_at,
         agent_gateway_endpoint=gateway_endpoint,
+        enrollment_progress_token=progress_credential,
     )
 
 
@@ -4586,6 +4803,20 @@ def public_settings(
             "risk": "medium",
         },
         {
+            "key": "one_command_install_enabled",
+            "value": settings.one_command_install_enabled,
+            "source": "GUARDIAN_ONE_COMMAND_INSTALL_ENABLED",
+            "restart_required": True,
+            "risk": "high",
+        },
+        {
+            "key": "agent_install_release_version",
+            "value": settings.agent_install_release_version,
+            "source": "GUARDIAN_AGENT_INSTALL_RELEASE_VERSION",
+            "restart_required": True,
+            "risk": "high",
+        },
+        {
             "key": "metric_retention_days",
             "value": settings.metric_retention_days,
             "source": "GUARDIAN_METRIC_RETENTION_DAYS",
@@ -4647,6 +4878,7 @@ def public_settings(
             "level3_requires_approval": True,
             "arbitrary_shell": False,
             "multi_vps_enrollment": True,
+            "one_command_agent_install": settings.one_command_install_enabled,
             "persistent_alerts": True,
             "notification_retry": True,
         },
@@ -5510,6 +5742,22 @@ async def agent_heartbeat(
     agent.host.last_seen_at = now
     agent.host.status = "healthy"
     agent.host.data_state = "agent_error" if payload.metrics.get("collection_error") else "normal"
+    completed_enrollment = complete_host_enrollment(
+        db,
+        host_id=agent.host_id,
+        now=now,
+    )
+    if completed_enrollment is not None:
+        write_audit(
+            db,
+            actor=None,
+            action="agent.enrollment_completed",
+            resource_type="enrollment_token",
+            resource_id=completed_enrollment.id,
+            outcome="success",
+            details={"host_id": agent.host_id, "source": "authenticated_heartbeat"},
+            source_ip=request.client.host if request.client else None,
+        )
     if was_offline:
         write_audit(
             db,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -25,6 +26,13 @@ from sqlalchemy import select
 
 def auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def enrollment_token(payload: dict[str, object]) -> str:
+    command = str(payload["install_command"])
+    match = re.search(r"printf %s ([A-Za-z0-9._~-]{32,512}) ", command)
+    assert match is not None
+    return match.group(1)
 
 
 def create_ca(directory: Path) -> tuple[Path, Path]:
@@ -187,11 +195,15 @@ def bootstrap_payload(
 ) -> tuple[dict[str, str], ec.EllipticCurvePrivateKey, ed25519.Ed25519PrivateKey]:
     actual_tls_key = tls_key or ec.generate_private_key(ec.SECP256R1())
     signing_key, actual_signing_public_key = signing_identity()
+    csr_pem = create_csr(actual_tls_key)
     return (
         {
             "host_id": host_id,
-            "csr_pem": create_csr(actual_tls_key),
+            "csr_pem": csr_pem,
             "signing_public_key": signing_public_key or actual_signing_public_key,
+            "signing_key_proof": base64.b64encode(
+                signing_key.sign(csr_pem.encode("ascii"))
+            ).decode("ascii"),
             "version": "0.1.0-phase4c-test",
         },
         actual_tls_key,
@@ -277,7 +289,7 @@ def test_bootstrap_is_host_bound_single_use_and_audited_without_secrets(
     del configured_ca
     host_id, issued_token = create_host_and_token(client, owner_token)
     payload, tls_key, _ = bootstrap_payload(host_id)
-    token = str(issued_token["token"])
+    token = enrollment_token(issued_token)
     enrolled = client.post(
         "/api/v1/agents/bootstrap",
         headers={"X-Enrollment-Token": token},
@@ -291,17 +303,34 @@ def test_bootstrap_is_host_bound_single_use_and_audited_without_secrets(
     assert enrolled.status_code == 200
     assert replay.status_code == 401
     response = enrolled.json()
+    progress_token = str(response["enrollment_progress_token"])
+    installed = client.post(
+        "/api/v1/agents/enrollment-progress",
+        headers={"X-Enrollment-Progress-Token": progress_token},
+        json={"status": "service_installed"},
+    )
+    started = client.post(
+        "/api/v1/agents/enrollment-progress",
+        headers={"X-Enrollment-Progress-Token": progress_token},
+        json={"status": "service_started"},
+    )
+    assert installed.status_code == 202
+    assert started.status_code == 202
     certificate = x509.load_pem_x509_certificate(response["certificate_pem"].encode())
     assert certificate.public_key().public_numbers() == tls_key.public_key().public_numbers()
     assert response["agent_gateway_endpoint"] == "https://agents.example.test:8444"
     assert "--host-id" in str(issued_token["install_command"])
-    for forbidden in ("--private-key", "--certificate", token):
+    assert str(issued_token["install_command"]).count(token) == 1
+    for forbidden in ("--private-key", "--certificate"):
         assert forbidden not in str(issued_token["install_command"])
     with SessionLocal() as db:
         stored = db.scalar(select(EnrollmentToken))
         assert stored and stored.used_at is not None and token not in stored.token_hash
+        assert stored.progress_token_hash is not None
+        assert progress_token not in stored.progress_token_hash
         audit_text = " ".join(str(entry.details) for entry in db.scalars(select(AuditLog)))
         assert token not in audit_text
+        assert progress_token not in audit_text
         assert "PRIVATE KEY" not in audit_text
 
 
@@ -320,13 +349,13 @@ def test_production_bootstrap_requires_the_private_agent_gateway(
     payload, _, _ = bootstrap_payload(host_id)
     direct = client.post(
         "/api/v1/agents/bootstrap",
-        headers={"X-Enrollment-Token": str(issued["token"])},
+        headers={"X-Enrollment-Token": enrollment_token(issued)},
         json=payload,
     )
     gateway = client.post(
         "/api/v1/agents/bootstrap",
         headers={
-            "X-Enrollment-Token": str(issued["token"]),
+            "X-Enrollment-Token": enrollment_token(issued),
             "X-Guardian-Proxy-Auth": proxy_secret,
         },
         json=payload,
@@ -350,7 +379,7 @@ def test_revoked_expired_wrong_host_and_invalid_csr_are_rejected(
     assert revoke.status_code == 204
     assert client.post(
         "/api/v1/agents/bootstrap",
-        headers={"X-Enrollment-Token": str(revoked["token"])},
+        headers={"X-Enrollment-Token": enrollment_token(revoked)},
         json=payload,
     ).status_code == 401
 
@@ -363,7 +392,7 @@ def test_revoked_expired_wrong_host_and_invalid_csr_are_rejected(
     expired_payload, _, _ = bootstrap_payload(expired_host)
     assert client.post(
         "/api/v1/agents/bootstrap",
-        headers={"X-Enrollment-Token": str(expired["token"])},
+        headers={"X-Enrollment-Token": enrollment_token(expired)},
         json=expired_payload,
     ).status_code == 401
 
@@ -372,20 +401,20 @@ def test_revoked_expired_wrong_host_and_invalid_csr_are_rejected(
     wrong_payload, _, _ = bootstrap_payload(second_host)
     assert client.post(
         "/api/v1/agents/bootstrap",
-        headers={"X-Enrollment-Token": str(bound["token"])},
+        headers={"X-Enrollment-Token": enrollment_token(bound)},
         json=wrong_payload,
     ).status_code == 401
     invalid_payload, _, _ = bootstrap_payload(first_host)
     invalid_payload["csr_pem"] = "-----BEGIN CERTIFICATE REQUEST-----\ninvalid\n"
     assert client.post(
         "/api/v1/agents/bootstrap",
-        headers={"X-Enrollment-Token": str(bound["token"])},
+        headers={"X-Enrollment-Token": enrollment_token(bound)},
         json=invalid_payload,
     ).status_code == 422
     valid_payload, _, _ = bootstrap_payload(first_host)
     assert client.post(
         "/api/v1/agents/bootstrap",
-        headers={"X-Enrollment-Token": str(bound["token"])},
+        headers={"X-Enrollment-Token": enrollment_token(bound)},
         json=valid_payload,
     ).status_code == 200
 
@@ -405,12 +434,12 @@ def test_rate_limit_and_sequential_reuse_allow_exactly_one_enrollment(
     for _ in range(2):
         assert client.post(
             "/api/v1/agents/bootstrap",
-            headers={"X-Enrollment-Token": str(issued["token"])},
+            headers={"X-Enrollment-Token": enrollment_token(issued)},
             json=invalid,
         ).status_code == 422
     assert client.post(
         "/api/v1/agents/bootstrap",
-        headers={"X-Enrollment-Token": str(issued["token"])},
+        headers={"X-Enrollment-Token": enrollment_token(issued)},
         json=payload,
     ).status_code == 429
 
@@ -422,12 +451,12 @@ def test_rate_limit_and_sequential_reuse_allow_exactly_one_enrollment(
 
     first = client.post(
         "/api/v1/agents/bootstrap",
-        headers={"X-Enrollment-Token": str(other["token"])},
+        headers={"X-Enrollment-Token": enrollment_token(other)},
         json=other_payload,
     )
     replay = client.post(
         "/api/v1/agents/bootstrap",
-        headers={"X-Enrollment-Token": str(other["token"])},
+        headers={"X-Enrollment-Token": enrollment_token(other)},
         json=other_payload,
     )
     assert first.status_code == 200
@@ -463,7 +492,7 @@ def test_active_mtls_identity_can_renew_with_dual_key_possession_proof(
     bootstrap, _, old_signing_key = bootstrap_payload(host_id)
     enrolled = client.post(
         "/api/v1/agents/bootstrap",
-        headers={"X-Enrollment-Token": str(issued["token"])},
+        headers={"X-Enrollment-Token": enrollment_token(issued)},
         json=bootstrap,
     )
     assert enrolled.status_code == 200

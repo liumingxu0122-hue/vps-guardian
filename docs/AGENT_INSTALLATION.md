@@ -1,5 +1,9 @@
 # Agent installation
 
+Use the maintained [English one-command guide](en/ONE_COMMAND_AGENT_ENROLLMENT.md)
+or [简体中文一条命令指南](zh-CN/ONE_COMMAND_AGENT_ENROLLMENT.md). This file describes
+the protected manual fallback.
+
 The Agent is a Linux binary. Release assets are provided for `amd64` and `arm64`.
 
 ## 1. Verify the binary

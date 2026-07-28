@@ -88,7 +88,17 @@ The final command securely prompts for the administrator email and hidden passwo
 
 ## Agent enrollment
 
-Create the host inventory entry, generate a short-lived enrollment bundle through an authorized Controller workflow, and install the architecture-specific Agent. The Agent generates its private keys and CSR locally. Verify heartbeat, certificate serial, metrics, and offline queue. See [Agent installation](docs/en/AGENT_INSTALLATION.md).
+From **Hosts → Add server**, an Admin or Owner can create a host-bound 10-minute enrollment session and copy one verified, fixed-release install command. The Agent generates its private keys and CSR locally; the Controller stores only credential hashes. The feature is disabled until immutable asset URLs and SHA-256 values are configured. See [one-command enrollment](docs/en/ONE_COMMAND_AGENT_ENROLLMENT.md) and [manual Agent installation](docs/en/AGENT_INSTALLATION.md).
+
+The UI generates the complete command; this non-runnable shape intentionally uses placeholders:
+
+```sh
+umask 077; guardian_tmp="$(mktemp -d)" && \
+  curl --fail --show-error --location --proto '=https' \
+  https://downloads.example.invalid/v0.4.0/install-agent.sh
+# The real UI command verifies the exact SHA-256 before execution and supplies
+# a short-lived <ONE_TIME_ENROLLMENT_TOKEN> through a root-only temporary file.
+```
 
 ## Dashboard access
 
