@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import csv
+import io
+import json
 import secrets
 import shlex
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
+from ipaddress import ip_address
 from typing import Annotated, Any, Literal, cast
 
 import pyotp
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import desc, select, update
+from sqlalchemy import and_, desc, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -39,6 +44,12 @@ from guardian.backup import (
     promote_recovery_point,
 )
 from guardian.config import Settings, get_settings
+from guardian.dashboard import (
+    current_resource_summary,
+    dashboard_bootstrap,
+    security_summary,
+    topology_summary,
+)
 from guardian.database import get_db
 from guardian.enrollment import (
     EnrollmentRateLimitError,
@@ -52,6 +63,7 @@ from guardian.enrollment import (
 from guardian.events import event_broker
 from guardian.identity import (
     active_recovery_code_count,
+    as_utc,
     consume_recovery_code,
     create_user_session,
     forced_setup_required,
@@ -88,7 +100,7 @@ from guardian.monitoring import assigned_agent_checks, record_agent_check_result
 from guardian.notifications import NotificationConfigurationError, send_test_notification
 from guardian.operations import Window, build_operations_overview
 from guardian.reconciliation import reconcile_staging_heartbeat, record_agent_results
-from guardian.redaction import redact_structure
+from guardian.redaction import redact_serialized_text, redact_structure
 from guardian.schemas import (
     AgentBootstrapRequest,
     AgentBootstrapResponse,
@@ -109,13 +121,27 @@ from guardian.schemas import (
     AlertSilenceRequest,
     AlertUpdateRequest,
     AlertView,
+    ApprovalActorView,
     ApprovalDecision,
+    ApprovalDetailView,
+    ApprovalEvidenceView,
+    ApprovalFactView,
+    ApprovalStepView,
+    ApprovalSummaryView,
+    ApprovalTargetView,
+    ApprovalTimelineEntryView,
     ApprovalView,
+    AuditEvidenceView,
+    AuditPresentationView,
     AuditView,
+    BrowserLoginRequest,
+    BrowserLoginResponse,
     EnrollmentTokenIssue,
     EnrollmentTokenView,
     HealthResponse,
+    HostBatchUpdate,
     HostCreate,
+    HostPresentationView,
     HostUpdate,
     HostView,
     IncidentUpdateRequest,
@@ -135,7 +161,11 @@ from guardian.schemas import (
     RecoveryPointView,
     ServiceCheckCreate,
     ServiceCheckResultView,
+    ServiceCheckUpdate,
     ServiceCheckView,
+    SessionDeviceRename,
+    StepUpRequest,
+    StepUpView,
     TotpConfirmRequest,
     TotpSetupView,
     UserCreate,
@@ -157,6 +187,15 @@ from guardian.security import (
     verify_password,
     verify_totp,
     verify_user_password,
+)
+from guardian.service_semantics import classify_service_observation
+from guardian.sessions import (
+    BROWSER_SESSION_COOKIE,
+    CSRF_COOKIE,
+    create_browser_session,
+    rotate_browser_session,
+    session_cookie_ttl,
+    touch_browser_session,
 )
 from guardian.stability import StabilityWindow, build_stability_report
 from guardian.tasking import create_agent_task, serialize_agent_task
@@ -195,6 +234,8 @@ def expire_pending_approvals(db: Session, *, now: datetime | None = None) -> int
     if expired:
         db.commit()
     return expired
+
+
 DB = Annotated[Session, Depends(get_db)]
 Config = Annotated[Settings, Depends(get_settings)]
 
@@ -212,14 +253,12 @@ def readiness(db: DB) -> HealthResponse:
     return HealthResponse(version=__version__)
 
 
-@router.post("/api/v1/auth/login", response_model=LoginResponse, tags=["auth"])
-def login(
+def _authenticate_login(
     payload: LoginRequest,
     request: Request,
-    response: Response,
     db: DB,
     settings: Config,
-) -> LoginResponse:
+) -> tuple[User, int | None, str, str]:
     source_ip = request.client.host if request.client else "unknown"
     email = payload.email.strip().lower()
     limiter_key = f"{source_ip}:{email}"
@@ -251,7 +290,10 @@ def login(
             source_ip=source_ip,
         )
         db.commit()
-        raise HTTPException(status_code=401, detail="invalid credentials")
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "AUTH_INVALID_CREDENTIALS", "params": {}},
+        )
     if payload.totp_code and payload.recovery_code:
         write_audit(
             db,
@@ -264,7 +306,10 @@ def login(
             source_ip=source_ip,
         )
         db.commit()
-        raise HTTPException(status_code=401, detail="invalid credentials")
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "AUTH_INVALID_CREDENTIALS", "params": {}},
+        )
 
     recovery_remaining: int | None = None
     if payload.recovery_code:
@@ -289,7 +334,10 @@ def login(
         )
         if not recovered:
             db.commit()
-            raise HTTPException(status_code=401, detail="invalid credentials")
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "AUTH_INVALID_CREDENTIALS", "params": {}},
+            )
     elif user.totp_enabled:
         if not verify_totp(user, payload.totp_code, settings):
             write_audit(
@@ -303,7 +351,10 @@ def login(
                 source_ip=source_ip,
             )
             db.commit()
-            raise HTTPException(status_code=401, detail="invalid credentials")
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "AUTH_INVALID_CREDENTIALS", "params": {}},
+            )
         secret = decrypt_sensitive(user.totp_secret_encrypted or "", settings)
         user.last_totp_counter = totp_counter_for_code(secret, payload.totp_code)
     elif payload.totp_code:
@@ -318,8 +369,26 @@ def login(
             source_ip=source_ip,
         )
         db.commit()
-        raise HTTPException(status_code=401, detail="invalid credentials")
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "AUTH_INVALID_CREDENTIALS", "params": {}},
+        )
 
+    return user, recovery_remaining, limiter_key, source_ip
+
+
+@router.post("/api/v1/auth/login", response_model=LoginResponse, tags=["auth"])
+def login(
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    db: DB,
+    settings: Config,
+) -> LoginResponse:
+    del response
+    user, recovery_remaining, limiter_key, source_ip = _authenticate_login(
+        payload, request, db, settings
+    )
     user.last_login_at = datetime.now(UTC)
     auth_session = create_user_session(
         db,
@@ -329,24 +398,6 @@ def login(
     )
     token, ttl = create_access_token(user, settings, session_id=auth_session.id)
     csrf = generate_csrf_token()
-    response.set_cookie(
-        "guardian_session",
-        token,
-        max_age=ttl,
-        httponly=True,
-        secure=settings.secure_cookies,
-        samesite="strict",
-        path="/",
-    )
-    response.set_cookie(
-        "guardian_csrf",
-        csrf,
-        max_age=ttl,
-        httponly=False,
-        secure=settings.secure_cookies,
-        samesite="strict",
-        path="/",
-    )
     write_audit(
         db,
         actor=user,
@@ -367,11 +418,122 @@ def login(
     )
 
 
+def _set_browser_cookies(
+    response: Response,
+    *,
+    session_secret: str,
+    csrf_secret: str,
+    row: UserSession,
+    settings: Settings,
+) -> None:
+    ttl = session_cookie_ttl(row)
+    expires = datetime.now(UTC) + timedelta(seconds=ttl)
+    response.set_cookie(
+        BROWSER_SESSION_COOKIE,
+        session_secret,
+        max_age=ttl,
+        expires=expires,
+        httponly=True,
+        secure=settings.secure_cookies,
+        samesite="lax",
+        path="/",
+    )
+    response.set_cookie(
+        CSRF_COOKIE,
+        csrf_secret,
+        max_age=ttl,
+        expires=expires,
+        httponly=False,
+        secure=settings.secure_cookies,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _delete_browser_cookies(response: Response, settings: Settings) -> None:
+    response.delete_cookie(
+        BROWSER_SESSION_COOKIE,
+        path="/",
+        secure=settings.secure_cookies,
+        httponly=True,
+        samesite="lax",
+    )
+    response.delete_cookie(
+        CSRF_COOKIE,
+        path="/",
+        secure=settings.secure_cookies,
+        httponly=False,
+        samesite="lax",
+    )
+    # Retire the pre-RC6 browser JWT cookie with its original deletion scope.
+    response.delete_cookie("guardian_session", path="/")
+
+
+@router.post(
+    "/api/v1/auth/browser/login",
+    response_model=BrowserLoginResponse,
+    tags=["auth"],
+)
+def browser_login(
+    payload: BrowserLoginRequest,
+    request: Request,
+    response: Response,
+    db: DB,
+    settings: Config,
+) -> BrowserLoginResponse:
+    user, recovery_remaining, limiter_key, source_ip = _authenticate_login(
+        payload, request, db, settings
+    )
+    user.last_login_at = datetime.now(UTC)
+    created_via = (
+        "recovery_code"
+        if payload.recovery_code
+        else "password_totp"
+        if payload.totp_code
+        else "password"
+    )
+    credentials = create_browser_session(
+        db,
+        user=user,
+        request=request,
+        settings=settings,
+        remember_me=payload.remember_me,
+        created_via=created_via,
+        device_name=payload.device_name,
+    )
+    write_audit(
+        db,
+        actor=user,
+        action="auth.login",
+        resource_type="user",
+        resource_id=user.id,
+        outcome="success",
+        source_ip=source_ip,
+    )
+    db.commit()
+    login_limiter.reset(limiter_key)
+    _set_browser_cookies(
+        response,
+        session_secret=credentials.session_secret,
+        csrf_secret=credentials.csrf_secret,
+        row=credentials.row,
+        settings=settings,
+    )
+    return BrowserLoginResponse(
+        identity_setup_required=forced_setup_required(user),
+        recovery_codes_remaining=recovery_remaining,
+        remember_me=credentials.row.remember_me,
+        idle_expires_at=credentials.row.idle_expires_at,
+        absolute_expires_at=credentials.row.absolute_expires_at,
+    )
+
+
 @router.post("/api/v1/auth/logout", status_code=204, tags=["auth"])
 def logout(
     request: Request,
     response: Response,
     db: DB,
+    settings: Config,
     user: Annotated[User, Depends(require_role(Role.viewer))],
 ) -> None:
     auth_session = cast(UserSession, request.state.auth_session)
@@ -389,8 +551,7 @@ def logout(
         source_ip=request.client.host if request.client else None,
     )
     db.commit()
-    response.delete_cookie("guardian_session", path="/")
-    response.delete_cookie("guardian_csrf", path="/")
+    _delete_browser_cookies(response, settings)
 
 
 @router.get("/api/v1/auth/me", response_model=UserView, tags=["auth"])
@@ -398,37 +559,82 @@ def me(user: Annotated[User, Depends(require_role(Role.viewer))]) -> User:
     return user
 
 
-def _replace_auth_cookies(
-    response: Response,
-    *,
-    token: str,
-    csrf: str,
-    ttl: int,
-    settings: Settings,
+@router.post("/api/v1/auth/activity", status_code=204, tags=["auth"])
+def record_browser_activity(
+    request: Request,
+    db: DB,
+    settings: Config,
+    _: Annotated[User, Depends(require_role(Role.viewer))],
+    activity_type: Annotated[
+        Literal["pointer", "keyboard"],
+        Header(alias="X-Guardian-Activity-Type"),
+    ],
 ) -> None:
-    response.set_cookie(
-        "guardian_session",
-        token,
-        max_age=ttl,
-        httponly=True,
-        secure=settings.secure_cookies,
-        samesite="strict",
-        path="/",
+    if getattr(request.state, "auth_method", "") != "browser":
+        return
+    current = cast(UserSession, request.state.auth_session)
+    if touch_browser_session(
+        db,
+        row=current,
+        settings=settings,
+        activity_type=activity_type,
+    ):
+        db.commit()
+
+
+@router.post("/api/v1/auth/step-up", response_model=StepUpView, tags=["auth"])
+def create_step_up_window(
+    payload: StepUpRequest,
+    request: Request,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> StepUpView:
+    if getattr(request.state, "auth_method", "") != "browser":
+        raise HTTPException(status_code=403, detail={"code": "STEP_UP_REQUIRED", "params": {}})
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=401, detail={"code": "PASSWORD_INVALID", "params": {}})
+    if user.totp_enabled:
+        if not verify_totp(user, payload.totp_code, settings):
+            raise HTTPException(status_code=401, detail={"code": "TOTP_INVALID", "params": {}})
+        secret = decrypt_sensitive(user.totp_secret_encrypted or "", settings)
+        user.last_totp_counter = totp_counter_for_code(secret, payload.totp_code)
+    current = cast(UserSession, request.state.auth_session)
+    now = datetime.now(UTC)
+    current.step_up_until = min(
+        now + timedelta(minutes=settings.session_step_up_minutes),
+        as_utc(current.absolute_expires_at),
     )
-    response.set_cookie(
-        "guardian_csrf",
-        csrf,
-        max_age=ttl,
-        httponly=False,
-        secure=settings.secure_cookies,
-        samesite="strict",
-        path="/",
+    write_audit(
+        db,
+        actor=user,
+        action="auth.step_up",
+        resource_type="session",
+        resource_id=current.id,
+        outcome="success",
+        details={"window_minutes": settings.session_step_up_minutes},
+        source_ip=request.client.host if request.client else None,
     )
+    db.commit()
+    return StepUpView(step_up_until=current.step_up_until)
+
+
+def _require_step_up(request: Request) -> None:
+    if getattr(request.state, "auth_method", "") != "browser":
+        return
+    current = cast(UserSession, request.state.auth_session)
+    if current.step_up_until is None:
+        raise HTTPException(status_code=403, detail={"code": "STEP_UP_REQUIRED", "params": {}})
+    expires_at = current.step_up_until
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at <= datetime.now(UTC):
+        raise HTTPException(status_code=403, detail={"code": "STEP_UP_EXPIRED", "params": {}})
 
 
 @router.post(
     "/api/v1/auth/change-password",
-    response_model=LoginResponse,
+    response_model=LoginResponse | BrowserLoginResponse,
     tags=["auth"],
 )
 def change_password(
@@ -438,7 +644,8 @@ def change_password(
     db: DB,
     settings: Config,
     user: Annotated[User, Depends(require_role(Role.viewer))],
-) -> LoginResponse:
+) -> LoginResponse | BrowserLoginResponse:
+    _require_step_up(request)
     source_ip = request.client.host if request.client else None
     db.refresh(user, with_for_update=True)
     if not verify_password(payload.current_password, user.password_hash):
@@ -480,9 +687,18 @@ def change_password(
         except_session_id=current.id,
     )
     current.session_version = user.session_version
-    token, ttl = create_access_token(user, settings, session_id=current.id)
-    csrf = generate_csrf_token()
-    _replace_auth_cookies(response, token=token, csrf=csrf, ttl=ttl, settings=settings)
+    browser_credentials = None
+    if getattr(request.state, "auth_method", "") == "browser":
+        browser_credentials = rotate_browser_session(
+            db,
+            row=current,
+            user=user,
+            request=request,
+            settings=settings,
+            reason="password_changed_rotated",
+        )
+    else:
+        current.session_version = user.session_version
     write_audit(
         db,
         actor=user,
@@ -494,6 +710,22 @@ def change_password(
         source_ip=source_ip,
     )
     db.commit()
+    if browser_credentials is not None:
+        _set_browser_cookies(
+            response,
+            session_secret=browser_credentials.session_secret,
+            csrf_secret=browser_credentials.csrf_secret,
+            row=browser_credentials.row,
+            settings=settings,
+        )
+        return BrowserLoginResponse(
+            identity_setup_required=forced_setup_required(user),
+            remember_me=browser_credentials.row.remember_me,
+            idle_expires_at=browser_credentials.row.idle_expires_at,
+            absolute_expires_at=browser_credentials.row.absolute_expires_at,
+        )
+    token, ttl = create_access_token(user, settings, session_id=current.id)
+    csrf = generate_csrf_token()
     return LoginResponse(
         access_token=token,
         csrf_token=csrf,
@@ -565,9 +797,7 @@ def enable_totp(
     settings: Config,
     user: Annotated[User, Depends(require_role(Role.viewer))],
 ) -> RecoveryCodeBatchView:
-    _require_reauthentication_audited(
-        db, user, payload.current_password, "totp.enable", request
-    )
+    _require_reauthentication_audited(db, user, payload.current_password, "totp.enable", request)
     if not user.totp_pending_secret_encrypted or not user.totp_pending_created_at:
         write_audit(
             db,
@@ -670,7 +900,10 @@ def confirm_recovery_codes(
             source_ip=request.client.host if request.client else None,
         )
         db.commit()
-        raise HTTPException(status_code=409, detail="recovery codes are not available")
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "RECOVERY_CODES_EMPTY", "params": {"remaining": 0}},
+        )
     user.recovery_codes_confirmed_at = datetime.now(UTC)
     write_audit(
         db,
@@ -714,7 +947,10 @@ def regenerate_recovery_codes(
     _require_reauthentication_audited(
         db, user, payload.current_password, "recovery_codes.regenerate", request
     )
-    if not verify_totp(user, payload.totp_code, settings):
+    if (
+        getattr(request.state, "auth_method", "") != "browser"
+        and not verify_totp(user, payload.totp_code, settings)
+    ):
         write_audit(
             db,
             actor=user,
@@ -727,8 +963,9 @@ def regenerate_recovery_codes(
         )
         db.commit()
         raise HTTPException(status_code=401, detail="TOTP confirmation is invalid")
-    secret = decrypt_sensitive(user.totp_secret_encrypted or "", settings)
-    user.last_totp_counter = totp_counter_for_code(secret, payload.totp_code)
+    if getattr(request.state, "auth_method", "") != "browser":
+        secret = decrypt_sensitive(user.totp_secret_encrypted or "", settings)
+        user.last_totp_counter = totp_counter_for_code(secret, payload.totp_code)
     codes = generate_recovery_code_batch(db, user=user, settings=settings)
     user.recovery_codes_confirmed_at = None
     write_audit(
@@ -753,10 +990,11 @@ def disable_totp(
     settings: Config,
     user: Annotated[User, Depends(require_role(Role.viewer))],
 ) -> None:
-    _require_reauthentication_audited(
-        db, user, payload.current_password, "totp.disable", request
-    )
-    if not user.totp_enabled or not verify_totp(user, payload.totp_code, settings):
+    _require_reauthentication_audited(db, user, payload.current_password, "totp.disable", request)
+    if not user.totp_enabled or (
+        getattr(request.state, "auth_method", "") != "browser"
+        and not verify_totp(user, payload.totp_code, settings)
+    ):
         write_audit(
             db,
             actor=user,
@@ -819,16 +1057,98 @@ def own_sessions(
     user: Annotated[User, Depends(require_role(Role.viewer))],
 ) -> list[UserSessionView]:
     current = cast(UserSession, request.state.auth_session)
+    now = datetime.now(UTC)
     rows = db.scalars(
         select(UserSession)
         .where(
             UserSession.user_id == user.id,
             UserSession.revoked_at.is_(None),
-            UserSession.expires_at > datetime.now(UTC),
+            UserSession.idle_expires_at > now,
+            UserSession.absolute_expires_at > now,
         )
         .order_by(desc(UserSession.issued_at))
     ).all()
     return [_session_view(row, current.id) for row in rows]
+
+
+@router.post("/api/v1/auth/sessions/revoke-others", status_code=204, tags=["auth"])
+def revoke_own_other_sessions(
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> None:
+    _require_step_up(request)
+    current = cast(UserSession, request.state.auth_session)
+    revoke_sessions(
+        db,
+        user_id=user.id,
+        actor_id=user.id,
+        reason="self_revoke_others",
+        except_session_id=current.id,
+    )
+    write_audit(
+        db,
+        actor=user,
+        action="session.revoke_others",
+        resource_type="session",
+        resource_id=current.id,
+        outcome="success",
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+
+
+@router.post("/api/v1/auth/sessions/current/revoke", status_code=204, tags=["auth"])
+def revoke_current_session(
+    request: Request,
+    response: Response,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> None:
+    current = cast(UserSession, request.state.auth_session)
+    current.revoked_at = datetime.now(UTC)
+    current.revoked_by = user.id
+    current.revoke_reason = "self_revoke_current"
+    write_audit(
+        db,
+        actor=user,
+        action="session.revoke",
+        resource_type="session",
+        resource_id=current.id,
+        outcome="success",
+        details={"reason": "self_revoke_current"},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    _delete_browser_cookies(response, settings)
+
+
+@router.patch(
+    "/api/v1/auth/sessions/current",
+    response_model=UserSessionView,
+    tags=["auth"],
+)
+def rename_current_session(
+    payload: SessionDeviceRename,
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> UserSessionView:
+    current = cast(UserSession, request.state.auth_session)
+    current.device_name = payload.device_name.strip()
+    current.last_activity_type = "device_renamed"
+    write_audit(
+        db,
+        actor=user,
+        action="session.rename",
+        resource_type="session",
+        resource_id=current.id,
+        outcome="success",
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return _session_view(current, current.id)
 
 
 @router.delete("/api/v1/auth/sessions/{session_id}", status_code=204, tags=["auth"])
@@ -838,6 +1158,7 @@ def revoke_own_other_session(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.viewer))],
 ) -> None:
+    _require_step_up(request)
     current = cast(UserSession, request.state.auth_session)
     if session_id == current.id:
         raise HTTPException(status_code=409, detail="use logout to revoke the current session")
@@ -878,6 +1199,7 @@ def list_user_sessions(
 ) -> list[UserSessionView]:
     if db.get(User, user_id) is None:
         raise HTTPException(status_code=404, detail="user not found")
+    now = datetime.now(UTC)
     return [
         _session_view(row)
         for row in db.scalars(
@@ -885,7 +1207,8 @@ def list_user_sessions(
             .where(
                 UserSession.user_id == user_id,
                 UserSession.revoked_at.is_(None),
-                UserSession.expires_at > datetime.now(UTC),
+                UserSession.idle_expires_at > now,
+                UserSession.absolute_expires_at > now,
             )
             .order_by(desc(UserSession.issued_at))
         ).all()
@@ -904,14 +1227,17 @@ def revoke_user_session(
     db: DB,
     actor: Annotated[User, Depends(require_role(Role.admin))],
 ) -> None:
+    _require_step_up(request)
     target_user = db.get(User, user_id)
+    now = datetime.now(UTC)
     active_sessions = list(
         db.scalars(
             select(UserSession)
             .where(
                 UserSession.user_id == user_id,
                 UserSession.revoked_at.is_(None),
-                UserSession.expires_at > datetime.now(UTC),
+                UserSession.idle_expires_at > now,
+                UserSession.absolute_expires_at > now,
             )
             .order_by(UserSession.id)
             .with_for_update()
@@ -1039,6 +1365,9 @@ def _require_reauthentication_audited(
     action: str,
     request: Request,
 ) -> None:
+    _require_step_up(request)
+    if getattr(request.state, "auth_method", "") == "browser":
+        return
     if verify_password(password, actor.password_hash):
         return
     write_audit(
@@ -1056,9 +1385,7 @@ def _require_reauthentication_audited(
 
 
 @router.get("/api/v1/users", response_model=list[UserView], tags=["users"])
-def list_users(
-    db: DB, _: Annotated[User, Depends(require_role(Role.admin))]
-) -> list[User]:
+def list_users(db: DB, _: Annotated[User, Depends(require_role(Role.admin))]) -> list[User]:
     return list(db.scalars(select(User).order_by(User.email)).all())
 
 
@@ -1069,6 +1396,7 @@ def create_user(
     db: DB,
     actor: Annotated[User, Depends(require_role(Role.owner))],
 ) -> User:
+    _require_step_up(request)
     if db.scalar(select(User).where(User.email == payload.email)):
         write_audit(
             db,
@@ -1138,6 +1466,7 @@ def update_user(
     db: DB,
     actor: Annotated[User, Depends(require_role(Role.owner))],
 ) -> User:
+    _require_step_up(request)
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="user not found")
@@ -1215,6 +1544,7 @@ def revoke_user_sessions(
     db: DB,
     actor: Annotated[User, Depends(require_role(Role.admin))],
 ) -> None:
+    _require_step_up(request)
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="user not found")
@@ -1317,9 +1647,7 @@ def delete_user(
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="user not found")
-    _require_reauthentication_audited(
-        db, actor, payload.current_password, "user.delete", request
-    )
+    _require_reauthentication_audited(db, actor, payload.current_password, "user.delete", request)
     owners = _lock_active_owners(db) if target.role == Role.owner.value and target.is_active else []
     if owners and not any(owner.id != target.id for owner in owners):
         _audit_rejected_owner_operation(
@@ -1350,6 +1678,184 @@ def _snapshot_metric(snapshot: MetricSnapshot | None, key: str) -> float:
         return -1.0
     value = snapshot.payload.get(key)
     return float(value) if isinstance(value, int | float) else -1.0
+
+
+_INTERNAL_HOST_TAGS = frozenset({"komari-import", "pending-enrollment"})
+
+
+def _host_management(host: Host, agent: Agent | None) -> str:
+    tags = set(host.tags)
+    if agent is not None and "komari-import" in tags:
+        return "guardian_and_komari"
+    if agent is not None:
+        return "guardian"
+    if "komari-import" in tags or host.address.startswith("komari:"):
+        return "komari_only"
+    return "pending_enrollment"
+
+
+def _host_agent_state(agent: Agent | None, now: datetime) -> str:
+    if agent is None:
+        return "not_installed"
+    if agent.revoked_at is not None:
+        return "revoked"
+    if agent.last_heartbeat_at is None:
+        return "never_seen"
+    heartbeat = agent.last_heartbeat_at
+    if heartbeat.tzinfo is None:
+        heartbeat = heartbeat.replace(tzinfo=UTC)
+    return "online" if heartbeat >= now - timedelta(minutes=5) else "stale"
+
+
+def _host_data_reason(host: Host, agent: Agent | None) -> str:
+    if not host.enabled:
+        return "disabled"
+    if host.data_state == "stale":
+        return "stale"
+    if host.data_state == "agent_error":
+        return "agent_error"
+    if agent is None and _host_management(host, agent) == "pending_enrollment":
+        return "pending_enrollment"
+    if agent is None:
+        return "no_guardian_agent"
+    if agent.last_heartbeat_at is None:
+        return "never_connected"
+    return "available"
+
+
+def _resource_percent(payload: dict[str, object], key: str) -> float | None:
+    value = payload.get(key)
+    return float(value) if isinstance(value, int | float) else None
+
+
+def _host_resource_summary(payload: dict[str, object] | None) -> dict[str, float] | None:
+    if payload is None:
+        return None
+    values = {
+        "cpu_percent": _resource_percent(payload, "cpu_percent"),
+        "memory_percent": _resource_percent(payload, "memory_percent"),
+        "disk_percent": _resource_percent(payload, "disk_percent"),
+    }
+    return {key: value for key, value in values.items() if value is not None} or None
+
+
+@router.get(
+    "/api/v1/hosts/presentation",
+    response_model=list[HostPresentationView],
+    tags=["inventory"],
+)
+def list_host_presentations(
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.viewer))],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[HostPresentationView]:
+    """Bounded, single-query host index with an explicit presentation allowlist."""
+
+    rows = db.execute(
+        select(Host, Agent)
+        .outerjoin(Agent, Agent.host_id == Host.id)
+        .order_by(Host.name)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    host_ids = [host.id for host, _agent in rows]
+    snapshots: dict[str, dict[str, object]] = {}
+    if host_ids:
+        ranked_snapshots = (
+            select(
+                MetricSnapshot.host_id,
+                MetricSnapshot.payload,
+                func.row_number()
+                .over(
+                    partition_by=MetricSnapshot.host_id,
+                    order_by=desc(MetricSnapshot.collected_at),
+                )
+                .label("snapshot_rank"),
+            )
+            .where(MetricSnapshot.host_id.in_(host_ids))
+            .subquery()
+        )
+        snapshots = {
+            host_id: cast(dict[str, object], payload)
+            for host_id, payload in db.execute(
+                select(ranked_snapshots.c.host_id, ranked_snapshots.c.payload).where(
+                    ranked_snapshots.c.snapshot_rank == 1
+                )
+            ).all()
+        }
+    now = datetime.now(UTC)
+    return [
+        HostPresentationView(
+            id=host.id,
+            name=host.name,
+            primary_address=host.address,
+            os_name=host.os_name,
+            region=host.location,
+            group=host.group_name,
+            provider=host.labels.get("provider"),
+            purpose=host.labels.get("purpose"),
+            display_tags=[tag for tag in host.tags if tag not in _INTERNAL_HOST_TAGS],
+            health=cast(Any, host.status),
+            data_state=cast(Any, host.data_state),
+            enabled=host.enabled,
+            management=cast(Any, _host_management(host, agent)),
+            agent_state=cast(Any, _host_agent_state(agent, now)),
+            agent_version=agent.version if agent else None,
+            last_heartbeat_at=agent.last_heartbeat_at if agent else None,
+            last_seen_at=host.last_seen_at,
+            enrolled_at=host.enrolled_at,
+            data_reason=cast(Any, _host_data_reason(host, agent)),
+            resource_summary=_host_resource_summary(snapshots.get(host.id)),
+            technical_evidence_available=True,
+        )
+        for host, agent in rows
+    ]
+
+
+@router.patch("/api/v1/hosts/batch", tags=["inventory"])
+def batch_update_hosts(
+    payload: HostBatchUpdate,
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.admin))],
+) -> dict[str, int]:
+    if (
+        payload.enabled is None
+        and payload.group_name is None
+        and not payload.add_tags
+        and not payload.remove_tags
+    ):
+        raise HTTPException(status_code=422, detail="at least one batch change is required")
+    hosts = list(db.scalars(select(Host).where(Host.id.in_(payload.host_ids))).all())
+    if len(hosts) != len(payload.host_ids):
+        raise HTTPException(status_code=404, detail="one or more hosts were not found")
+    for host in hosts:
+        if payload.enabled is not None:
+            host.enabled = payload.enabled
+            host.disabled_at = None if payload.enabled else datetime.now(UTC)
+        if payload.group_name is not None:
+            host.group_name = payload.group_name or None
+        tags = (set(host.tags) | set(payload.add_tags)) - set(payload.remove_tags)
+        host.tags = sorted(tags)
+    write_audit(
+        db,
+        actor=user,
+        action="host.batch_update",
+        resource_type="host",
+        resource_id=None,
+        outcome="success",
+        details={
+            "host_count": len(hosts),
+            "enabled_changed": payload.enabled is not None,
+            "group_changed": payload.group_name is not None,
+            "tags_added": len(payload.add_tags),
+            "tags_removed": len(payload.remove_tags),
+        },
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return {"updated": len(hosts)}
 
 
 @router.get("/api/v1/hosts", response_model=list[HostView], tags=["inventory"])
@@ -1510,6 +2016,7 @@ def create_enrollment_token(
     settings: Config,
     user: Annotated[User, Depends(require_role(Role.admin))],
 ) -> EnrollmentTokenView:
+    _require_step_up(request)
     host = db.get(Host, host_id)
     if host is None:
         raise HTTPException(status_code=404, detail="host not found")
@@ -1564,6 +2071,7 @@ def revoke_host_enrollment_token(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.admin))],
 ) -> None:
+    _require_step_up(request)
     try:
         token = revoke_enrollment_token(db, token_id=token_id, host_id=host_id)
     except EnrollmentTokenError as exc:
@@ -1791,6 +2299,80 @@ def overview(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/api/v1/dashboard/bootstrap", tags=["dashboard"], response_model=None)
+def bootstrap_dashboard(
+    response: Response,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+    if_none_match: Annotated[str | None, Header()] = None,
+) -> dict[str, object] | Response:
+    started = time.perf_counter()
+    payload, etag, cache_hit, db_ms, serialization_ms = dashboard_bootstrap(
+        db,
+        settings=settings,
+        user=user,
+    )
+    total_ms = (time.perf_counter() - started) * 1000
+    headers = {
+        "Cache-Control": "private, max-age=0, must-revalidate",
+        "ETag": etag,
+        "Server-Timing": (
+            f'db;dur={db_ms:.2f}, cache;desc="{"hit" if cache_hit else "miss"}";dur=0, '
+            f"serialization;dur={serialization_ms:.2f}, total;dur={total_ms:.2f}"
+        ),
+        "Vary": "Authorization, Cookie",
+    }
+    if if_none_match == etag:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+    for key, value in headers.items():
+        response.headers[key] = value
+    return payload
+
+
+@router.get("/api/v1/dashboard/resources/current", tags=["dashboard"])
+def dashboard_resources_current(
+    response: Response,
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.viewer))],
+) -> dict[str, object]:
+    started = time.perf_counter()
+    payload = current_resource_summary(db)
+    response.headers["Cache-Control"] = "private, max-age=15"
+    response.headers["Server-Timing"] = f"total;dur={(time.perf_counter() - started) * 1000:.2f}"
+    response.headers["Vary"] = "Authorization, Cookie"
+    return payload
+
+
+@router.get("/api/v1/dashboard/topology", tags=["dashboard"])
+def dashboard_topology(
+    response: Response,
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.viewer))],
+) -> dict[str, object]:
+    started = time.perf_counter()
+    payload = topology_summary(db)
+    response.headers["Cache-Control"] = "private, max-age=15"
+    response.headers["Server-Timing"] = f"total;dur={(time.perf_counter() - started) * 1000:.2f}"
+    response.headers["Vary"] = "Authorization, Cookie"
+    return payload
+
+
+@router.get("/api/v1/dashboard/security", tags=["dashboard"])
+def dashboard_security(
+    response: Response,
+    db: DB,
+    settings: Config,
+    _: Annotated[User, Depends(require_role(Role.admin))],
+) -> dict[str, object]:
+    started = time.perf_counter()
+    payload = security_summary(db, settings=settings)
+    response.headers["Cache-Control"] = "private, max-age=15"
+    response.headers["Server-Timing"] = f"total;dur={(time.perf_counter() - started) * 1000:.2f}"
+    response.headers["Vary"] = "Authorization, Cookie"
+    return payload
+
+
 @router.get("/api/v1/attention", tags=["dashboard"])
 def attention(
     db: DB,
@@ -1831,39 +2413,57 @@ def list_services(
     db: DB, _: Annotated[User, Depends(require_role(Role.viewer))]
 ) -> list[dict[str, object]]:
     services: list[dict[str, object]] = []
-    for host in db.scalars(select(Host).order_by(Host.name)).all():
-        snapshot = db.scalar(
-            select(MetricSnapshot)
-            .where(MetricSnapshot.host_id == host.id)
-            .order_by(desc(MetricSnapshot.collected_at))
-            .limit(1)
+    latest_times = (
+        select(
+            MetricSnapshot.host_id,
+            func.max(MetricSnapshot.collected_at).label("collected_at"),
         )
-        if not snapshot:
-            continue
-        raw_services = snapshot.payload.get("_services", [])
+        .group_by(MetricSnapshot.host_id)
+        .subquery()
+    )
+    rows = db.execute(
+        select(
+            Host.id,
+            Host.name,
+            MetricSnapshot.collected_at,
+            MetricSnapshot.payload,
+        )
+        .join(latest_times, latest_times.c.host_id == Host.id)
+        .join(
+            MetricSnapshot,
+            and_(
+                MetricSnapshot.host_id == latest_times.c.host_id,
+                MetricSnapshot.collected_at == latest_times.c.collected_at,
+            ),
+        )
+        .order_by(Host.name)
+    ).all()
+    for host_id, host_name, collected_at, payload in rows:
+        raw_services = payload.get("_services", [])
         if not isinstance(raw_services, list):
             continue
         for item in raw_services[:100]:
             if not isinstance(item, dict):
                 continue
             kind = str(item.get("kind", "unknown"))[:80]
-            summary = str(item.get("summary", ""))[:1000]
+            raw_summary = str(item.get("summary", ""))[:1000]
+            classification = classify_service_observation(kind, raw_summary)
+            summary = redact_serialized_text(raw_summary)
             services.append(
                 {
-                    "host_id": host.id,
-                    "host_name": host.name,
+                    "host_id": host_id,
+                    "host_name": host_name,
                     "kind": kind,
-                    "status": "failed" if kind == "systemd_failed" else "observed",
+                    **classification,
                     "summary": summary,
-                    "collected_at": snapshot.collected_at.isoformat(),
+                    "evidence_available": bool(summary),
+                    "collected_at": collected_at.isoformat(),
                 }
             )
     return services
 
 
-@router.get(
-    "/api/v1/service-checks", response_model=list[ServiceCheckView], tags=["monitoring"]
-)
+@router.get("/api/v1/service-checks", response_model=list[ServiceCheckView], tags=["monitoring"])
 def list_service_checks(
     db: DB,
     _: Annotated[User, Depends(require_role(Role.viewer))],
@@ -1895,9 +2495,7 @@ def list_service_check_results(
         statement = statement.where(ServiceCheckResult.check_id == check_id)
     return list(
         db.scalars(
-            statement.order_by(desc(ServiceCheckResult.checked_at))
-            .limit(limit)
-            .offset(offset)
+            statement.order_by(desc(ServiceCheckResult.checked_at)).limit(limit).offset(offset)
         ).all()
     )
 
@@ -1951,6 +2549,47 @@ def create_service_check(
         source_ip=request.client.host if request.client else None,
     )
     db.commit()
+    return check
+
+
+@router.patch(
+    "/api/v1/service-checks/{check_id}",
+    response_model=ServiceCheckView,
+    tags=["monitoring"],
+)
+def update_service_check(
+    check_id: str,
+    payload: ServiceCheckUpdate,
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.admin))],
+) -> ServiceCheck:
+    check = db.get(ServiceCheck, check_id)
+    if check is None:
+        raise HTTPException(status_code=404, detail="service check not found")
+    changes = payload.model_dump(exclude_none=True)
+    if not changes:
+        return check
+    previous = {key: getattr(check, key) for key in changes}
+    for key, value in changes.items():
+        setattr(check, key, value)
+    check.updated_at = datetime.now(UTC)
+    write_audit(
+        db,
+        actor=user,
+        action="service_check.update",
+        resource_type="service_check",
+        resource_id=check.id,
+        outcome="success",
+        details={
+            "fields": sorted(changes),
+            "previous": previous,
+            "current": changes,
+        },
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.refresh(check)
     return check
 
 
@@ -2040,16 +2679,12 @@ def list_alerts(
         statement = statement.where(AlertInstance.state == state)
     return list(
         db.scalars(
-            statement.order_by(desc(AlertInstance.last_observed_at))
-            .limit(limit)
-            .offset(offset)
+            statement.order_by(desc(AlertInstance.last_observed_at)).limit(limit).offset(offset)
         ).all()
     )
 
 
-@router.post(
-    "/api/v1/alerts/{alert_id}/acknowledge", response_model=AlertView, tags=["alerts"]
-)
+@router.post("/api/v1/alerts/{alert_id}/acknowledge", response_model=AlertView, tags=["alerts"])
 def acknowledge_alert_api(
     alert_id: str,
     request: Request,
@@ -2089,9 +2724,7 @@ def silence_alert_api(
     if alert is None:
         raise HTTPException(status_code=404, detail="alert not found")
     try:
-        silence_alert(
-            db, alert=alert, actor=user, reason=payload.reason, until=payload.until
-        )
+        silence_alert(db, alert=alert, actor=user, reason=payload.reason, until=payload.until)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     write_audit(
@@ -2182,6 +2815,7 @@ def create_notification_channel(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.admin))],
 ) -> NotificationChannel:
+    _require_step_up(request)
     if db.scalar(select(NotificationChannel).where(NotificationChannel.name == payload.name)):
         raise HTTPException(status_code=409, detail="notification channel name already exists")
     channel = NotificationChannel(**payload.model_dump())
@@ -2339,10 +2973,7 @@ def list_incidents(
 ) -> list[Incident]:
     return list(
         db.scalars(
-            select(Incident)
-            .order_by(desc(Incident.first_seen_at))
-            .limit(limit)
-            .offset(offset)
+            select(Incident).order_by(desc(Incident.first_seen_at)).limit(limit).offset(offset)
         ).all()
     )
 
@@ -2421,6 +3052,289 @@ def update_incident(
     return incident
 
 
+def _approval_actor(user: User | None) -> ApprovalActorView | None:
+    if user is None:
+        return None
+    local_part = user.email.partition("@")[0]
+    return ApprovalActorView(label=local_part or "operator", role=user.role)
+
+
+def _approval_target(approval: Approval, host: Host | None) -> ApprovalTargetView:
+    impact = approval.impact if isinstance(approval.impact, dict) else {}
+    return ApprovalTargetView(
+        host=host.name if host else None,
+        service=str(impact["service"])[:120]
+        if isinstance(impact.get("service"), str | int | float)
+        else None,
+        scope=str(impact["scope"])[:160]
+        if isinstance(impact.get("scope"), str | int | float)
+        else None,
+    )
+
+
+def _approval_task_state(tasks: list[AgentTask]) -> str | None:
+    if not tasks:
+        return None
+    states = {task.status for task in tasks}
+    if any(state in {"failed", "error"} for state in states):
+        return "failed"
+    if any(state in {"running", "executing"} for state in states):
+        return "executing"
+    if states <= {"completed", "succeeded"}:
+        return "completed"
+    return "queued"
+
+
+def _approval_summary(
+    approval: Approval,
+    *,
+    requester: User | None,
+    host: Host | None,
+    tasks: list[AgentTask],
+) -> ApprovalSummaryView:
+    progress = {
+        ApprovalStatus.pending.value: "awaiting_decision",
+        ApprovalStatus.approved.value: "decision_recorded",
+        ApprovalStatus.partially_approved.value: "decision_recorded",
+        ApprovalStatus.approved_with_conditions.value: "decision_recorded",
+        ApprovalStatus.changes_requested.value: "changes_requested",
+        ApprovalStatus.rejected.value: "closed",
+        ApprovalStatus.dry_run_only.value: "dry_run_requested",
+        ApprovalStatus.executing.value: "executing",
+        ApprovalStatus.executed.value: "completed",
+        ApprovalStatus.failed.value: "failed",
+        ApprovalStatus.rolled_back.value: "rolled_back",
+        ApprovalStatus.expired.value: "expired",
+        ApprovalStatus.withdrawn.value: "withdrawn",
+    }.get(approval.status, approval.status)
+    return ApprovalSummaryView(
+        id=approval.id,
+        incident_id=approval.incident_id,
+        action_name=approval.action_name,
+        status=approval.status,
+        risk_level=approval.risk_level,
+        target=_approval_target(approval, host),
+        requester=_approval_actor(requester),
+        requested_at=approval.requested_at,
+        expires_at=approval.expires_at,
+        progress_label=progress,
+        execution_status=_approval_task_state(tasks),
+    )
+
+
+_APPROVAL_IMPACT_FIELDS: tuple[tuple[str, str], ...] = (
+    ("service", "service"),
+    ("scope", "scope"),
+    ("downtime", "downtime"),
+    ("affected_hosts", "affected_hosts"),
+    ("affected_services", "affected_services"),
+    ("estimated_duration", "estimated_duration"),
+)
+
+
+def _approval_impact_facts(approval: Approval) -> list[ApprovalFactView]:
+    impact = approval.impact if isinstance(approval.impact, dict) else {}
+    facts: list[ApprovalFactView] = []
+    for source, key in _APPROVAL_IMPACT_FIELDS:
+        value = impact.get(source)
+        if isinstance(value, str | int | float | bool):
+            facts.append(ApprovalFactView(key=key, value=str(value)[:240]))
+        elif isinstance(value, list):
+            safe_items = [
+                str(item)[:80] for item in value[:20] if isinstance(item, str | int | float)
+            ]
+            if safe_items:
+                facts.append(ApprovalFactView(key=key, value=", ".join(safe_items)[:500]))
+    return facts
+
+
+def _approval_steps(approval: Approval) -> list[ApprovalStepView]:
+    parameters = approval.parameters if isinstance(approval.parameters, dict) else {}
+    raw_actions = parameters.get("actions")
+    if not isinstance(raw_actions, list):
+        return []
+    steps: list[ApprovalStepView] = []
+    for index, raw_action in enumerate(raw_actions[:50], start=1):
+        if not isinstance(raw_action, dict):
+            continue
+        action = raw_action.get("type")
+        action_parameters = raw_action.get("parameters")
+        if not isinstance(action, str) or not isinstance(action_parameters, dict):
+            continue
+        target = action_parameters.get("target")
+        dry_run = action_parameters.get("dry_run")
+        steps.append(
+            ApprovalStepView(
+                order=index,
+                action=action[:120],
+                target=str(target)[:240] if isinstance(target, str | int | float) else None,
+                dry_run=str(dry_run).casefold() == "true" if dry_run is not None else False,
+            )
+        )
+    return steps
+
+
+@router.get(
+    "/api/v1/approvals/presentation",
+    response_model=list[ApprovalSummaryView],
+    tags=["repairs"],
+)
+def list_approval_summaries(
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.operator))],
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[ApprovalSummaryView]:
+    expire_pending_approvals(db)
+    approvals = list(
+        db.scalars(
+            select(Approval).order_by(desc(Approval.requested_at)).limit(limit).offset(offset)
+        ).all()
+    )
+    requester_ids = {item.requested_by for item in approvals if item.requested_by}
+    host_ids = {item.target_host_id for item in approvals if item.target_host_id}
+    approval_ids = {item.id for item in approvals}
+    users = (
+        {item.id: item for item in db.scalars(select(User).where(User.id.in_(requester_ids))).all()}
+        if requester_ids
+        else {}
+    )
+    hosts = (
+        {item.id: item for item in db.scalars(select(Host).where(Host.id.in_(host_ids))).all()}
+        if host_ids
+        else {}
+    )
+    tasks_by_approval: dict[str, list[AgentTask]] = {}
+    if approval_ids:
+        for task in db.scalars(
+            select(AgentTask).where(AgentTask.approval_id.in_(approval_ids))
+        ).all():
+            if task.approval_id:
+                tasks_by_approval.setdefault(task.approval_id, []).append(task)
+    return [
+        _approval_summary(
+            approval,
+            requester=users.get(approval.requested_by) if approval.requested_by else None,
+            host=hosts.get(approval.target_host_id) if approval.target_host_id else None,
+            tasks=tasks_by_approval.get(approval.id, []),
+        )
+        for approval in approvals
+    ]
+
+
+@router.get(
+    "/api/v1/approvals/{approval_id}/presentation",
+    response_model=ApprovalDetailView,
+    tags=["repairs"],
+)
+def get_approval_presentation(
+    approval_id: str,
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.operator))],
+) -> ApprovalDetailView:
+    approval = db.get(Approval, approval_id)
+    if approval is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+    requester = db.get(User, approval.requested_by) if approval.requested_by else None
+    approver = db.get(User, approval.decided_by) if approval.decided_by else None
+    host = db.get(Host, approval.target_host_id) if approval.target_host_id else None
+    tasks = list(
+        db.scalars(
+            select(AgentTask)
+            .where(AgentTask.approval_id == approval.id)
+            .order_by(AgentTask.created_at)
+            .limit(100)
+        ).all()
+    )
+    audit_entries = list(
+        db.scalars(
+            select(AuditLog)
+            .where(
+                AuditLog.resource_type == "approval",
+                AuditLog.resource_id == approval.id,
+            )
+            .order_by(AuditLog.created_at)
+            .limit(100)
+        ).all()
+    )
+    audit_actor_ids = {entry.actor_id for entry in audit_entries if entry.actor_id}
+    audit_actors = (
+        {
+            actor.id: actor
+            for actor in db.scalars(select(User).where(User.id.in_(audit_actor_ids))).all()
+        }
+        if audit_actor_ids
+        else {}
+    )
+    requester_actor = _approval_actor(requester)
+    timeline = [
+        ApprovalTimelineEntryView(
+            at=approval.requested_at,
+            event="requested",
+            actor=requester_actor.label if requester_actor else None,
+            outcome="pending",
+        )
+    ]
+    for entry in audit_entries:
+        entry_actor = _approval_actor(audit_actors.get(entry.actor_id)) if entry.actor_id else None
+        timeline.append(
+            ApprovalTimelineEntryView(
+                at=entry.created_at,
+                event=entry.action,
+                actor=entry_actor.label if entry_actor else None,
+                outcome=entry.outcome,
+            )
+        )
+    completed_times = [task.completed_at for task in tasks if task.completed_at is not None]
+    summary = _approval_summary(approval, requester=requester, host=host, tasks=tasks)
+    impact = approval.impact if isinstance(approval.impact, dict) else {}
+    risk_reason = impact.get("risk_reason")
+    return ApprovalDetailView(
+        **summary.model_dump(),
+        risk_reason=str(risk_reason)[:500]
+        if isinstance(risk_reason, str | int | float)
+        else f"level_{approval.risk_level}_operational_change",
+        approver=_approval_actor(approver),
+        decided_at=approval.decided_at,
+        executed_at=max(completed_times) if completed_times else None,
+        impact_facts=_approval_impact_facts(approval),
+        steps=_approval_steps(approval),
+        dry_run_available=bool(impact.get("dry_run_available", False)),
+        dry_run_status=_approval_task_state(tasks)
+        if approval.status == ApprovalStatus.dry_run_only.value
+        else None,
+        recovery_point_label=approval.recovery_point_id,
+        rollback_available=bool(approval.rollback_plan or approval.recovery_point_id),
+        rollback_steps=[
+            str(step)[:500] for step in approval.rollback_plan[:50] if isinstance(step, str)
+        ],
+        timeline=timeline,
+        raw_evidence_available=bool(approval.parameters or approval.impact),
+    )
+
+
+@router.get(
+    "/api/v1/approvals/{approval_id}/evidence",
+    response_model=ApprovalEvidenceView,
+    tags=["repairs"],
+)
+def get_approval_evidence(
+    approval_id: str,
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.admin))],
+) -> ApprovalEvidenceView:
+    approval = db.get(Approval, approval_id)
+    if approval is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+    parameters = redact_structure(approval.parameters)
+    impact = redact_structure(approval.impact)
+    return ApprovalEvidenceView(
+        approval_id=approval.id,
+        parameters=parameters if isinstance(parameters, dict) else {},
+        impact=impact if isinstance(impact, dict) else {},
+    )
+
+
 @router.get("/api/v1/approvals", response_model=list[ApprovalView], tags=["repairs"])
 def list_approvals(
     db: DB,
@@ -2431,10 +3345,7 @@ def list_approvals(
     expire_pending_approvals(db)
     return list(
         db.scalars(
-            select(Approval)
-            .order_by(desc(Approval.requested_at))
-            .limit(limit)
-            .offset(offset)
+            select(Approval).order_by(desc(Approval.requested_at)).limit(limit).offset(offset)
         ).all()
     )
 
@@ -2473,7 +3384,12 @@ async def decide_approval(
     if approval.status != ApprovalStatus.pending.value:
         raise HTTPException(status_code=404, detail="pending approval not found")
     if (
-        payload.decision in {ApprovalStatus.approved.value, ApprovalStatus.dry_run_only.value}
+        payload.decision
+        in {
+            ApprovalStatus.approved.value,
+            ApprovalStatus.approved_with_conditions.value,
+            ApprovalStatus.dry_run_only.value,
+        }
         and approval.risk_level >= 2
         and approval.requested_by == user.id
     ):
@@ -2489,8 +3405,37 @@ async def decide_approval(
         )
         db.commit()
         raise HTTPException(status_code=403, detail="requester cannot approve this high-risk task")
+    if (
+        payload.decision
+        in {
+            ApprovalStatus.approved.value,
+            ApprovalStatus.approved_with_conditions.value,
+        }
+        and approval.risk_level >= 2
+    ):
+        _require_step_up(request)
+        if not payload.rollback_confirmed:
+            raise HTTPException(
+                status_code=422,
+                detail="high-risk approval requires rollback confirmation",
+            )
+        if payload.current_password is None:
+            raise HTTPException(
+                status_code=422,
+                detail="high-risk approval requires reauthentication",
+            )
+        _require_reauthentication_audited(
+            db,
+            user,
+            payload.current_password,
+            "approval.reauthenticate",
+            request,
+        )
     task_ids: list[str] = []
-    if payload.decision in {ApprovalStatus.approved.value, ApprovalStatus.dry_run_only.value}:
+    if payload.decision in {
+        ApprovalStatus.approved.value,
+        ApprovalStatus.dry_run_only.value,
+    }:
         agent_id = str(approval.parameters.get("agent_id", ""))
         agent = db.get(Agent, agent_id)
         raw_actions = approval.parameters.get("actions", [])
@@ -2502,9 +3447,7 @@ async def decide_approval(
             ):
                 raise HTTPException(status_code=409, detail="approval Agent plan is invalid")
             action = str(raw_action.get("type", ""))
-            parameters = {
-                str(key): str(value) for key, value in raw_action["parameters"].items()
-            }
+            parameters = {str(key): str(value) for key, value in raw_action["parameters"].items()}
             parameters["dry_run"] = (
                 "true" if payload.decision == ApprovalStatus.dry_run_only.value else "false"
             )
@@ -2571,17 +3514,313 @@ def list_audit(
 ) -> list[AuditLog]:
     return list(
         db.scalars(
+            select(AuditLog).order_by(desc(AuditLog.created_at)).limit(limit).offset(offset)
+        ).all()
+    )
+
+
+_AUDIT_ACTION_LABELS = {
+    "auth.login": "Signed in",
+    "auth.logout": "Signed out",
+    "auth.login_failed": "Sign-in denied",
+    "session.revoke": "Revoked session",
+    "host.create": "Added host",
+    "host.update": "Updated host",
+    "host.delete": "Removed host",
+    "host.stale": "Host became stale",
+    "host.offline": "Host went offline",
+    "host.register": "Registered host",
+    "user.create": "Created user",
+    "user.update": "Updated user",
+    "user.delete": "Removed user",
+    "approval.approved": "Approved operation",
+    "approval.created": "Created approval",
+    "approval.rejected": "Rejected operation",
+    "notification.phase4_acceptance": "Sent Phase 4 acceptance notification",
+}
+
+_AUDIT_RESOURCE_LABELS = {
+    "user": "User",
+    "session": "Session",
+    "host": "Host",
+    "agent": "Guardian Agent",
+    "alert": "Alert",
+    "incident": "Incident",
+    "approval": "Approval",
+    "service_check": "Service check",
+}
+
+
+def _audit_source(source_ip: str | None) -> tuple[str, str]:
+    if not source_ip:
+        return ("internal_service", "Controller internal service")
+    try:
+        address = ip_address(source_ip)
+    except ValueError:
+        return ("unknown", "Unclassified source")
+    if address.is_loopback:
+        return ("internal_service", "Controller internal service")
+    if address.is_private or address.is_link_local:
+        return ("private_network", "Private network client")
+    return ("external_client", "External client")
+
+
+def _audit_severity(entry: AuditLog) -> str:
+    if entry.outcome in {"failed", "denied", "error"}:
+        return "critical" if entry.action.startswith(("auth.", "agent.", "user.")) else "warning"
+    if any(word in entry.action for word in ("delete", "revoke", "disable", "offline")):
+        return "warning"
+    return "neutral"
+
+
+def _audit_correlation_id(details: dict[str, object]) -> str | None:
+    for key in ("correlation_id", "trace_id"):
+        value = details.get(key)
+        if isinstance(value, str) and value:
+            return value[:128]
+    return None
+
+
+def _audit_request_id(details: dict[str, object]) -> str | None:
+    value = details.get("request_id")
+    return value[:128] if isinstance(value, str) and value else None
+
+
+def _audit_resource_labels(db: Session, entries: list[AuditLog]) -> dict[tuple[str, str], str]:
+    labels: dict[tuple[str, str], str] = {}
+    model_fields: tuple[tuple[str, type[Any], Any], ...] = (
+        ("host", Host, Host.name),
+        ("user", User, User.email),
+        ("incident", Incident, Incident.title),
+        ("approval", Approval, Approval.action_name),
+        ("service_check", ServiceCheck, ServiceCheck.name),
+    )
+    for resource_type, model, display_field in model_fields:
+        ids = {
+            entry.resource_id
+            for entry in entries
+            if entry.resource_type == resource_type and entry.resource_id
+        }
+        if not ids:
+            continue
+        for resource_id, display in db.execute(
+            select(model.id, display_field).where(model.id.in_(ids))
+        ).all():
+            labels[(resource_type, resource_id)] = str(display)
+    return labels
+
+
+@router.get(
+    "/api/v1/audit/presentation",
+    response_model=list[AuditPresentationView],
+    tags=["audit"],
+)
+def list_audit_presentations(
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.admin))],
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[AuditPresentationView]:
+    entries = list(
+        db.scalars(
             select(AuditLog)
             .order_by(desc(AuditLog.created_at))
             .limit(limit)
             .offset(offset)
         ).all()
     )
+    actor_ids = {entry.actor_id for entry in entries if entry.actor_id}
+    actors = {
+        user.id: user.email
+        for user in db.scalars(select(User).where(User.id.in_(actor_ids))).all()
+    } if actor_ids else {}
+    resources = _audit_resource_labels(db, entries)
+    result: list[AuditPresentationView] = []
+    for entry in entries:
+        source_type, source_display = _audit_source(entry.source_ip)
+        actor_display = actors.get(entry.actor_id or "")
+        if entry.action.startswith("agent.") and entry.actor_id is None:
+            actor_type = "agent"
+            actor_display = "Guardian Agent"
+            source_display = "Agent certificate identity"
+        elif actor_display:
+            actor_type = "user"
+        elif entry.actor_id is None:
+            actor_type = "system"
+        else:
+            actor_type = "unknown"
+        resource_display = resources.get(
+            (entry.resource_type, entry.resource_id or ""),
+            _AUDIT_RESOURCE_LABELS.get(entry.resource_type, "Unknown resource"),
+        )
+        result.append(
+            AuditPresentationView(
+                event_id=entry.id,
+                display_action=_AUDIT_ACTION_LABELS.get(
+                    entry.action, "Unknown audit action"
+                ),
+                action_code=entry.action,
+                category=entry.action.partition(".")[0] or "system",
+                severity=cast(Any, _audit_severity(entry)),
+                result=entry.outcome,
+                actor_display=actor_display
+                or ("Controller service" if entry.actor_id is None else "Unknown actor"),
+                actor_type=cast(Any, actor_type),
+                resource_display=resource_display,
+                resource_type=entry.resource_type,
+                source_display=source_display,
+                source_type=cast(Any, source_type),
+                created_at=entry.created_at,
+                summary=(
+                    f"{_AUDIT_ACTION_LABELS.get(entry.action, 'Unknown audit action')} · "
+                    f"{resource_display}"
+                ),
+                correlation_id=_audit_correlation_id(entry.details),
+                request_id=_audit_request_id(entry.details),
+                evidence_available=bool(entry.details or entry.resource_id or entry.source_ip),
+            )
+        )
+    return result
+
+
+@router.get("/api/v1/audit/export", tags=["audit"])
+def export_audit_presentations(
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.admin))],
+    format: Literal["csv", "jsonl"] = "csv",
+    limit: Annotated[int, Query(ge=1, le=200)] = 200,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    query: Annotated[str | None, Query(max_length=160)] = None,
+    result: Annotated[str | None, Query(max_length=32)] = None,
+    category: Annotated[str | None, Query(max_length=64)] = None,
+    severity: Annotated[str | None, Query(max_length=32)] = None,
+    source_type: Annotated[str | None, Query(max_length=32)] = None,
+    actor_type: Annotated[str | None, Query(max_length=32)] = None,
+    resource_type: Annotated[str | None, Query(max_length=64)] = None,
+) -> StreamingResponse:
+    entries = list_audit_presentations(db, user, limit=limit, offset=offset)
+    needle = (query or "").casefold().strip()
+    entries = [
+        entry
+        for entry in entries
+        if (result is None or entry.result == result)
+        and (category is None or entry.category == category)
+        and (severity is None or entry.severity == severity)
+        and (source_type is None or entry.source_type == source_type)
+        and (actor_type is None or entry.actor_type == actor_type)
+        and (resource_type is None or entry.resource_type == resource_type)
+        and (
+            not needle
+            or needle
+            in " ".join(
+                (
+                    entry.display_action,
+                    entry.resource_display,
+                    entry.actor_display,
+                    entry.source_display,
+                    entry.correlation_id or "",
+                    entry.request_id or "",
+                )
+            ).casefold()
+        )
+    ]
+    rows = [
+        {
+            "event_id": entry.event_id,
+            "created_at": entry.created_at.isoformat(),
+            "action": entry.display_action,
+            "category": entry.category,
+            "severity": entry.severity,
+            "result": entry.result,
+            "actor": entry.actor_display,
+            "resource": entry.resource_display,
+            "resource_type": entry.resource_type,
+            "source": entry.source_display,
+            "summary": entry.summary,
+            "correlation_id": entry.correlation_id or "",
+            "request_id": entry.request_id or "",
+        }
+        for entry in entries
+    ]
+    output = io.StringIO()
+    if format == "csv":
+        fieldnames = list(rows[0]) if rows else [
+            "event_id",
+            "created_at",
+            "action",
+            "category",
+            "severity",
+            "result",
+            "actor",
+            "resource",
+            "resource_type",
+            "source",
+            "summary",
+            "correlation_id",
+            "request_id",
+        ]
+        csv_rows = [
+            {
+                key: f"'{value}"
+                if isinstance(value, str) and value.startswith(("=", "+", "-", "@"))
+                else value
+                for key, value in row.items()
+            }
+            for row in rows
+        ]
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(csv_rows)
+        media_type = "text/csv"
+    else:
+        output.write("\n".join(json.dumps(row, ensure_ascii=False) for row in rows))
+        output.write("\n")
+        media_type = "application/x-ndjson"
+    write_audit(
+        db,
+        actor=user,
+        action="audit.export",
+        resource_type="audit",
+        resource_id=None,
+        outcome="success",
+        details={"format": format, "row_count": len(rows), "offset": offset},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="guardian-audit.{format}"'},
+    )
 
 
 @router.get(
-    "/api/v1/recovery-points", response_model=list[RecoveryPointView], tags=["recovery"]
+    "/api/v1/audit/{audit_id}/evidence",
+    response_model=AuditEvidenceView,
+    tags=["audit"],
 )
+def get_audit_evidence(
+    audit_id: int,
+    db: DB,
+    _: Annotated[User, Depends(require_role(Role.admin))],
+) -> AuditEvidenceView:
+    entry = db.get(AuditLog, audit_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="audit entry not found")
+    return AuditEvidenceView(
+        audit_id=entry.id,
+        action_code=entry.action,
+        resource_type=entry.resource_type,
+        resource_id=entry.resource_id,
+        actor_id=entry.actor_id,
+        source_ip=entry.source_ip,
+        changes=cast(dict[str, Any], redact_structure(entry.details)),
+        correlation_id=_audit_correlation_id(entry.details),
+    )
+
+
+@router.get("/api/v1/recovery-points", response_model=list[RecoveryPointView], tags=["recovery"])
 def list_recovery_points(
     db: DB,
     _: Annotated[User, Depends(require_role(Role.operator))],
@@ -2610,6 +3849,7 @@ def verify_recovery_point(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.owner))],
 ) -> RecoveryPointPromotionView:
+    _require_step_up(request)
     attestation = RecoveryVerificationAttestation(
         schema_version=payload.attestation.schema_version,
         verifier=payload.attestation.verifier,
@@ -2758,9 +3998,7 @@ def public_settings(
             "database_reference": settings.database_url_file is not None,
             "token_signing_material": settings.jwt_secret.get_secret_value()
             != "development-only-change-me-32-bytes",
-            "field_encryption_material": bool(
-                settings.field_encryption_key.get_secret_value()
-            ),
+            "field_encryption_material": bool(settings.field_encryption_key.get_secret_value()),
             "agent_enrollment_material": settings.agent_enrollment_token.get_secret_value()
             != "development-enrollment-token",
             "trusted_proxy_header_secret": bool(
@@ -2819,7 +4057,7 @@ def claim_agent_identity_version(db: Session, agent: Agent, expected_version: in
             )
             .values(identity_version=Agent.identity_version + 1)
             .execution_options(synchronize_session=False)
-        )
+        ),
     )
     if result.rowcount != 1:
         db.rollback()
@@ -2869,6 +4107,7 @@ def prepare_agent_identity(
     settings: Config,
     user: Annotated[User, Depends(require_role(Role.owner))],
 ) -> AgentIdentity:
+    _require_step_up(request)
     agent = lock_active_agent(db, agent_id)
     fingerprint = normalize_certificate_fingerprint(payload.certificate_fingerprint)
     certificate_serial = normalize_certificate_serial(payload.certificate_serial)
@@ -2917,9 +4156,7 @@ def prepare_agent_identity(
         )
         db.commit()
         return existing_rotation
-    if db.scalar(
-        select(AgentIdentity).where(AgentIdentity.certificate_fingerprint == fingerprint)
-    ):
+    if db.scalar(select(AgentIdentity).where(AgentIdentity.certificate_fingerprint == fingerprint)):
         raise HTTPException(status_code=409, detail="certificate already enrolled")
     if db.scalar(
         select(AgentIdentity).where(AgentIdentity.certificate_serial == certificate_serial)
@@ -2981,8 +4218,7 @@ def prepare_agent_identity(
             signing_public_key=payload.signing_public_key,
             certificate_fingerprint=fingerprint,
             certificate_serial=certificate_serial,
-            expires_at=created_at
-            + timedelta(minutes=settings.agent_pending_identity_ttl_minutes),
+            expires_at=created_at + timedelta(minutes=settings.agent_pending_identity_ttl_minutes),
         )
         db.add(identity)
         db.flush()
@@ -3135,6 +4371,7 @@ def activate_agent_identity(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.owner))],
 ) -> AgentIdentity:
+    _require_step_up(request)
     agent = lock_active_agent(db, agent_id)
     identity = db.scalar(
         select(AgentIdentity).where(
@@ -3230,6 +4467,7 @@ def revoke_retiring_agent_identity(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.owner))],
 ) -> AgentIdentity:
+    _require_step_up(request)
     agent = lock_active_agent(db, agent_id)
     identity = db.scalar(
         select(AgentIdentity).where(
@@ -3305,6 +4543,7 @@ def retire_pending_agent_identity(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.owner))],
 ) -> AgentIdentity:
+    _require_step_up(request)
     agent = lock_active_agent(db, agent_id)
     identity = db.scalar(
         select(AgentIdentity).where(
@@ -3408,6 +4647,7 @@ def revoke_agent(
     db: DB,
     user: Annotated[User, Depends(require_role(Role.owner))],
 ) -> None:
+    _require_step_up(request)
     agent = lock_active_agent(db, agent_id)
     active_identity = db.scalar(
         select(AgentIdentity).where(
@@ -3478,9 +4718,7 @@ def enroll_agent(
         )
         if not secrets.compare_digest(fingerprint, trusted_fingerprint):
             raise HTTPException(status_code=401, detail="enrollment certificate mismatch")
-    if db.scalar(
-        select(AgentIdentity).where(AgentIdentity.certificate_fingerprint == fingerprint)
-    ):
+    if db.scalar(select(AgentIdentity).where(AgentIdentity.certificate_fingerprint == fingerprint)):
         raise HTTPException(status_code=409, detail="certificate already enrolled")
     if certificate_serial and db.scalar(
         select(AgentIdentity).where(AgentIdentity.certificate_serial == certificate_serial)
@@ -3637,9 +4875,7 @@ async def agent_heartbeat(
         agent.binary_sha256 = payload.build.binary_sha256
     agent.host.last_seen_at = now
     agent.host.status = "healthy"
-    agent.host.data_state = (
-        "agent_error" if payload.metrics.get("collection_error") else "normal"
-    )
+    agent.host.data_state = "agent_error" if payload.metrics.get("collection_error") else "normal"
     if was_offline:
         write_audit(
             db,

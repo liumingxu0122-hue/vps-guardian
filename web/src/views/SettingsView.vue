@@ -5,11 +5,12 @@ import { useI18n } from 'vue-i18n'
 
 import { jsonBody, request } from '../api'
 import PageHeader from '../components/PageHeader.vue'
+import { configurationLabel, productLabel } from '../presentationRegistry'
 import type { NotificationChannel, PublicSettings } from '../types'
-import { formatBytes, titleize } from '../utils'
+import { formatBytes } from '../utils'
 
 const settings = ref<PublicSettings | null>(null)
-const { t } = useI18n()
+const { locale, t } = useI18n()
 const channels = ref<NotificationChannel[]>([])
 const dialog = ref<HTMLDialogElement | null>(null)
 const creating = ref(false)
@@ -20,6 +21,17 @@ async function load(): Promise<void> {
     request<PublicSettings>('/api/v1/settings/public'),
     request<NotificationChannel[]>('/api/v1/notification-channels'),
   ])
+}
+
+function settingValue(key: string, value: unknown): string {
+  if (typeof value === 'boolean') return value ? t('common.enabled') : t('common.disabled')
+  if (value == null) return t('common.unknown')
+  if (Array.isArray(value)) return value.length ? value.map(String).join(', ') : t('common.none')
+  if (typeof value === 'number') {
+    if (key.endsWith('_days')) return locale.value === 'zh-CN' ? `${value} 天` : `${value} days`
+    if (key.endsWith('_seconds')) return `${value}s`
+  }
+  return String(value)
 }
 
 function channelConfiguration(): Record<string, string> {
@@ -86,33 +98,33 @@ onMounted(load)
         <div><dt>{{ $t('settings.metricRetention') }}</dt><dd>{{ settings.metric_retention_days }} {{ $t('common.days') }} / {{ settings.max_metric_rows_per_host }}</dd></div>
         <div><dt>{{ $t('settings.checkRetention') }}</dt><dd>{{ settings.service_result_retention_days }} {{ $t('common.days') }} / {{ settings.max_results_per_check }}</dd></div>
         <div><dt>{{ $t('settings.externalNotifications') }}</dt><dd>{{ settings.external_notifications_enabled ? $t('common.enabled') : $t('common.disabled') }}</dd></div>
-        <div><dt>{{ $t('settings.allowedOrigins') }}</dt><dd class="mono wrap">{{ settings.allowed_origins.join(', ') }}</dd></div>
+        <div><dt>{{ $t('settings.allowedOrigins') }}</dt><dd class="mono wrap">{{ settings.allowed_origins?.join(', ') || $t('common.none') }}</dd></div>
       </dl>
     </section>
     <section class="settings-section">
       <div class="section-heading"><div><h2>{{ $t('settings.securityBoundary') }}</h2><span>{{ $t('settings.serverEnforced') }}</span></div><ShieldCheck :size="19" /></div>
       <div class="feature-grid">
-        <div v-for="(enabled, name) in settings.features" :key="name" :class="{ disabled: !enabled }"><span><LockKeyhole :size="16" />{{ titleize(String(name)) }}</span><strong>{{ enabled ? $t('common.enabled') : $t('common.disabled') }}</strong></div>
+        <div v-for="(enabled, name) in settings.features" :key="name" :class="{ disabled: !enabled }"><span><LockKeyhole :size="16" />{{ configurationLabel(String(name), locale) }}</span><strong>{{ enabled ? $t('common.enabled') : $t('common.disabled') }}</strong></div>
       </div>
     </section>
     <section class="settings-section">
       <div class="section-heading"><div><h2>{{ $t('settings.effectiveConfiguration') }}</h2><span>{{ $t('settings.configurationDetail') }}</span></div></div>
       <div class="configuration-catalog">
         <div v-for="item in settings.settings_catalog" :key="item.key">
-          <span><strong>{{ titleize(item.key) }}</strong><small>{{ item.source }}</small></span>
-          <code>{{ Array.isArray(item.value) ? item.value.join(', ') : String(item.value) }}</code>
+          <span><strong>{{ configurationLabel(item.key, locale) }}</strong><small>{{ locale === 'zh-CN' ? '环境配置' : 'Environment configuration' }}</small></span>
+          <code>{{ settingValue(item.key, item.value) }}</code>
           <span>{{ item.restart_required ? $t('settings.restartRequired') : $t('settings.liveChange') }}</span>
-          <span :class="`risk-${item.risk}`">{{ titleize(item.risk) }}</span>
+          <span :class="`risk-${item.risk}`">{{ productLabel('risk', item.risk, locale) }}</span>
         </div>
       </div>
       <div class="secret-status-grid">
-        <div v-for="(configured, name) in settings.secret_status" :key="name"><LockKeyhole :size="14" /><span>{{ titleize(String(name)) }}</span><strong>{{ configured ? $t('settings.configured') : $t('settings.notConfigured') }}</strong></div>
+        <div v-for="(configured, name) in settings.secret_status" :key="name"><LockKeyhole :size="14" /><span>{{ configurationLabel(String(name), locale) }}</span><strong>{{ configured ? $t('settings.configured') : $t('settings.notConfigured') }}</strong></div>
       </div>
     </section>
     <section class="settings-section notification-settings">
       <div class="section-heading"><div><h2>{{ $t('settings.notifications') }}</h2><span>{{ $t('settings.notificationReferences') }}</span></div><button class="primary-button" type="button" @click="dialog?.showModal()"><Plus :size="15" />{{ $t('settings.addChannel') }}</button></div>
       <div v-if="channels.length" class="channel-list">
-        <div v-for="channel in channels" :key="channel.id" class="channel-row"><BellRing :size="17" /><div><strong>{{ channel.name }}</strong><span>{{ channel.kind }} · {{ channel.enabled ? $t('common.enabled') : $t('common.disabled') }}</span></div><button class="secondary-button" type="button" @click="testChannel(channel)"><Send :size="14" />{{ $t('settings.testChannel') }}</button></div>
+        <div v-for="channel in channels" :key="channel.id" class="channel-row"><BellRing :size="17" /><div><strong>{{ channel.name }}</strong><span>{{ productLabel('notification', channel.kind, locale) }} · {{ channel.enabled ? $t('common.enabled') : $t('common.disabled') }}</span></div><button class="secondary-button" type="button" @click="testChannel(channel)"><Send :size="14" />{{ $t('settings.testChannel') }}</button></div>
       </div>
       <p v-else>{{ $t('settings.noChannels') }}</p>
       <p v-if="testResult" role="status">{{ testResult }}</p>

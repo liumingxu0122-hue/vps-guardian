@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 
 import { request } from '../api'
 import EmptyState from '../components/EmptyState.vue'
+import DataTable from '../components/v3/DataTable.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import type { Host, RecoveryPoint } from '../types'
@@ -14,7 +15,7 @@ const hosts = ref<Host[]>([])
 const verifiedOnly = ref(true)
 const copied = ref('')
 const filtered = computed(() => points.value.filter((point) => !verifiedOnly.value || point.verified))
-const hostName = (id: string): string => hosts.value.find((host) => host.id === id)?.name ?? id.slice(0, 8)
+const hostName = (id: string): string => hosts.value.find((host) => host.id === id)?.name ?? '—'
 
 async function load(): Promise<void> {
   ;[points.value, hosts.value] = await Promise.all([
@@ -44,16 +45,15 @@ onMounted(load)
     <div><ShieldX :size="19" /><span>{{ $t('recovery.unverified') }}</span><strong>{{ points.filter((point) => !point.verified).length }}</strong></div>
     <label class="toggle-control"><input v-model="verifiedOnly" type="checkbox" /><span></span>{{ $t('recovery.verifiedOnly') }}</label>
   </div>
-  <section v-if="filtered.length" class="recovery-list">
-    <article v-for="point in filtered" :key="point.id" class="recovery-item">
-      <span class="snapshot-icon"><DatabaseBackup :size="18" /></span>
-      <div class="snapshot-main"><strong>{{ point.service_name }}</strong><span>{{ hostName(point.host_id) }}</span></div>
-      <div><small>{{ $t('recovery.snapshot') }}</small><code>{{ point.snapshot_id.slice(0, 12) }}</code></div>
-      <div><small>{{ $t('recovery.checksum') }}</small><code>{{ point.checksum.slice(0, 12) }}</code></div>
-      <div><small>{{ $t('recovery.created') }}</small><span>{{ formatTime(point.created_at) }}</span></div>
-      <StatusBadge :status="point.verified ? 'verified' : 'unknown'" :label="point.verified ? $t('recovery.testRestored') : $t('recovery.unverified')" />
-      <button class="icon-button bordered" type="button" :title="copied === point.id ? $t('recovery.copied') : $t('recovery.copy')" :aria-label="$t('recovery.copy')" @click="copyCommand(point)"><CheckCircle2 v-if="copied === point.id" :size="16" /><Clipboard v-else :size="16" /></button>
-    </article>
-  </section>
-  <EmptyState v-else :title="$t('recovery.noItems')" />
+  <DataTable :label="$t('recovery.title')" :empty="!filtered.length" :total="filtered.length">
+    <template #head><tr><th>{{ $t('recovery.service') }}</th><th>{{ $t('recovery.host') }}</th><th>{{ $t('recovery.status') }}</th><th>{{ $t('recovery.created') }}</th><th>{{ $t('recovery.restore') }}</th></tr></template>
+    <tr v-for="point in filtered" :key="point.id">
+      <td><span class="rc5-resource"><span class="rc5-resource-icon"><DatabaseBackup :size="18" /></span><strong>{{ point.service_name }}</strong></span></td>
+      <td>{{ hostName(point.host_id) }}</td>
+      <td><StatusBadge :status="point.verified ? 'verified' : 'unknown'" :label="point.verified ? $t('recovery.testRestored') : $t('recovery.unverified')" /></td>
+      <td>{{ formatTime(point.created_at) }}</td>
+      <td><button class="icon-button bordered" type="button" :title="copied === point.id ? $t('recovery.copied') : $t('recovery.copy')" :aria-label="$t('recovery.copy')" @click="copyCommand(point)"><CheckCircle2 v-if="copied === point.id" :size="16" /><Clipboard v-else :size="16" /></button></td>
+    </tr>
+    <template #empty><EmptyState :title="$t('recovery.noItems')" /></template>
+  </DataTable>
 </template>

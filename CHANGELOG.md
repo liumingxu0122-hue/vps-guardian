@@ -6,6 +6,30 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Added
 
+- Added RC6 opaque, hash-only browser sessions with independently enforced idle and
+  absolute lifetimes, optional remembered-device lifetime, bounded activity touches,
+  device/session management, current-session step-up, strict same-origin CSRF binding,
+  and reversible migration `0012_persistent_sessions`.
+- Added complete RC6 runtime language preference handling, an accessible anchored
+  language menu, matching `zh-CN`/`en-US` resources, stable localized authentication
+  error codes, test-only pseudo-localization, and bilingual Account Security and
+  identity setup flows.
+- Added the RC5 semantic token layer, compact light/dark App Shell environment
+  presentation, shared accessible DataTable, centralized bilingual Presentation
+  Registry, responsive Host/Audit records, and progressive-disclosure detail drawers.
+- Added explicit Host and Audit presentation allowlists, bounded latest-resource
+  queries, audited Host batch updates, redacted Audit CSV/JSONL export, and lazy
+  technical evidence retrieval.
+- Added decision-oriented Approval summary/detail DTOs, bounded lifecycle timelines,
+  structured impact and execution steps, lazy redacted evidence, and bilingual,
+  responsive Approval Center regressions.
+- Added the Phase 4 UI V3 product shell, shared design tokens, responsive/focus-trapped
+  navigation and detail drawers, lightweight dashboard bootstrap/current-resource
+  APIs, URL-persisted operational filters, and audited Service-check batch updates.
+- Added a reversible `0011_dashboard_query_indexes` migration, user-isolated
+  10-second dashboard cache, ETag/304 handling, `Server-Timing`, production
+  sourcemap exclusion, axe/Playwright product regressions, and an internal
+  `vps-guardian-product-ui` design-review Skill.
 - Added the Phase 4 V2 grouped operations console, Attention queue, topology/security/user/Agent/notification pages, breadcrumbs, command palette, responsive drawer, and light/dark tokens.
 - Added explainable deployment health, 1h/24h/7d/30d stability components, confidence, group/location aggregates, and bounded service-check history.
 - Added persistent alert assignment/closure, audited incident transitions, resolution/postmortem fields, notification scope/severity filters, retry history, and dead-letter handling.
@@ -21,6 +45,29 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Changed
 
+- Reconstructed Hosts and Audit as product-facing operational views: internal import
+  tags, dotted action codes, UUID fragments, raw enums, and container IPs no longer
+  lead the primary interface; selected rows use semantic accent surfaces in both
+  themes instead of terminal-dark backgrounds.
+- Migrated Services, Incidents, Users, and Notification delivery tables onto the
+  shared semantic table state system and added product labels for settings, security
+  controls, sessions, roles, notification channels, regions, management modes, and
+  missing-data reasons.
+- Rebuilt Approval Center around semantic light/dark surfaces, compact filters,
+  productized risk/Dry Run/rollback presentation, list-first tablet/mobile navigation,
+  and a sticky audited decision bar.
+- Validated UI V3 on real authenticated Staging at fixed commit
+  `8722fabd28b3c6127fdfb8e2c630ed8fa94e5cfa`: median FCP 416 ms,
+  LCP 580 ms and decision-data readiness 1.638 s across three cold runs,
+  with 12 requests, zero long tasks, zero serious/critical axe findings,
+  and successful Telegram warning/recovery delivery. Production remains
+  `NO-GO`.
+- Replaced the heavyweight Overview startup path with a minimal bootstrap followed by
+  independently loaded current resource values; full metrics, Topology, Audit and raw
+  evidence no longer block the first decision view.
+- Replaced Services card/raw-output walls and Incidents black selected rows with
+  structured comparison tables, localized semantic states, high-contrast selection,
+  product names, controlled evidence viewers and decision-focused drawers.
 - Reworked Overview, Services, Alerts, Incidents, Approvals, and Settings around structured actions instead of raw operational data.
 - Added API pagination to fleet/history collections, GET request deduplication, and request cancellation support without increasing Agent sampling frequency.
 - Made the deduplicated GET cleanup Promise the caller-visible Promise so an
@@ -32,6 +79,21 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Security
 
+- Browser authentication no longer stores or sends JWTs from Web Storage. An invalid
+  explicit Bearer credential never falls back to a browser session; database rows
+  store only session/CSRF hashes and privacy-safe device/network summaries.
+- Password, TOTP/recovery, all-session, identity/role, high-risk approval, Agent
+  identity, recovery verification, and notification-secret mutations require a
+  short-lived step-up window in the current browser session.
+- Audit list/export DTOs are explicit allowlists; technical identifiers, internal
+  addresses, and redacted change evidence are progressively disclosed, while every
+  export and Host batch mutation is independently authorized and audited.
+- High-risk approval and conditional approval now require server-side password
+  reauthentication plus explicit rollback confirmation; conditional decisions and
+  requests for changes never dispatch Agent tasks.
+- Redact plain, JSON and NDJSON service evidence before returning it to the browser;
+  evidence remains authenticated, escaped, collapsed by default, and downloadable only
+  as the already-redacted representation.
 - Authentication now rejects JWTs without a live, unexpired, unrevoked server Session
   row; password and authorization changes invalidate older sessions.
 - TOTP confirmation rejects time-step replay, and recovery-code login is rate-limited,

@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 import { i18n } from './i18n'
 
-import { formatBytes, formatDuration, percentUsed, titleize } from './utils'
+import {
+  formatBytes,
+  formatDuration,
+  formatTime,
+  percentUsed,
+  relativeTime,
+  titleize,
+} from './utils'
 
 describe('operational formatters', () => {
   it('formats byte values without losing scale', () => {
@@ -25,5 +32,19 @@ describe('operational formatters', () => {
     expect(formatDuration(90_000)).toBe('1天 1小时')
     i18n.global.locale.value = 'en-US'
     expect(formatDuration(90_000)).toBe('1 day 1 hour')
+  })
+
+  it('updates date and relative-time presentation with the runtime locale', () => {
+    i18n.global.locale.value = 'zh-CN'
+    const chineseDate = formatTime('2026-07-28T12:35:00Z')
+    const chineseRelative = relativeTime(new Date(Date.now() + 86_400_000).toISOString())
+    i18n.global.locale.value = 'en-US'
+    const englishDate = formatTime('2026-07-28T12:35:00Z')
+    const englishRelative = relativeTime(new Date(Date.now() + 86_400_000).toISOString())
+
+    expect(chineseDate).toContain('2026')
+    expect(englishDate).toContain('2026')
+    expect(chineseDate).not.toBe(englishDate)
+    expect(chineseRelative).not.toBe(englishRelative)
   })
 })

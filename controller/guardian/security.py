@@ -24,6 +24,12 @@ from guardian.config import Settings, get_settings
 from guardian.database import get_db
 from guardian.identity import as_utc, forced_setup_required
 from guardian.models import Role, User, UserSession
+from guardian.sessions import (
+    BROWSER_SESSION_COOKIE,
+    browser_session_error,
+    find_browser_session,
+    secret_hash,
+)
 
 password_hasher = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2)
 dummy_password_hash = password_hasher.hash("vps-guardian-dummy-login-equalizer")
@@ -157,15 +163,42 @@ def generate_csrf_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-def enforce_csrf(request: Request) -> None:
+def _coded_error(status_code: int, code: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"code": code, "params": {}})
+
+
+def _same_origin(request: Request, settings: Settings) -> bool:
+    origin = request.headers.get("origin")
+    if not origin or any(character in origin for character in ", \t\r\n"):
+        return False
+    normalized_origin = origin.rstrip("/")
+    configured_origins = (value.rstrip("/") for value in settings.allowed_origins)
+    if any(
+        secrets.compare_digest(normalized_origin, configured)
+        for configured in configured_origins
+    ):
+        return True
+    own_origin = f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
+    return secrets.compare_digest(normalized_origin, own_origin)
+
+
+def enforce_csrf(request: Request, session: UserSession, settings: Settings) -> None:
     if request.method in {"GET", "HEAD", "OPTIONS"}:
         return
     if request.headers.get("authorization", "").startswith("Bearer "):
         return
+    if not _same_origin(request, settings):
+        raise _coded_error(403, "CSRF_INVALID")
     cookie = request.cookies.get("guardian_csrf")
     header = request.headers.get("x-csrf-token")
-    if not cookie or not header or not secrets.compare_digest(cookie, header):
-        raise HTTPException(status_code=403, detail="CSRF validation failed")
+    if (
+        not cookie
+        or not header
+        or not session.csrf_secret_hash
+        or not secrets.compare_digest(cookie, header)
+        or not secrets.compare_digest(secret_hash(cookie), session.csrf_secret_hash)
+    ):
+        raise _coded_error(403, "CSRF_INVALID")
 
 
 SCOPE_PREFIXES = {
@@ -218,34 +251,52 @@ def get_current_user(
     db: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> User:
-    token = credentials.credentials if credentials else request.cookies.get("guardian_session")
-    if not token:
-        raise HTTPException(status_code=401, detail="authentication required")
-    payload = decode_access_token(token, settings)
-    user = db.scalar(select(User).where(User.id == str(payload["sub"])))
-    if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="account disabled")
-    if payload.get("sv") != user.session_version:
-        raise HTTPException(status_code=401, detail="session revoked")
-    session_id = payload.get("sid")
-    if not isinstance(session_id, str):
-        raise HTTPException(status_code=401, detail="server session required")
-    auth_session = db.scalar(
-        select(UserSession).where(
-            UserSession.id == session_id,
-            UserSession.user_id == user.id,
-        )
-    )
     now = datetime.now(UTC)
-    if (
-        auth_session is None
-        or auth_session.revoked_at is not None
-        or as_utc(auth_session.expires_at) <= now
-        or auth_session.session_version != user.session_version
-    ):
-        raise HTTPException(status_code=401, detail="session revoked or expired")
+    if credentials is not None:
+        try:
+            payload = decode_access_token(credentials.credentials, settings)
+        except HTTPException as exc:
+            raise _coded_error(401, "SESSION_INVALID") from exc
+        user = db.scalar(select(User).where(User.id == str(payload["sub"])))
+        if not user or not user.is_active:
+            raise _coded_error(401, "SESSION_REVOKED")
+        if payload.get("sv") != user.session_version:
+            raise _coded_error(401, "SESSION_VERSION_MISMATCH")
+        session_id = payload.get("sid")
+        if not isinstance(session_id, str):
+            raise _coded_error(401, "SESSION_INVALID")
+        auth_session = db.scalar(
+            select(UserSession).where(
+                UserSession.id == session_id,
+                UserSession.user_id == user.id,
+                UserSession.created_via == "api_token",
+            )
+        )
+        if auth_session is None:
+            raise _coded_error(401, "SESSION_INVALID")
+        if auth_session.revoked_at is not None:
+            raise _coded_error(401, "SESSION_REVOKED")
+        if auth_session.session_version != user.session_version:
+            raise _coded_error(401, "SESSION_VERSION_MISMATCH")
+        if as_utc(auth_session.expires_at) <= now:
+            raise _coded_error(401, "SESSION_ABSOLUTE_EXPIRED")
+        request.state.auth_method = "bearer"
+    else:
+        session_secret = request.cookies.get(BROWSER_SESSION_COOKIE)
+        if not session_secret:
+            raise _coded_error(401, "SESSION_MISSING")
+        auth_session = find_browser_session(db, session_secret)
+        if auth_session is None:
+            raise _coded_error(401, "SESSION_INVALID")
+        user = db.scalar(select(User).where(User.id == auth_session.user_id))
+        if not user or not user.is_active:
+            raise _coded_error(401, "SESSION_REVOKED")
+        error_code = browser_session_error(auth_session, user, now)
+        if error_code:
+            raise _coded_error(401, error_code)
+        request.state.auth_method = "browser"
     request.state.auth_session = auth_session
-    enforce_csrf(request)
+    enforce_csrf(request, auth_session, settings)
     forced_paths = {
         "/api/v1/auth/me",
         "/api/v1/auth/logout",
@@ -254,6 +305,9 @@ def get_current_user(
         "/api/v1/auth/totp/enable",
         "/api/v1/auth/recovery-codes/confirm",
         "/api/v1/auth/recovery-codes/regenerate",
+        "/api/v1/auth/step-up",
+        "/api/v1/auth/activity",
+        "/api/v1/auth/sessions",
     }
     if forced_setup_required(user) and request.url.path not in forced_paths:
         raise HTTPException(
@@ -275,7 +329,7 @@ ROLE_ORDER = {
 def require_role(minimum: Role):  # type: ignore[no-untyped-def]
     def dependency(user: Annotated[User, Depends(get_current_user)]) -> User:
         if ROLE_ORDER.get(user.role, -1) < ROLE_ORDER[minimum.value]:
-            raise HTTPException(status_code=403, detail="insufficient role")
+            raise _coded_error(403, "PERMISSION_DENIED")
         return user
 
     return dependency

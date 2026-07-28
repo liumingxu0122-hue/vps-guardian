@@ -21,10 +21,18 @@ export interface UserSession {
   user_id: string
   issued_at: string
   expires_at: string
+  last_seen_at: string
+  idle_expires_at: string
+  absolute_expires_at: string
+  remember_me: boolean
+  step_up_until: string | null
   revoked_at: string | null
   revoke_reason: string | null
-  user_agent_digest: string
-  ip_digest: string
+  user_agent_summary: string
+  ip_summary: string
+  created_via: string
+  last_activity_type: string | null
+  device_name: string | null
   current: boolean
 }
 
@@ -48,6 +56,30 @@ export interface Host {
   last_seen_at: string | null
   enrolled_at: string | null
   disabled_at: string | null
+}
+
+export interface HostPresentation {
+  id: string
+  name: string
+  primary_address: string
+  os_name: string | null
+  region: string | null
+  group: string | null
+  provider: string | null
+  purpose: string | null
+  display_tags: string[]
+  health: Host['status']
+  data_state: Host['data_state']
+  enabled: boolean
+  management: 'guardian_and_komari' | 'guardian' | 'komari_only' | 'pending_enrollment'
+  agent_state: 'online' | 'stale' | 'never_seen' | 'revoked' | 'not_installed'
+  agent_version: string | null
+  last_heartbeat_at: string | null
+  last_seen_at: string | null
+  enrolled_at: string | null
+  data_reason: 'available' | 'no_guardian_agent' | 'never_connected' | 'pending_enrollment' | 'disabled' | 'stale' | 'agent_error'
+  resource_summary: Record<string, number> | null
+  technical_evidence_available: boolean
 }
 
 export interface Evidence {
@@ -98,6 +130,88 @@ export interface Approval {
   decided_by: string | null
   requested_by: string | null
   target_host_id: string | null
+}
+
+export type ApprovalStatus =
+  | 'pending'
+  | 'approved'
+  | 'partially_approved'
+  | 'approved_with_conditions'
+  | 'changes_requested'
+  | 'rejected'
+  | 'dry_run_only'
+  | 'executing'
+  | 'executed'
+  | 'failed'
+  | 'rolled_back'
+  | 'expired'
+  | 'withdrawn'
+
+export interface ApprovalActor {
+  label: string
+  role: string | null
+}
+
+export interface ApprovalTarget {
+  host: string | null
+  service: string | null
+  scope: string | null
+}
+
+export interface ApprovalSummary {
+  id: string
+  incident_id: string
+  action_name: string
+  status: ApprovalStatus
+  risk_level: number
+  target: ApprovalTarget
+  requester: ApprovalActor | null
+  requested_at: string
+  expires_at: string
+  progress_label: string
+  execution_status: string | null
+}
+
+export interface ApprovalFact {
+  key: string
+  value: string
+  tone: 'neutral' | 'info' | 'warning' | 'critical'
+}
+
+export interface ApprovalStep {
+  order: number
+  action: string
+  target: string | null
+  dry_run: boolean
+}
+
+export interface ApprovalTimelineEntry {
+  at: string
+  event: string
+  actor: string | null
+  outcome: string | null
+}
+
+export interface ApprovalDetail extends ApprovalSummary {
+  risk_reason: string
+  approver: ApprovalActor | null
+  decided_at: string | null
+  executed_at: string | null
+  impact_facts: ApprovalFact[]
+  steps: ApprovalStep[]
+  dry_run_available: boolean
+  dry_run_status: string | null
+  recovery_point_label: string | null
+  rollback_available: boolean
+  rollback_steps: string[]
+  timeline: ApprovalTimelineEntry[]
+  raw_evidence_available: boolean
+}
+
+export interface ApprovalEvidence {
+  approval_id: string
+  parameters: Record<string, unknown>
+  impact: Record<string, unknown>
 }
 
 export interface EnrollmentToken {
@@ -263,12 +377,47 @@ export interface AuditEntry {
   created_at: string
 }
 
+export interface AuditPresentation {
+  event_id: number
+  display_action: string
+  action_code: string
+  category: string
+  severity: 'neutral' | 'info' | 'warning' | 'critical'
+  result: string
+  actor_display: string
+  actor_type: 'user' | 'system' | 'agent' | 'unknown'
+  resource_display: string
+  resource_type: string
+  source_display: string
+  source_type: 'internal_service' | 'private_network' | 'external_client' | 'unknown'
+  created_at: string
+  summary: string
+  correlation_id: string | null
+  request_id: string | null
+  evidence_available: boolean
+}
+
+export interface AuditEvidence {
+  audit_id: number
+  action_code: string
+  resource_type: string
+  resource_id: string | null
+  actor_id: string | null
+  source_ip: string | null
+  changes: Record<string, unknown>
+  correlation_id: string | null
+}
+
 export interface ServiceSummary {
   host_id: string
   host_name: string
   kind: string
-  status: 'failed' | 'observed'
+  status: 'healthy' | 'warning' | 'critical' | 'execution_failed' | 'no_data' | 'unsupported' | 'parse_failed'
+  reason: string
+  counts: Record<string, number>
+  parsed: boolean
   summary: string
+  evidence_available: boolean
   collected_at: string
 }
 

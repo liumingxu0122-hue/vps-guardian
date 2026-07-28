@@ -1,0 +1,4 @@
+interface:
+  display_name: "VPS Guardian Product UI"
+  short_description: "Audit and redesign operations UI with measurable quality"
+  default_prompt: "Use $vps-guardian-product-ui to audit and redesign the VPS Guardian operations console."

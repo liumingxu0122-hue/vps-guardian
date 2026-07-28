@@ -49,8 +49,17 @@ def create_user_session(
         user_id=user.id,
         issued_at=now,
         expires_at=now + timedelta(minutes=settings.jwt_ttl_minutes),
+        token_hash=hashlib.sha256(f"api:{uuid.uuid4()}".encode()).hexdigest(),
+        last_seen_at=now,
+        idle_expires_at=now + timedelta(minutes=settings.jwt_ttl_minutes),
+        absolute_expires_at=now + timedelta(minutes=settings.jwt_ttl_minutes),
+        remember_me=False,
         user_agent_digest=user_agent_digest,
         ip_digest=ip_digest,
+        user_agent_summary="api:client",
+        ip_summary="protected",
+        created_via="api_token",
+        last_activity_type="api_sign_in",
         session_version=user.session_version,
     )
     db.add(row)

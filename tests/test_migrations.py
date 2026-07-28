@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import os
 import sqlite3
 import subprocess
@@ -313,6 +314,21 @@ def test_identity_recovery_migrates_isolated_legacy_copy_and_preserves_core_rows
     assert connection.execute(
         "SELECT session_version FROM user_sessions WHERE id = 'session-1'"
     ).fetchone() == (1,)
+    connection.close()
+
+    migrate("upgrade", "head")
+    connection = sqlite3.connect(database)
+    migrated_session = connection.execute(
+        """
+        SELECT token_hash, created_via, last_seen_at, idle_expires_at,
+               absolute_expires_at
+        FROM user_sessions WHERE id = 'session-1'
+        """
+    ).fetchone()
+    assert migrated_session is not None
+    assert migrated_session[0] == hashlib.sha256(b"legacy:session-1").hexdigest()
+    assert migrated_session[1] == "legacy"
+    assert all(migrated_session[index] is not None for index in (2, 3, 4))
     connection.close()
 
     migrate("downgrade", "0009_agent_provenance")

@@ -44,6 +44,32 @@ class LoginResponse(BaseModel):
     recovery_codes_remaining: int | None = None
 
 
+class BrowserLoginRequest(LoginRequest):
+    remember_me: bool = False
+    device_name: str | None = Field(default=None, max_length=120)
+
+
+class BrowserLoginResponse(BaseModel):
+    identity_setup_required: bool
+    recovery_codes_remaining: int | None = None
+    remember_me: bool
+    idle_expires_at: datetime
+    absolute_expires_at: datetime
+
+
+class StepUpRequest(BaseModel):
+    current_password: str = Field(min_length=12, max_length=256)
+    totp_code: str | None = Field(default=None, pattern=r"^\d{6}$")
+
+
+class StepUpView(BaseModel):
+    step_up_until: datetime
+
+
+class SessionDeviceRename(BaseModel):
+    device_name: str = Field(min_length=1, max_length=120)
+
+
 class UserView(ORMModel):
     id: str
     email: str
@@ -157,10 +183,18 @@ class UserSessionView(ORMModel):
     user_id: str
     issued_at: datetime
     expires_at: datetime
+    last_seen_at: datetime
+    idle_expires_at: datetime
+    absolute_expires_at: datetime
+    remember_me: bool
+    step_up_until: datetime | None
     revoked_at: datetime | None
     revoke_reason: str | None
-    user_agent_digest: str
-    ip_digest: str
+    user_agent_summary: str
+    ip_summary: str
+    created_via: str
+    last_activity_type: str | None
+    device_name: str | None
     current: bool = False
 
 
@@ -210,6 +244,28 @@ class HostUpdate(BaseModel):
         return HostCreate.validate_labels(value) if value is not None else None
 
 
+class HostBatchUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    host_ids: list[str] = Field(min_length=1, max_length=200)
+    enabled: bool | None = None
+    group_name: str | None = Field(default=None, max_length=120)
+    add_tags: list[str] = Field(default_factory=list, max_length=32)
+    remove_tags: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("host_ids")
+    @classmethod
+    def validate_host_ids(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value) or any(len(item) > 36 for item in value):
+            raise ValueError("host_ids must be unique identifiers")
+        return value
+
+    @field_validator("add_tags", "remove_tags")
+    @classmethod
+    def validate_batch_tags(cls, value: list[str]) -> list[str]:
+        return HostCreate.validate_tags(value)
+
+
 class HostView(ORMModel):
     id: str
     name: str
@@ -225,6 +281,45 @@ class HostView(ORMModel):
     last_seen_at: datetime | None
     enrolled_at: datetime | None
     disabled_at: datetime | None
+
+
+class HostPresentationView(BaseModel):
+    """Explicit allowlist for the operator-facing host index."""
+
+    id: str
+    name: str
+    primary_address: str
+    os_name: str | None
+    region: str | None
+    group: str | None
+    provider: str | None
+    purpose: str | None
+    display_tags: list[str]
+    health: Literal["healthy", "degraded", "offline", "unknown"]
+    data_state: Literal["normal", "no_data", "stale", "offline", "agent_error"]
+    enabled: bool
+    management: Literal[
+        "guardian_and_komari",
+        "guardian",
+        "komari_only",
+        "pending_enrollment",
+    ]
+    agent_state: Literal["online", "stale", "never_seen", "revoked", "not_installed"]
+    agent_version: str | None
+    last_heartbeat_at: datetime | None
+    last_seen_at: datetime | None
+    enrolled_at: datetime | None
+    data_reason: Literal[
+        "available",
+        "no_guardian_agent",
+        "never_connected",
+        "pending_enrollment",
+        "disabled",
+        "stale",
+        "agent_error",
+    ]
+    resource_summary: dict[str, float] | None
+    technical_evidence_available: bool
 
 
 class EnrollmentTokenIssue(BaseModel):
@@ -288,6 +383,11 @@ class ServiceCheckView(ORMModel):
     last_checked_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class ServiceCheckUpdate(BaseModel):
+    enabled: bool | None = None
+    interval_seconds: int | None = Field(default=None, ge=15, le=86400)
 
 
 class ServiceCheckResultView(ORMModel):
@@ -376,9 +476,7 @@ class NotificationChannelCreate(BaseModel):
     enabled: bool = True
     configuration: dict[str, str]
     event_scope: list[str] = Field(default_factory=list, max_length=32)
-    severity_filter: list[Literal["info", "warning", "critical"]] = Field(
-        default_factory=list
-    )
+    severity_filter: list[Literal["info", "warning", "critical"]] = Field(default_factory=list)
     retry_policy: dict[str, int] = Field(default_factory=dict)
     rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
 
@@ -447,9 +545,7 @@ class IncidentView(ORMModel):
 
 
 class IncidentUpdateRequest(BaseModel):
-    status: Literal[
-        "open", "acknowledged", "investigating", "mitigating", "resolved"
-    ] | None = None
+    status: Literal["open", "acknowledged", "investigating", "mitigating", "resolved"] | None = None
     assigned_to: str | None = Field(default=None, max_length=36)
     note: str = Field(default="", max_length=1000)
     resolution_summary: str | None = Field(default=None, max_length=4000)
@@ -474,9 +570,84 @@ class ApprovalView(ORMModel):
     target_host_id: str | None
 
 
+class ApprovalActorView(BaseModel):
+    label: str
+    role: str | None = None
+
+
+class ApprovalTargetView(BaseModel):
+    host: str | None = None
+    service: str | None = None
+    scope: str | None = None
+
+
+class ApprovalFactView(BaseModel):
+    key: str
+    value: str
+    tone: Literal["neutral", "info", "warning", "critical"] = "neutral"
+
+
+class ApprovalStepView(BaseModel):
+    order: int
+    action: str
+    target: str | None = None
+    dry_run: bool = False
+
+
+class ApprovalTimelineEntryView(BaseModel):
+    at: datetime
+    event: str
+    actor: str | None = None
+    outcome: str | None = None
+
+
+class ApprovalSummaryView(BaseModel):
+    id: str
+    incident_id: str
+    action_name: str
+    status: str
+    risk_level: int
+    target: ApprovalTargetView
+    requester: ApprovalActorView | None
+    requested_at: datetime
+    expires_at: datetime
+    progress_label: str
+    execution_status: str | None
+
+
+class ApprovalDetailView(ApprovalSummaryView):
+    risk_reason: str
+    approver: ApprovalActorView | None
+    decided_at: datetime | None
+    executed_at: datetime | None
+    impact_facts: list[ApprovalFactView]
+    steps: list[ApprovalStepView]
+    dry_run_available: bool
+    dry_run_status: str | None
+    recovery_point_label: str | None
+    rollback_available: bool
+    rollback_steps: list[str]
+    timeline: list[ApprovalTimelineEntryView]
+    raw_evidence_available: bool
+
+
+class ApprovalEvidenceView(BaseModel):
+    approval_id: str
+    parameters: dict[str, Any]
+    impact: dict[str, Any]
+
+
 class ApprovalDecision(BaseModel):
-    decision: Literal["approved", "rejected", "dry_run_only"]
+    decision: Literal[
+        "approved",
+        "approved_with_conditions",
+        "changes_requested",
+        "rejected",
+        "dry_run_only",
+    ]
     confirmation: str = Field(min_length=3, max_length=255)
+    current_password: str | None = Field(default=None, min_length=12, max_length=256)
+    rollback_confirmed: bool = False
 
 
 class AuditView(ORMModel):
@@ -489,6 +660,41 @@ class AuditView(ORMModel):
     details: dict[str, Any]
     source_ip: str | None
     created_at: datetime
+
+
+class AuditPresentationView(BaseModel):
+    """Explicit allowlist for the human-readable audit index."""
+
+    event_id: int
+    display_action: str
+    action_code: str
+    category: str
+    severity: Literal["neutral", "info", "warning", "critical"]
+    result: str
+    actor_display: str
+    actor_type: Literal["user", "system", "agent", "unknown"]
+    resource_display: str
+    resource_type: str
+    source_display: str
+    source_type: Literal["internal_service", "private_network", "external_client", "unknown"]
+    created_at: datetime
+    summary: str
+    correlation_id: str | None
+    request_id: str | None
+    evidence_available: bool
+
+
+class AuditEvidenceView(BaseModel):
+    """Redacted technical evidence, fetched only after an explicit detail request."""
+
+    audit_id: int
+    action_code: str
+    resource_type: str
+    resource_id: str | None
+    actor_id: str | None
+    source_ip: str | None
+    changes: dict[str, Any]
+    correlation_id: str | None
 
 
 class RecoveryPointView(ORMModel):

@@ -5,19 +5,21 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { ApiError } from '../api'
-import { apiErrorKey, setLocale, type SupportedLocale } from '../i18n'
+import LanguageMenu from '../components/LanguageMenu.vue'
+import { apiErrorKey } from '../i18n'
 import { session } from '../session'
 
 const email = ref('')
 const password = ref('')
 const totp = ref('')
 const recoveryCode = ref('')
+const rememberMe = ref(false)
 const reveal = ref(false)
 const loading = ref(false)
 const error = ref('')
 const route = useRoute()
 const router = useRouter()
-const { locale, t } = useI18n()
+const { t } = useI18n()
 
 async function submit(): Promise<void> {
   error.value = ''
@@ -28,11 +30,12 @@ async function submit(): Promise<void> {
       password.value,
       totp.value.trim(),
       recoveryCode.value.trim(),
+      rememberMe.value,
     )
     const target = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
     await router.replace(target)
   } catch (caught) {
-    error.value = caught instanceof ApiError ? t(apiErrorKey(caught.status), { status: caught.status }) : t('errors.network')
+    error.value = caught instanceof ApiError ? t(apiErrorKey(caught.status, caught.code), { status: caught.status, ...caught.params }) : t('errors.network')
   } finally {
     loading.value = false
   }
@@ -41,7 +44,7 @@ async function submit(): Promise<void> {
 
 <template>
   <main class="login-screen">
-    <label class="login-language language-select"><span class="sr-only">{{ t('locale.select') }}</span><select :value="locale" :aria-label="t('locale.select')" @change="setLocale(($event.target as HTMLSelectElement).value as SupportedLocale)"><option value="en-US">English</option><option value="zh-CN">简体中文</option></select></label>
+    <LanguageMenu class="login-language" />
     <section class="login-panel" aria-labelledby="login-title">
       <div class="login-brand"><ShieldCheck :size="23" /><strong>VPS Guardian</strong></div>
       <header>
@@ -85,6 +88,10 @@ async function submit(): Promise<void> {
           />
         </label>
         <p class="permission-note">{{ t('login.secondFactorChoice') }}</p>
+        <label class="toggle-line">
+          <input v-model="rememberMe" type="checkbox" />
+          <span>{{ t('login.rememberMe') }}</span>
+        </label>
         <p v-if="error" class="form-error" role="alert">{{ error }}</p>
         <button class="primary-button login-button" type="submit" :disabled="loading">
           {{ loading ? t('login.submitting') : t('login.submit') }}

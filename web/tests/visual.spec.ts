@@ -1,18 +1,31 @@
 import { expect, test, type Page } from '@playwright/test'
+import AxeBuilder from '@axe-core/playwright'
 
 import type {
-  Alert,
-  AlertRule,
-  AttentionResponse,
+  ApprovalDetail,
+  ApprovalEvidence,
+  ApprovalSummary,
+  AuditPresentation,
   Host,
-  NotificationChannel,
-  NotificationDelivery,
-  Overview,
-  PublicSettings,
+  HostPresentation,
+  Incident,
   ServiceCheck,
-  StabilityReport,
+  ServiceCheckResult,
+  ServiceSummary,
   User,
 } from '../src/types'
+import type {
+  DashboardBootstrap,
+  DashboardSecurity,
+  DashboardTopology,
+} from '../src/dashboard'
+
+const captureDirectory = process.env.UI_V3_CAPTURE_DIR
+
+async function capture(page: Page, name: string): Promise<void> {
+  if (!captureDirectory) return
+  await page.screenshot({ path: `${captureDirectory}/${name}.png`, fullPage: true })
+}
 
 const user: User = {
   id: 'user-1',
@@ -21,300 +34,498 @@ const user: User = {
   totp_enabled: true,
   is_active: true,
   scopes: [],
-  last_login_at: '2026-07-21T07:30:00Z',
+  last_login_at: '2026-07-25T08:00:00Z',
+  password_changed_at: '2026-07-20T08:00:00Z',
+  totp_enabled_at: '2026-07-20T08:00:00Z',
   disabled_at: null,
+  must_change_password: false,
+  identity_setup_required: false,
+  created_by: null,
+  disabled_by: null,
   created_at: '2026-07-01T00:00:00Z',
 }
-const points = Array.from({ length: 12 }, (_, index) => ({
-  at: new Date(Date.UTC(2026, 6, 21, index * 2)).toISOString(),
-  cpu_percent: 18 + index * 2,
-  cpu_source: 'cpu_time' as const,
-  memory_percent: 42 + index,
-  disk_percent: 67 + index * 1.5,
-  network_bytes_per_second: 24_000 + index * 1_200,
-}))
 
-const overview: Overview = {
-  generated_at: '2026-07-21T08:00:00Z',
+const bootstrap: DashboardBootstrap = {
+  generated_at: '2026-07-25T08:00:00Z',
+  user: { id: user.id, email: user.email, role: user.role },
   environment: {
-    current: 'staging',
+    stage: 'staging',
+    version: '0.4.0-phase4-ui-v3',
     production_deployed: false,
     production_status: 'not_deployed',
-    gate_decision: 'go_for_controlled_production_rollout_planning',
-    version: '0.4.0-phase4-preview',
-    deployment_commit: 'b'.repeat(40),
-    deployed_at: '2026-07-21T06:00:00Z',
+    gate_decision: 'production_no_go',
+    deployed_at: null,
   },
-  global_health: 'degraded',
-  health_reasons: [{ severity: 'warning', reason: 'one host needs attention', object: 'staging-agent' }],
-  attention: [{
-    id: 'certificate:host-2',
-    type: 'certificate_expiry',
-    severity: 'warning',
-    object: 'staging-agent',
-    reason: 'Agent certificate expires within 14 days',
-    observed_at: '2026-07-21T07:58:20Z',
-    duration_seconds: 90,
-    suggested_action: 'Review certificate rotation',
-    href: '/agents',
-  }],
-  hosts: { total: 2, inventory_total: 2, unregistered: 0, disabled: 0, healthy: 1, degraded: 1, offline: 0, unknown: 0 },
-  checks: { total: 1, enabled: 1, healthy: 0, failed: 1, unknown: 0 },
-  agent_versions: { '0.3.0-alpha.1': 2 },
-  expiring_certificates: 1,
-  incidents: { open: 2, critical: 1 },
-  alerts: { active: 2, critical: 1, warning: 1 },
-  pending_approvals: 1,
-  verified_recovery_points: 1,
-  notification_failures: 1,
-  recent_incidents: [],
-  recovery: {
-    repository: 'R2 Restic',
+  global_health: {
+    status: 'warning',
+    reason: '1 active warning condition',
+    critical: 0,
+    warning: 1,
+    updated_at: '2026-07-25T08:00:00Z',
+  },
+  agents: { total: 2, online: 2, offline: 0, updated_at: '2026-07-25T08:00:00Z' },
+  alerts: { active: 1, critical: 0, warning: 1, info: 0, updated_at: '2026-07-25T08:00:00Z' },
+  backup: {
     status: 'healthy',
-    accepted_snapshot: 'a492e73f5698',
-    last_backup_at: '2026-07-20T18:27:34Z',
-    last_check_at: '2026-07-21T07:50:00Z',
-    snapshot_count: 4,
+    scope: 'offsite',
+    verified: true,
+    verified_at: '2026-07-25T07:50:00Z',
+    created_at: '2026-07-25T07:45:00Z',
+    check_status: 'passed',
     restore_status: 'passed',
-    retention_policy: 'approval_required_no_forget_or_prune',
-    rpo_seconds: 16,
-    rto_seconds: 50,
-    measurement_scope: 'staging_measured',
+    rpo_seconds: 20,
+    rto_seconds: 55,
   },
-  security: {
+  production_gate: {
+    status: 'blocked',
+    decision: 'production_no_go',
+    production_deployed: false,
+    blockers: ['discord_deferred', 'crl_revalidation', '24h_7d_observation'],
+  },
+  attention: [{
+    id: 'incident-1',
+    kind: 'incident',
+    severity: 'warning',
+    severity_level: 3,
+    title: 'Reverse proxy backend requires attention',
+    fault_type: 'reverse_proxy_backend',
+    impact: { hosts: ['edge-hk'], services: ['gateway'] },
+    owner: user.email,
+    status: 'investigating',
+    occurred_at: '2026-07-25T07:30:00Z',
+    updated_at: '2026-07-25T07:58:00Z',
+    next_action: 'Confirm mitigation',
+    href: '/incidents?selected=incident-1',
+  }],
+  sections: {
+    health: { status: 'ok' },
+    agents: { status: 'ok' },
+    alerts: { status: 'ok' },
+    backup: { status: 'ok' },
+    attention: { status: 'ok' },
+  },
+}
+
+const hosts: Host[] = [{
+  id: 'host-1',
+  name: 'edge-hk',
+  address: '192.0.2.10',
+  os_name: 'Ubuntu 24.04',
+  location: 'Hong Kong',
+  status: 'healthy',
+  data_state: 'normal',
+  enabled: true,
+  group_name: 'edge',
+  tags: ['staging'],
+  labels: {},
+  last_seen_at: '2026-07-25T07:59:50Z',
+  enrolled_at: '2026-07-01T00:00:00Z',
+  disabled_at: null,
+}]
+
+const hostPresentations: HostPresentation[] = [{
+  id: 'host-1',
+  name: 'edge-hk',
+  primary_address: '192.0.2.10',
+  os_name: 'Ubuntu 24.04',
+  region: 'Hong Kong',
+  group: 'edge',
+  provider: 'Example Cloud',
+  purpose: 'Public gateway',
+  display_tags: ['staging'],
+  health: 'healthy',
+  data_state: 'normal',
+  enabled: true,
+  management: 'guardian_and_komari',
+  agent_state: 'online',
+  agent_version: '0.4.0',
+  last_heartbeat_at: '2026-07-25T07:59:50Z',
+  last_seen_at: '2026-07-25T07:59:50Z',
+  enrolled_at: '2026-07-01T00:00:00Z',
+  data_reason: 'available',
+  resource_summary: { cpu_percent: 22, memory_percent: 50, disk_percent: 50 },
+  technical_evidence_available: true,
+}]
+
+const auditPresentations: AuditPresentation[] = [{
+  event_id: 17,
+  display_action: 'Signed in',
+  action_code: 'auth.login',
+  category: 'auth',
+  severity: 'neutral',
+  result: 'success',
+  actor_display: 'owner@example.test',
+  actor_type: 'user',
+  actor_id: 'user-1',
+  resource_display: 'Session',
+  resource_type: 'session',
+  resource_id: 'session-17',
+  source_display: 'Controller internal service',
+  source_type: 'internal_service',
+  client_ip: null,
+  internal_ip: '172.19.0.4',
+  created_at: '2026-07-25T07:59:00Z',
+  summary: 'Signed in · Session',
+  changes: {},
+  correlation_id: 'request-17',
+  request_id: 'request-17',
+  evidence_available: true,
+}]
+
+const checks: ServiceCheck[] = [
+  {
+    id: 'check-1',
+    name: 'phase4-controller-https',
+    kind: 'https',
+    enabled: true,
+    host_id: 'host-1',
+    runner_agent_id: null,
+    configuration: { target: 'https://example.test/health' },
+    group_name: 'control',
+    interval_seconds: 60,
+    timeout_seconds: 5,
+    failure_threshold: 3,
+    recovery_threshold: 2,
+    severity: 'critical',
+    last_checked_at: '2026-07-25T07:59:45Z',
+    created_at: '2026-07-01T00:00:00Z',
+    updated_at: '2026-07-25T07:59:45Z',
+  },
+  {
+    id: 'check-2',
+    name: 'phase4-systemd-failed',
+    kind: 'systemd',
+    enabled: true,
+    host_id: 'host-1',
+    runner_agent_id: null,
+    configuration: { unit: '--failed' },
+    group_name: 'system',
+    interval_seconds: 60,
+    timeout_seconds: 5,
+    failure_threshold: 2,
+    recovery_threshold: 2,
+    severity: 'warning',
+    last_checked_at: '2026-07-25T07:59:40Z',
+    created_at: '2026-07-01T00:00:00Z',
+    updated_at: '2026-07-25T07:59:40Z',
+  },
+]
+
+const results: ServiceCheckResult[] = checks.map((check, index) => ({
+  id: index + 1,
+  check_id: check.id,
+  status: 'ok',
+  checked_at: check.last_checked_at!,
+  latency_ms: 18 + index,
+  status_code: check.kind === 'https' ? 200 : null,
+  message: 'Check passed',
+  details: {},
+}))
+
+const observations: ServiceSummary[] = [{
+  host_id: 'host-1',
+  host_name: 'edge-hk',
+  kind: 'systemd_failed',
+  status: 'healthy',
+  reason: 'No failed systemd units',
+  counts: { failed: 0 },
+  parsed: true,
+  summary: '0 loaded units listed. <img src=x onerror=globalThis.__evidenceInjected=true>',
+  evidence_available: true,
+  collected_at: '2026-07-25T07:59:50Z',
+}]
+
+const incidents: Incident[] = [
+  {
+    id: 'incident-1',
+    title: 'Reverse proxy backend requires attention',
+    fault_type: 'reverse_proxy_backend',
+    severity: 3,
+    status: 'investigating',
+    assigned_to: user.id,
+    acknowledged_at: '2026-07-25T07:35:00Z',
+    confidence: 0,
+    affected_hosts: ['edge-hk'],
+    affected_services: ['gateway'],
+    evidence: [{ source: 'service-check' }],
+    excluded_causes: [],
+    recommendations: ['Confirm mitigation'],
+    auto_repair_allowed: false,
+    risk: 'Gateway requests may fail',
+    verification_plan: ['Verify loopback health'],
+    first_seen_at: '2026-07-25T07:30:00Z',
+    updated_at: '2026-07-25T07:58:00Z',
+    resolved_at: null,
+    resolution_summary: null,
+    postmortem: null,
+    timeline: [{ title: 'Investigation started', at: '2026-07-25T07:35:00Z' }],
+  },
+  {
+    id: 'incident-test',
+    title: 'Approval test record',
+    fault_type: 'approval_audit',
+    severity: 5,
+    status: 'open',
+    assigned_to: null,
+    acknowledged_at: null,
+    confidence: 0,
+    affected_hosts: [],
+    affected_services: [],
+    evidence: [],
+    excluded_causes: [],
+    recommendations: [],
+    auto_repair_allowed: false,
+    risk: 'none',
+    verification_plan: [],
+    first_seen_at: '2026-07-24T07:30:00Z',
+    updated_at: '2026-07-24T07:30:00Z',
+    resolved_at: null,
+    resolution_summary: null,
+    postmortem: null,
+    timeline: [],
+  },
+]
+
+const approvalSummaries: ApprovalSummary[] = [
+  {
+    id: 'approval-pending-1',
+    incident_id: 'incident-1',
+    action_name: 'service_restart',
+    status: 'pending',
+    risk_level: 2,
+    target: { host: 'edge-hk', service: 'gateway', scope: 'staging' },
+    requester: { label: 'operator', role: 'operator' },
+    requested_at: '2026-07-25T07:40:00Z',
+    expires_at: '2026-07-25T09:40:00Z',
+    progress_label: 'awaiting_decision',
+    execution_status: null,
+  },
+  {
+    id: 'approval-executed-2',
+    incident_id: 'incident-test',
+    action_name: 'restricted_cleanup',
+    status: 'executed',
+    risk_level: 3,
+    target: { host: 'worker-hk', service: 'filesystem', scope: 'staging' },
+    requester: { label: 'owner', role: 'owner' },
+    requested_at: '2026-07-24T07:40:00Z',
+    expires_at: '2026-07-24T09:40:00Z',
+    progress_label: 'completed',
+    execution_status: 'completed',
+  },
+]
+
+const approvalDetail: ApprovalDetail = {
+  ...approvalSummaries[0],
+  risk_reason: 'level_2_operational_change',
+  approver: null,
+  decided_at: null,
+  executed_at: null,
+  impact_facts: [
+    { key: 'service', value: 'gateway', tone: 'neutral' },
+    { key: 'downtime', value: 'under 30 seconds', tone: 'warning' },
+  ],
+  steps: [{ order: 1, action: 'service_restart', target: 'gateway.service', dry_run: true }],
+  dry_run_available: true,
+  dry_run_status: null,
+  recovery_point_label: 'verified snapshot',
+  rollback_available: true,
+  rollback_steps: ['Restore the previous service unit', 'Verify loopback health'],
+  timeline: [{
+    at: '2026-07-25T07:40:00Z',
+    event: 'requested',
+    actor: 'operator',
+    outcome: 'pending',
+  }],
+  raw_evidence_available: true,
+}
+
+const approvalEvidence: ApprovalEvidence = {
+  approval_id: approvalDetail.id,
+  parameters: { agent_id: 'agent-1', token: '[REDACTED]' },
+  impact: { service: 'gateway' },
+}
+
+const resources = {
+  generated_at: '2026-07-25T08:00:00Z',
+  sampled_hosts: 2,
+  current: {
+    cpu_percent: 28.2,
+    memory_percent: 51.4,
+    disk_percent: 67.1,
+    network_bytes_per_second: 34560,
+  },
+  delta: {
+    cpu_percent: 1.2,
+    memory_percent: -0.4,
+    disk_percent: 0.1,
+  },
+  hosts: [],
+}
+
+const topology: DashboardTopology = {
+  generated_at: '2026-07-25T08:00:00Z',
+  nodes: [
+    { id: 'controller', label: 'Controller', kind: 'control', status: 'healthy' },
+    { id: 'gateway', label: 'Agent Gateway', kind: 'gateway', status: 'unknown' },
+    { id: 'database', label: 'PostgreSQL', kind: 'database', status: 'healthy' },
+    { id: 'web', label: 'Web', kind: 'web', status: 'healthy' },
+    { id: 'agent-host-1', label: 'edge-hk', kind: 'agent', status: 'healthy' },
+  ],
+}
+
+const security: DashboardSecurity = {
+  generated_at: '2026-07-25T08:00:00Z',
+  controls: {
     uncovered_critical: 0,
     uncovered_high: 0,
     mtls: 'enforced',
     crl: 'enforced',
     certificate_rotation: 'operational',
-    last_scan_at: '2026-07-20T06:00:00Z',
+    last_scan_at: '2026-07-25T07:30:00Z',
     login_rate_limit: 'enforced',
     totp: 'available',
     rbac: 'enforced',
     audit: 'append_only',
   },
-  permissions: {
-    role: 'owner',
-    can_view_recovery: true,
-    can_view_security: true,
-    can_approve: true,
-    dangerous_actions: 'approval_required',
-  },
-  resource_window: '24h',
-  resource_series: { 'host-1': points, 'host-2': points.map((point) => ({ ...point, cpu_percent: point.cpu_percent + 8 })) },
-  resource_series_truncated: false,
-  host_rows: [
-    {
-      id: 'host-1',
-      name: 'staging-controller',
-      location: 'Hong Kong',
-      group: 'control',
-      tags: ['staging'],
-      data_state: 'normal',
-      enabled: true,
-      status: 'healthy',
-      last_heartbeat_at: '2026-07-21T07:59:45Z',
-      agent_serial: '1008',
-      certificate_status: 'valid',
-      certificate_expires_at: '2026-10-21T00:00:00Z',
-      agent_version: '0.3.0-alpha.1',
-      offline_queue: 0,
-      failed_tasks: 0,
-      queued_tasks: 0,
-      resources: { cpu_percent: 31.2, cpu_source: 'cpu_time', memory_percent: 48.1, disk_percent: 68.4, network_bytes_per_second: 34_200, collected_at: '2026-07-21T07:59:45Z' },
-    },
-    {
-      id: 'host-2',
-      name: 'staging-agent',
-      location: 'Singapore',
-      group: 'edge',
-      tags: ['staging', 'linux'],
-      data_state: 'stale',
-      enabled: true,
-      status: 'degraded',
-      last_heartbeat_at: '2026-07-21T07:58:20Z',
-      agent_serial: '1012',
-      certificate_status: 'expiring',
-      certificate_expires_at: '2026-08-01T00:00:00Z',
-      agent_version: '0.3.0-alpha.1',
-      offline_queue: 3,
-      failed_tasks: 1,
-      queued_tasks: 1,
-      resources: { cpu_percent: 44.8, cpu_source: 'cpu_time', memory_percent: 62.5, disk_percent: 91.2, network_bytes_per_second: 41_100, collected_at: '2026-07-21T07:58:20Z' },
-    },
-  ],
-  topology: [
-    { id: 'controller', label: 'Controller', kind: 'control', status: 'healthy' },
-    { id: 'haproxy', label: 'HAProxy', kind: 'gateway', status: 'healthy' },
-    { id: 'postgresql', label: 'PostgreSQL', kind: 'database', status: 'healthy' },
-    { id: 'web', label: 'Web', kind: 'web', status: 'healthy' },
-    { id: 'agent-host-1', label: 'staging-controller', kind: 'agent', status: 'healthy' },
-    { id: 'agent-host-2', label: 'staging-agent', kind: 'agent', status: 'degraded' },
-  ],
-  timeline: [
-    { id: 'incident-1', kind: 'incident', severity: 4, host_id: 'host-2', title: 'Gateway health degraded', status: 'investigating', at: '2026-07-21T07:45:00Z' },
-    { id: 'repair-1', kind: 'repair', severity: 1, host_id: 'host-1', title: 'validated recovery path', status: 'passed', at: '2026-07-21T07:30:00Z' },
-  ],
-}
-
-const stability: StabilityReport = {
-  generated_at: overview.generated_at,
-  window: '24h',
-  formula_version: 1,
-  expected_heartbeat_interval_seconds: 60,
-  hosts: [
-    {
-      host_id: 'host-1',
-      host_name: 'staging-controller',
-      group: 'control',
-      location: 'Hong Kong',
-      status: 'scored',
-      reason: 'sufficient evidence',
-      stability_score: 96.2,
-      uptime_score: 99.8,
-      heartbeat_score: 98.4,
-      check_success_score: 95.0,
-      failure_rate: 0.05,
-      mean_recovery_time: 180,
-      stale_ratio: 0.01,
-      alert_frequency: 0.04,
-      confidence: 0.92,
-      sample_count: 1440,
-      check_count: 720,
-      is_new: false,
-    },
-    {
-      host_id: 'host-2',
-      host_name: 'staging-agent',
-      group: 'edge',
-      location: 'Singapore',
-      status: 'scored',
-      reason: 'intermittent check failures',
-      stability_score: 78.4,
-      uptime_score: 92.0,
-      heartbeat_score: 88.0,
-      check_success_score: 72.0,
-      failure_rate: 0.28,
-      mean_recovery_time: 540,
-      stale_ratio: 0.08,
-      alert_frequency: 0.2,
-      confidence: 0.83,
-      sample_count: 1320,
-      check_count: 700,
-      is_new: false,
-    },
-  ],
-  aggregates: [
-    { group: 'control', location: 'Hong Kong', host_count: 1, scored_count: 1, stability_score: 96.2, uptime_score: 99.8, check_success_score: 95.0 },
-    { group: 'edge', location: 'Singapore', host_count: 1, scored_count: 1, stability_score: 78.4, uptime_score: 92.0, check_success_score: 72.0 },
-  ],
-}
-
-const attention: AttentionResponse = {
-  generated_at: overview.generated_at,
-  global_health: overview.global_health,
-  health_reasons: overview.health_reasons,
-  items: overview.attention,
-}
-
-const hosts: Host[] = [{ id: 'host-1', name: 'edge-hk', address: '192.0.2.10', os_name: 'Ubuntu 24.04', location: 'Hong Kong', status: 'healthy', data_state: 'normal', enabled: true, group_name: 'edge', tags: ['linux', 'production'], labels: {}, last_seen_at: '2026-07-21T07:59:45Z', enrolled_at: '2026-07-20T00:00:00Z', disabled_at: null }]
-const checks: ServiceCheck[] = [{ id: 'check-1', name: 'public-api', kind: 'https', enabled: true, host_id: 'host-1', runner_agent_id: null, configuration: { target: 'https://example.test/health' }, group_name: 'api', interval_seconds: 60, timeout_seconds: 5, failure_threshold: 3, recovery_threshold: 2, severity: 'critical', last_checked_at: '2026-07-21T07:59:45Z', created_at: '2026-07-20T00:00:00Z', updated_at: '2026-07-21T07:59:45Z' }]
-const alertRules: AlertRule[] = [{ id: 'rule-1', name: 'service-public-api', enabled: true, source_type: 'service_check', source_id: 'check-1', severity: 'critical', group_key: 'api', failure_threshold: 3, recovery_threshold: 2, repeat_interval_seconds: 3600, escalation_after_seconds: null, recovery_notifications: true, created_at: '2026-07-20T00:00:00Z' }]
-const alerts: Alert[] = [{ id: 'alert-1', rule_id: 'rule-1', fingerprint: 'a'.repeat(64), state: 'firing', consecutive_failures: 3, consecutive_successes: 0, first_observed_at: '2026-07-21T07:55:00Z', last_observed_at: '2026-07-21T07:59:45Z', fired_at: '2026-07-21T07:57:00Z', acknowledged_at: null, acknowledged_by: null, assigned_to: null, silenced_until: null, resolved_at: null, closed_at: null, last_notified_at: '2026-07-21T07:57:00Z', notification_count: 1, summary: 'HTTP status 503', details: {} }]
-const channels: NotificationChannel[] = [{ id: 'channel-1', name: 'local-mock', kind: 'webhook', enabled: true, configuration: { endpoint_env: 'GUARDIAN_TEST_WEBHOOK_URL' }, event_scope: ['alert.firing', 'alert.recovered'], severity_filter: ['critical'], retry_policy: { max_attempts: 3, base_delay_seconds: 30 }, rate_limit_per_minute: 30, created_at: '2026-07-20T00:00:00Z' }]
-const deliveries: NotificationDelivery[] = [{
-  id: 'delivery-1',
-  channel_id: 'channel-1',
-  alert_id: 'alert-1',
-  event_type: 'alert.firing',
-  status: 'dead_letter',
-  attempt_count: 3,
-  next_attempt_at: '2026-07-21T08:05:00Z',
-  delivered_at: null,
-  response_code: 503,
-  error_summary: 'remote endpoint unavailable',
-  created_at: '2026-07-21T07:57:00Z',
-}]
-const publicSettings: PublicSettings = {
-  environment: 'staging',
-  deployment_stage: 'staging',
-  release_version: '0.4.0-phase4-preview',
-  deployment_commit: 'b'.repeat(40),
-  deployed_at: '2026-07-21T06:00:00Z',
-  secure_cookies: true,
-  auto_create_schema: false,
-  allowed_origins: ['https://guardian.example.test'],
-  max_incident_log_bytes: 2_000_000,
-  login_attempts_per_10m: 5,
-  nonce_ttl_seconds: 300,
-  agent_offline_after_seconds: 90,
-  agent_pending_identity_ttl_minutes: 15,
-  approval_ttl_minutes: 30,
-  metric_retention_days: 7,
-  service_result_retention_days: 30,
-  max_metric_rows_per_host: 10080,
-  max_results_per_check: 43200,
-  external_notifications_enabled: false,
-  settings_catalog: [{ key: 'metric_retention_days', value: 7, source: 'environment', restart_required: true, risk: 'medium' }],
-  secret_status: { session_signing: true, field_encryption: true },
-  features: { mtls: true, persistent_alerts: true },
 }
 
 interface MockOptions {
-  payload?: Overview
-  overviewStatus?: number
-  delayMs?: number
-  theme?: 'light' | 'dark'
   locale?: 'en-US' | 'zh-CN'
+  theme?: 'light' | 'dark'
+  bootstrapStatus?: number
+  bootstrapDelay?: number
+  resourceStatus?: number
 }
 
-async function mockController(page: Page, options: MockOptions = {}): Promise<void> {
-  await page.addInitScript(({ theme, locale }) => {
-    sessionStorage.setItem('guardian_token', 'browser-test-session')
-    localStorage.setItem('guardian_theme', theme)
-    if (locale) localStorage.setItem('guardian_locale', locale)
-  }, { theme: options.theme ?? 'dark', locale: options.locale })
+async function mockAuthenticated(
+  page: Page,
+  options: MockOptions = {},
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>()
+  if (options.locale) {
+    await page.context().addCookies([{
+      name: 'guardian_locale',
+      value: options.locale,
+      url: 'http://127.0.0.1:4173',
+      sameSite: 'Lax',
+    }])
+  }
+  await page.addInitScript(({ locale, theme }) => {
+    if (!localStorage.getItem('guardian_theme')) localStorage.setItem('guardian_theme', theme)
+  }, { locale: options.locale, theme: options.theme ?? 'light' })
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname
+    counts.set(path, (counts.get(path) ?? 0) + 1)
     if (path === '/api/v1/auth/me') {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(user) })
       return
     }
-    if (path === '/api/v1/overview') {
-      if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs))
+    if (path === '/api/v1/dashboard/bootstrap') {
+      if (options.bootstrapDelay) await new Promise((resolve) => setTimeout(resolve, options.bootstrapDelay))
+      const failed = options.bootstrapStatus && options.bootstrapStatus >= 400
       await route.fulfill({
-        status: options.overviewStatus ?? 200,
+        status: options.bootstrapStatus ?? 200,
         contentType: 'application/json',
-        body: JSON.stringify(options.overviewStatus ? { code: 'controller_unavailable' } : options.payload ?? overview),
+        body: JSON.stringify(failed ? { code: 'controller_unavailable' } : bootstrap),
       })
       return
     }
-    if (path === '/api/v1/stability') {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(stability) })
+    if (path === '/api/v1/dashboard/resources/current') {
+      await route.fulfill({
+        status: options.resourceStatus ?? 200,
+        contentType: 'application/json',
+        body: JSON.stringify(options.resourceStatus ? { code: 'resource_unavailable' } : resources),
+      })
+      return
+    }
+    if (path === '/api/v1/approvals/presentation') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(approvalSummaries),
+      })
+      return
+    }
+    if (path === `/api/v1/approvals/${approvalDetail.id}/presentation`) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(approvalDetail),
+      })
+      return
+    }
+    if (path === `/api/v1/approvals/${approvalDetail.id}/evidence`) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(approvalEvidence),
+      })
+      return
+    }
+    if (path === '/api/v1/hosts/host-1/latest') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          host_id: 'host-1',
+          collected_at: '2026-07-25T07:59:50Z',
+          payload: {
+            memory_total_bytes: 8589934592,
+            memory_available_bytes: 4294967296,
+            disk_total_bytes: 107374182400,
+            disk_free_bytes: 53687091200,
+            load_1: 0.22,
+            uptime_seconds: 86400,
+          },
+        }),
+      })
+      return
+    }
+    if (path === '/api/v1/audit/17/evidence') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          audit_id: 17,
+          action_code: 'auth.login',
+          resource_type: 'session',
+          resource_id: 'session-17',
+          actor_id: 'user-1',
+          source_ip: '172.19.0.4',
+          changes: {},
+          correlation_id: 'request-17',
+        }),
+      })
       return
     }
     const payloads: Record<string, unknown> = {
-      '/api/v1/attention': attention,
       '/api/v1/hosts': hosts,
+      '/api/v1/hosts/presentation': hostPresentations,
+      '/api/v1/audit/presentation': auditPresentations,
       '/api/v1/service-checks': checks,
-      '/api/v1/services': [],
-      '/api/v1/alerts': alerts,
-      '/api/v1/alert-rules': alertRules,
-      '/api/v1/agents': [],
-      '/api/v1/notification-channels': channels,
-      '/api/v1/notification-deliveries': deliveries,
+      '/api/v1/services': observations,
+      '/api/v1/service-check-results': results,
+      '/api/v1/incidents': incidents,
       '/api/v1/users': [user],
-      '/api/v1/settings/public': publicSettings,
+      '/api/v1/dashboard/topology': topology,
+      '/api/v1/dashboard/security': security,
+      '/api/v1/agents': [],
+      '/api/v1/alerts': [],
+      '/api/v1/alert-rules': [],
+      '/api/v1/notification-channels': [],
+      '/api/v1/notification-deliveries': [],
     }
-    if (path in payloads) {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(payloads[path]) })
-      return
-    }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(payloads[path] ?? []),
+    })
   })
+  return counts
 }
 
-async function mockUnauthenticated(page: Page): Promise<void> {
+async function mockAnonymous(page: Page): Promise<void> {
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname
     await route.fulfill({
@@ -326,243 +537,360 @@ async function mockUnauthenticated(page: Page): Promise<void> {
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
-  const dimensions = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }))
-  expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth)
+  await expect.poll(() => page.evaluate(
+    () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+  )).toBe(true)
 }
 
-test('desktop overview renders API data in dark mode', async ({ page }) => {
+async function contrastRatio(page: Page, selector: string): Promise<number> {
+  return page.locator(selector).evaluate((element) => {
+    const rgb = (value: string): number[] => value.match(/\d+(?:\.\d+)?/g)!.slice(0, 3).map(Number)
+    const isOpaque = (value: string): boolean => {
+      const alpha = value.match(/rgba?\([^)]*(?:,\s*([\d.]+))\)$/)?.[1]
+      return value !== 'transparent' && (alpha == null || Number(alpha) > 0)
+    }
+    const effectiveBackground = (target: Element): string => {
+      const own = getComputedStyle(target).backgroundColor
+      if (isOpaque(own)) return own
+      const paintedChild = [...target.children]
+        .map((child) => getComputedStyle(child).backgroundColor)
+        .find(isOpaque)
+      if (paintedChild) return paintedChild
+      return target.parentElement ? effectiveBackground(target.parentElement) : 'rgb(255, 255, 255)'
+    }
+    const luminance = (color: number[]): number => {
+      const channels = color.map((value) => {
+        const channel = value / 255
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+      })
+      return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+    }
+    const style = getComputedStyle(element)
+    const foreground = luminance(rgb(style.color))
+    const background = luminance(rgb(effectiveBackground(element)))
+    return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05)
+  })
+}
+
+test('overview renders from one lightweight bootstrap without legacy heavy requests', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const counts = await mockAuthenticated(page)
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await mockController(page, { theme: 'dark' })
   await page.goto('/overview')
-  await expect(page.getByRole('heading', { name: 'Operations Overview' })).toBeVisible()
-  await expect(page.getByText('Production · Not deployed', { exact: true })).toBeVisible()
-  await expect(page.getByText('a492e73f5698', { exact: true }).first()).toBeVisible()
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+
+  await expect(page.getByRole('heading', { name: 'Operational overview' })).toBeVisible()
+  await expect(page.getByText('Not deployed', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Recoverable', { exact: true }).first()).toBeVisible()
+  await expect.poll(() => counts.get('/api/v1/auth/me')).toBe(1)
+  await expect.poll(() => counts.get('/api/v1/dashboard/bootstrap')).toBe(1)
+  expect(counts.get('/api/v1/overview')).toBeUndefined()
+  expect(counts.get('/api/v1/stability')).toBeUndefined()
+  expect(errors).toEqual([])
   await expectNoHorizontalOverflow(page)
-  await page.screenshot({ path: '../docs/assets/dashboard-en.png', fullPage: true })
+  await expect(page.getByText('28%', { exact: true })).toBeVisible()
+  await capture(page, 'overview-1440-light')
 })
 
-test('Chinese desktop overview uses the same data and dark theme', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 1000 })
-  await mockController(page, { theme: 'dark', locale: 'zh-CN' })
+test('topology and security use bounded summaries without the legacy overview', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const counts = await mockAuthenticated(page)
+
+  await page.goto('/topology')
+  await expect(page.getByText('Agent Gateway', { exact: true })).toBeVisible()
+  await page.goto('/security')
+  await expect(page.getByText('Owner TOTP', { exact: true })).toBeVisible()
+
+  await expect.poll(() => counts.get('/api/v1/dashboard/topology')).toBe(1)
+  await expect.poll(() => counts.get('/api/v1/dashboard/security')).toBe(1)
+  expect(counts.get('/api/v1/overview')).toBeUndefined()
+  expect(errors).toEqual([])
+})
+
+test('active navigation remains visible in light and dark themes on key routes', async ({ page }) => {
+  test.setTimeout(90_000)
+  await mockAuthenticated(page)
   await page.goto('/overview')
-  await expect(page.getByText('允许受控生产规划')).toBeVisible()
-  await expect(page.locator('.ops-host-name strong').filter({ hasText: 'staging-controller' })).toBeVisible()
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  const allNavigationRoutes = [
+    '/overview',
+    '/hosts',
+    '/services',
+    '/topology',
+    '/alerts',
+    '/incidents',
+    '/repairs',
+    '/approvals',
+    '/recovery',
+    '/account-security',
+    '/security',
+    '/users',
+    '/agents',
+    '/notifications',
+    '/audit',
+    '/settings',
+  ]
+  for (const theme of ['light', 'dark'] as const) {
+    const routes = allNavigationRoutes
+    for (const route of routes) {
+      await page.goto(route)
+      const active = page.locator('.proto-navigation a[aria-current="page"]')
+      await expect(active).toHaveCount(1)
+      await expect(active).toBeVisible()
+      expect((await active.boundingBox())!.width).toBeGreaterThan(100)
+      expect(await contrastRatio(page, '.proto-navigation a[aria-current="page"]')).toBeGreaterThanOrEqual(4.5)
+    }
+    if (theme === 'light') {
+      await page.getByRole('button', { name: 'Switch to dark mode' }).click()
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+    }
+  }
+})
+
+test('approval center is decision-first, accessible, and does not expose raw JSON by default', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const counts = await mockAuthenticated(page)
+  await page.setViewportSize({ width: 1366, height: 900 })
+  await page.goto('/approvals')
+
+  await expect(page.getByRole('heading', { name: 'Restart service' })).toBeVisible()
+  await expect(page.getByText('gateway.service')).toBeVisible()
+  await expect(page.getByText('Rollback path available')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Request changes' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Approve with conditions' })).toBeVisible()
+  await expect(page.getByText('approval-pending-1')).toHaveCount(0)
+  await expect(page.getByText('"agent_id"')).toHaveCount(0)
+  await expect.poll(() => counts.get('/api/v1/approvals/presentation')).toBe(1)
+  expect(counts.get(`/api/v1/approvals/${approvalDetail.id}/evidence`)).toBeUndefined()
+
+  const accessibility = await new AxeBuilder({ page }).analyze()
+  expect(accessibility.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))).toEqual([])
+  expect(errors).toEqual([])
   await expectNoHorizontalOverflow(page)
-  await page.screenshot({ path: '../docs/assets/dashboard-zh-CN.png', fullPage: true })
+  await capture(page, 'approvals-1366-light')
+
+  await page.locator('.approval-evidence summary').click()
+  await expect(page.locator('.approval-evidence .approval-evidence-lines').getByText('"agent_id"')).toBeVisible()
+  await expect.poll(() => counts.get(`/api/v1/approvals/${approvalDetail.id}/evidence`)).toBe(1)
+  await page.getByRole('button', { name: 'Request changes' }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.getByRole('dialog').getByText('Changes requested')).toBeVisible()
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
+  await page.getByRole('button', { name: 'Approve execution' }).click()
+  await expect(page.getByRole('dialog').getByLabel('Current password (reauthentication)')).toBeVisible()
+  await expect(page.getByRole('dialog').getByText('I verified the rollback path and recovery requirements.')).toBeVisible()
 })
 
-test('theme control switches between light and dark', async ({ page }) => {
-  await mockController(page, { theme: 'dark' })
-  await page.goto('/overview')
-  await page.getByRole('button', { name: 'Switch to light mode' }).click()
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
-  await expect(page.getByRole('button', { name: 'Switch to dark mode' })).toBeVisible()
+test('approval filters and mobile master-detail behavior remain usable', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'zh-CN' })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/approvals')
+
+  await expect(page.getByRole('row', { name: /重启服务/ })).toBeVisible()
+  await page.getByRole('row', { name: /重启服务/ }).click()
+  await expect(page.getByRole('heading', { name: '重启服务' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  await capture(page, 'approvals-390-detail-light')
+  await page.getByRole('button', { name: '返回请求列表' }).click()
+  await expect(page.getByRole('row', { name: /重启服务/ })).toBeVisible()
+  await page.getByRole('searchbox', { name: '搜索审批' }).fill('worker')
+  await expect(page.getByRole('row', { name: /受限清理/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /重启服务/ })).toHaveCount(0)
+  await expectNoHorizontalOverflow(page)
+  await capture(page, 'approvals-390-list-light')
 })
 
-test('keyboard navigation exposes named landmarks and command palette', async ({ page }) => {
-  await mockController(page)
+test('approval center dark theme and 768px detail use semantic surfaces', async ({ page }) => {
+  await mockAuthenticated(page, { theme: 'dark' })
+  await page.setViewportSize({ width: 768, height: 900 })
+  await page.goto('/approvals')
+  await expect(page.getByRole('row', { name: /Restart service/ })).toBeVisible()
+  const queueBackground = await page.locator('.approval-workspace .rc5-data-region').evaluate(
+    (element) => getComputedStyle(element).backgroundColor,
+  )
+  expect(queueBackground).not.toBe('rgb(0, 0, 0)')
+  await page.getByRole('row', { name: /Restart service/ }).click()
+  await expect(page.getByRole('heading', { name: 'Restart service' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  const accessibility = await new AxeBuilder({ page }).analyze()
+  expect(accessibility.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))).toEqual([])
+  await capture(page, 'approvals-768-detail-dark')
+})
+
+test('approval route remains bounded and lazy-loads detail and evidence', async ({ page }) => {
+  const counts = await mockAuthenticated(page)
   await page.goto('/overview')
-  await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible()
+  const samples: number[] = []
+  for (let index = 0; index < 3; index += 1) {
+    const started = performance.now()
+    await page.getByRole('link', { name: 'Approvals' }).click()
+    await expect(page.getByRole('heading', { name: 'Restart service' })).toBeVisible()
+    samples.push(performance.now() - started)
+    await page.getByRole('link', { name: 'Operations overview' }).click()
+    await expect(page.getByRole('heading', { name: 'Operational overview' })).toBeVisible()
+  }
+  samples.sort((left, right) => left - right)
+  expect(samples[1]).toBeLessThanOrEqual(300)
+  expect(counts.get('/api/v1/auth/me')).toBe(1)
+  expect(counts.get('/api/v1/approvals/presentation')).toBe(3)
+  expect(counts.get(`/api/v1/approvals/${approvalDetail.id}/presentation`)).toBe(3)
+  expect(counts.get(`/api/v1/approvals/${approvalDetail.id}/evidence`)).toBeUndefined()
+})
+
+test('desktop navigation collapse persists and expansion restores visible labels', async ({ page }) => {
+  await mockAuthenticated(page)
+  await page.goto('/services')
+  const active = page.locator('.proto-navigation a[aria-current="page"]')
+  const activeLabel = active.locator('span')
+  await expect(activeLabel).toBeVisible()
+  const label = (await activeLabel.textContent())!.trim()
+  await page.getByRole('button', { name: 'Collapse navigation' }).click()
+  await expect(page.locator('.proto-app')).toHaveClass(/sidebar-collapsed/)
+  await expect(active).toHaveAttribute('title', label)
+  await page.reload()
+  await expect(page.locator('.proto-app')).toHaveClass(/sidebar-collapsed/)
+  await page.getByRole('button', { name: 'Expand navigation' }).click()
+  await expect(activeLabel).toBeVisible()
+  await expect(active).not.toHaveAttribute('title')
+})
+
+test('command palette is keyboard accessible and navigates without losing shell context', async ({ page }) => {
+  await mockAuthenticated(page)
+  await page.goto('/overview')
+  await expect(page.getByRole('heading', { name: 'Operational overview' })).toBeVisible()
   await page.keyboard.press('Control+K')
   const palette = page.getByRole('dialog', { name: 'Search and navigate' })
   await expect(palette).toBeVisible()
-  await expect(palette.getByPlaceholder('Search pages and actions…')).toBeFocused()
-  await page.keyboard.type('notification')
-  await expect(palette.getByRole('button', { name: /Notification center/ })).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(palette).toBeHidden()
-
-  const unnamedControls = await page.locator('button:visible, a:visible, select:visible, input:visible').evaluateAll((elements) =>
-    elements.filter((element) => {
-      const label = element.getAttribute('aria-label')
-        ?? element.getAttribute('title')
-        ?? element.textContent
-        ?? (element as HTMLInputElement).placeholder
-      return !label.trim()
-    }).length,
-  )
-  expect(unnamedControls).toBe(0)
+  const input = palette.getByPlaceholder('Search pages and actions…')
+  await expect(input).toBeFocused()
+  await input.fill('incident')
+  await palette.getByRole('button', { name: /Incidents/ }).click()
+  await expect(page).toHaveURL(/\/incidents$/)
+  await expect(page.getByRole('heading', { name: 'Incidents' })).toBeVisible()
 })
 
-test('loading and API failure states are explicit', async ({ page }) => {
-  await mockController(page, { delayMs: 700 })
-  const overviewResponse = page.waitForResponse((response) =>
-    new URL(response.url()).pathname === '/api/v1/overview',
-  )
-  await page.goto('/overview')
-  await expect(page.getByLabel('Loading operations overview')).toBeVisible()
-  await overviewResponse
-  await expect(page.getByRole('heading', { name: 'Operations Overview' })).toBeVisible()
-
-  await page.unroute('**/api/v1/**')
-  await mockController(page, { overviewStatus: 503 })
-  await page.reload()
-  await expect(page.getByRole('alert')).toContainText('Controller API is unavailable')
-})
-
-test('empty and restricted states do not expose actions', async ({ page }) => {
-  const restricted: Overview = {
-    ...overview,
-    hosts: { total: 0, inventory_total: 0, unregistered: 0, disabled: 0, healthy: 0, degraded: 0, offline: 0, unknown: 0 },
-    host_rows: [],
-    resource_series: {},
-    topology: overview.topology.filter((node) => node.kind !== 'agent'),
-    timeline: [],
-    permissions: {
-      role: 'viewer',
-      can_view_recovery: false,
-      can_view_security: false,
-      can_approve: false,
-      dangerous_actions: 'approval_required',
-    },
-  }
-  await mockController(page, { payload: restricted })
-  await page.goto('/overview')
-  await expect(page.getByText('No resource samples in this scope')).toBeVisible()
-  await expect(page.getByText('No VPS hosts enrolled')).toBeVisible()
-  await expect(page.getByText('Detailed recovery operations require Operator access.')).toBeVisible()
-  await expect(page.getByText('Security details require Admin access.')).toBeVisible()
-  await expect(page.getByRole('button', { name: /删除|forget|prune|恢复|重启|轮换/i })).toHaveCount(0)
-})
-
-test('language selection persists after reload', async ({ page }) => {
-  await mockController(page)
-  await page.goto('/overview')
-  const selector = page.getByRole('combobox', { name: 'Language' })
-  await selector.selectOption('zh-CN')
-  await expect(page.getByRole('heading', { name: '运营总览' })).toBeVisible()
-  await page.reload()
-  await expect(page.getByRole('combobox', { name: '语言' })).toHaveValue('zh-CN')
-})
-
-test('Chinese browser locale is selected on first visit', async ({ browser }) => {
-  const context = await browser.newContext({ locale: 'zh-CN' })
-  const page = await context.newPage()
-  await mockController(page)
-  await page.goto('/overview')
-  await expect(page.getByRole('heading', { name: '运营总览' })).toBeVisible()
-  await context.close()
-})
-
-test('multi-VPS monitoring pages render persistent API data', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 1000 })
-  await mockController(page)
-  await page.goto('/hosts')
-  await expect(page.getByRole('heading', { name: 'Hosts' })).toBeVisible()
-  await expect(page.getByText('edge-hk', { exact: true })).toBeVisible()
-  await expect(page.getByText('Normal', { exact: true })).toBeVisible()
-  await expectNoHorizontalOverflow(page)
-
+test('services uses structured rows and treats zero failed systemd units as healthy', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'zh-CN', theme: 'light' })
   await page.goto('/services')
-  await expect(page.getByRole('heading', { name: 'Services' })).toBeVisible()
-  await expect(page.getByText('public-api', { exact: true })).toBeVisible()
-
-  await page.goto('/alerts')
-  await expect(page.getByRole('heading', { name: 'Alerts' })).toBeVisible()
-  await expect(page.getByText('HTTP status 503')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Acknowledge' })).toBeVisible()
-
-  await page.goto('/settings')
-  await expect(page.getByText('local-mock', { exact: true })).toBeVisible()
-  await expect(page.getByText('7 days / 10080')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '服务检查' })).toBeVisible()
+  await expect(page.getByText('未发现失败的 systemd unit')).toBeVisible()
+  await expect(page.locator('pre')).toHaveCount(0)
+  await page.getByText('未发现失败的 systemd unit').click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.locator('pre')).toHaveCount(0)
+  await capture(page, 'services-1440-light-detail-zh')
 })
 
-test('Phase 4 attention, access, and notification workflows remain structured', async ({ page }) => {
-  await page.setViewportSize({ width: 1366, height: 768 })
-  await mockController(page)
-
-  await page.goto('/attention')
-  await expect(page.getByRole('heading', { name: 'Needs attention' })).toBeVisible()
-  await expect(page.getByText('Agent certificate expires within 14 days')).toBeVisible()
-  await expect(page.getByRole('link', { name: /Open/ })).toBeVisible()
-  await expectNoHorizontalOverflow(page)
-
-  await page.goto('/users')
-  await expect(page.getByRole('heading', { name: 'Users & access' })).toBeVisible()
-  await expect(page.getByRole('main').getByText('owner@example.test')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Revoke sessions' })).toBeVisible()
-
-  await page.goto('/notifications')
-  await expect(page.getByRole('heading', { name: 'Notification center' })).toBeVisible()
-  await expect(page.getByText('remote endpoint unavailable')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible()
-  await expectNoHorizontalOverflow(page)
+test('services filters persist in the URL and audited batch controls are usable', async ({ page }) => {
+  const counts = await mockAuthenticated(page)
+  await page.goto('/services')
+  await page.getByRole('combobox', { name: 'Type' }).selectOption('systemd')
+  await expect(page).toHaveURL(/kind=systemd/)
+  await page.getByRole('checkbox', { name: /Select .*Failed/i }).check()
+  await expect(page.getByText('1 selected')).toBeVisible()
+  await page.getByRole('button', { name: 'Disable' }).click()
+  await expect.poll(() => counts.get('/api/v1/service-checks/check-2')).toBe(1)
+  await expect(page.getByText('1 selected')).toHaveCount(0)
 })
 
-test('VPS aliases require login and preserve deep links after refresh', async ({ page }) => {
-  await mockUnauthenticated(page)
-  await page.goto('/vps')
-  await expect(page).toHaveURL(/\/login\?redirect=\/vps$/)
-
-  await page.unroute('**/api/v1/**')
-  await mockController(page)
-  await page.goto('/vps/host-1')
-  await expect(page.getByRole('heading', { name: 'Hosts' })).toBeVisible()
-  await expect(page.getByText('edge-hk', { exact: true })).toBeVisible()
-  await expect(page).toHaveURL(/\/vps\/host-1$/)
-  await page.reload()
-  await expect(page.getByRole('heading', { name: 'Hosts' })).toBeVisible()
-  await expect(page).toHaveURL(/\/vps\/host-1$/)
+test('raw evidence is escaped, collapsed by default, and exposes controlled viewer actions', async ({ page }) => {
+  await mockAuthenticated(page)
+  await page.goto('/services')
+  await page.getByText('No failed systemd units').click()
+  await expect(page.getByText('View raw evidence')).toBeVisible()
+  await expect(page.locator('.proto-evidence')).toHaveCount(0)
+  await page.getByText('View raw evidence').click()
+  await expect(page.locator('.proto-evidence')).toBeVisible()
+  await expect(page.locator('.proto-evidence img')).toHaveCount(0)
+  await expect(page.locator('.proto-evidence code')).toContainText('<img src=x')
+  await expect(page.getByRole('button', { name: 'Copy' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Full screen' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Download redacted' })).toBeVisible()
+  expect(await page.evaluate(() => (globalThis as { __evidenceInjected?: boolean }).__evidenceInjected)).not.toBe(true)
 })
 
-test('anonymous auth restore is quiet, deduplicated, and preserves the protected deep link', async ({ page }) => {
-  const pageErrors: string[] = []
+test('incidents omits fake confidence, labels tests, and keeps selected-row contrast', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'zh-CN', theme: 'light' })
+  await page.goto('/incidents')
+  await expect(page.getByRole('heading', { name: '事故' })).toBeVisible()
+  await expect(page.locator('.proto-test-label', { hasText: '测试记录' })).toBeVisible()
+  await expect(page.getByText('0%', { exact: true })).toHaveCount(0)
+  await page.getByText('后端服务不可用').first().click()
+  const selected = page.locator('.incidents-table tr.selected')
+  await expect(selected).toBeVisible()
+  expect(await contrastRatio(page, '.incidents-table tr.selected')).toBeGreaterThanOrEqual(4.5)
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await capture(page, 'incidents-1440-light-detail-zh')
+})
+
+test('incident severity, owner, source and record filters persist in the URL', async ({ page }) => {
+  await mockAuthenticated(page)
+  await page.goto('/incidents')
+  await page.getByRole('combobox', { name: 'Severity' }).selectOption('3')
+  await page.getByRole('combobox', { name: 'Owner' }).selectOption(user.id)
+  await expect(page).toHaveURL(/severity=3/)
+  await expect(page).toHaveURL(/owner=user-1/)
+  await expect(page.getByText('Reverse proxy backend requires attention')).toBeVisible()
+  await page.getByRole('combobox', { name: 'Record type' }).selectOption('test')
+  await expect(page).toHaveURL(/record=test/)
+  await expect(page.getByText('No incidents match the current filters.')).toBeVisible()
+})
+
+test('resource summary loads independently and its failure does not blank overview', async ({ page }) => {
+  const counts = await mockAuthenticated(page, { resourceStatus: 503 })
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.goto('/overview')
+  await expect(page.getByRole('heading', { name: 'Operational overview' })).toBeVisible()
+  await page.getByRole('button', { name: 'Load resource trends' }).click()
+  await expect(page.getByText('Resource summary failed; the operational summary remains available.')).toBeVisible()
+  expect(counts.get('/api/v1/dashboard/resources/current')).toBeGreaterThanOrEqual(1)
+  await expect(page.getByRole('heading', { name: 'Operational overview' })).toBeVisible()
+})
+
+test('anonymous and stale sessions are quiet, single-shot, and preserve deep links', async ({ page }) => {
+  const errors: string[] = []
   let meRequests = 0
-  page.on('pageerror', (error) => pageErrors.push(error.message))
+  page.on('pageerror', (error) => errors.push(error.message))
   page.on('request', (request) => {
     if (new URL(request.url()).pathname === '/api/v1/auth/me') meRequests += 1
   })
-  await mockUnauthenticated(page)
-
+  await page.context().addCookies([{
+    name: 'guardian_browser_session',
+    value: 'stale-opaque-session',
+    url: 'http://127.0.0.1:4173',
+    sameSite: 'Lax',
+    httpOnly: true,
+  }])
+  await mockAnonymous(page)
   await page.goto('/users')
   await expect(page).toHaveURL(/\/login\?redirect=\/users$/)
-  await expect(page.locator('input[type="email"]')).toBeVisible()
-  await expect(page.locator('input[type="password"]')).toBeVisible()
   await expect.poll(() => meRequests).toBe(1)
-  expect(pageErrors).toEqual([])
+  expect(errors).toEqual([])
 })
 
-test('an invalid stale session cookie stays logged out without a retry loop', async ({ context, page }) => {
-  const pageErrors: string[] = []
-  let meRequests = 0
-  page.on('pageerror', (error) => pageErrors.push(error.message))
-  await context.addCookies([{
-    name: 'guardian_session',
-    value: 'stale-browser-test-session',
-    domain: '127.0.0.1',
-    path: '/',
-    httpOnly: true,
-    sameSite: 'Strict',
-  }])
+test('non-401 auth restore failure is explicit and produces no unhandled rejection', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
   await page.route('**/api/v1/**', async (route) => {
-    if (new URL(route.request().url()).pathname === '/api/v1/auth/me') meRequests += 1
     await route.fulfill({
-      status: 401,
+      status: 503,
       contentType: 'application/json',
-      body: JSON.stringify({ code: 'not_authenticated' }),
+      body: JSON.stringify({ code: 'auth_unavailable' }),
     })
   })
-
   await page.goto('/overview')
-  await expect(page).toHaveURL(/\/login\?redirect=\/overview$/)
-  await expect.poll(() => meRequests).toBe(1)
-  expect(pageErrors).toEqual([])
+  await expect(page.getByRole('heading', { name: 'Unable to restore session' })).toBeVisible()
+  expect(errors).toEqual([])
 })
 
-test('login and logout return to a quiet logged-out state', async ({ page }) => {
-  const pageErrors: string[] = []
+test('login and logout return to a protected, quiet signed-out state', async ({ page }) => {
   let authenticated = false
-  let meRequests = 0
-  page.on('pageerror', (error) => pageErrors.push(error.message))
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname
     if (path === '/api/v1/auth/me') {
-      meRequests += 1
       await route.fulfill({
         status: authenticated ? 200 : 401,
         contentType: 'application/json',
@@ -570,16 +898,17 @@ test('login and logout return to a quiet logged-out state', async ({ page }) => 
       })
       return
     }
-    if (path === '/api/v1/auth/login') {
+    if (path === '/api/v1/auth/browser/login') {
       authenticated = true
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          access_token: 'browser-login-session',
-          csrf_token: 'browser-login-csrf',
           identity_setup_required: false,
           recovery_codes_remaining: null,
+          remember_me: false,
+          idle_expires_at: '2026-07-28T20:00:00Z',
+          absolute_expires_at: '2026-08-04T08:00:00Z',
         }),
       })
       return
@@ -589,70 +918,505 @@ test('login and logout return to a quiet logged-out state', async ({ page }) => 
       await route.fulfill({ status: 204, body: '' })
       return
     }
-    if (path === '/api/v1/overview') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify(overview),
-      })
-      return
-    }
-    if (path === '/api/v1/stability') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify(stability),
-      })
-      return
-    }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(path === '/api/v1/dashboard/bootstrap' ? bootstrap : []),
+    })
   })
-
   await page.goto('/login')
-  await page.locator('input[type="email"]').fill('owner@example.test')
+  await page.locator('input[type="email"]').fill(user.email)
   await page.locator('input[type="password"]').fill('browser-only-password')
   await page.locator('button[type="submit"]').click()
   await expect(page).toHaveURL(/\/overview$/)
-  await expect(page.getByRole('heading', { name: 'Operations Overview' })).toBeVisible()
-
+  await expect(page.getByRole('heading', { name: 'Operational overview' })).toBeVisible()
+  await page.locator('.proto-sidebar-footer > button').click()
   await page.getByRole('button', { name: 'Sign out' }).click()
   await expect(page).toHaveURL(/\/login$/)
   await page.goto('/overview')
   await expect(page).toHaveURL(/\/login\?redirect=\/overview$/)
-  expect(meRequests).toBeGreaterThanOrEqual(2)
-  expect(pageErrors).toEqual([])
+  expect(errors).toEqual([])
 })
 
-test('VPS list alias is usable on a mobile viewport', async ({ page }) => {
+test('mobile overview, services and incidents have no document overflow', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'zh-CN', theme: 'light' })
   await page.setViewportSize({ width: 390, height: 844 })
-  await mockController(page)
-  await page.goto('/vps')
-  await expect(page.getByRole('heading', { name: 'Hosts' })).toBeVisible()
-  await expect(page.getByText('edge-hk', { exact: true })).toBeVisible()
-  await expectNoHorizontalOverflow(page)
+  for (const route of ['/overview', '/services', '/incidents']) {
+    await page.goto(route)
+    await expect(page.locator('.proto-page-header h1')).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+    await capture(page, `${route.slice(1)}-390-light-zh`)
+  }
 })
 
-test('tablet drawer and wide desktop remain usable', async ({ page }) => {
-  await page.setViewportSize({ width: 768, height: 1024 })
-  await mockController(page)
+test('mobile navigation locks background, closes with Escape, and returns focus', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'zh-CN', theme: 'light' })
+  await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/overview')
-  await expect(page.getByRole('button', { name: 'Open navigation' })).toBeVisible()
-  await page.getByRole('button', { name: 'Open navigation' }).click()
-  await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible()
-  await expectNoHorizontalOverflow(page)
-
-  await page.setViewportSize({ width: 1920, height: 1080 })
-  await page.reload()
-  await expect(page.getByRole('heading', { name: 'Operations Overview' })).toBeVisible()
-  await expectNoHorizontalOverflow(page)
+  const trigger = page.getByRole('button', { name: '打开导航' })
+  await trigger.click()
+  await expect(page.locator('body')).toHaveClass(/prototype-lock-scroll/)
+  await expect(page.getByRole('button', { name: '关闭导航' })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('body')).not.toHaveClass(/prototype-lock-scroll/)
+  await expect(trigger).toBeFocused()
 })
 
-test('mobile Chinese alerts remain readable without overflow', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 })
-  await mockController(page, { locale: 'zh-CN', theme: 'light' })
-  await page.goto('/alerts')
-  await expect(page.getByRole('heading', { name: '告警' })).toBeVisible()
-  await expect(page.getByText('HTTP status 503')).toBeVisible()
-  await expect(page.getByRole('button', { name: '确认' })).toBeVisible()
+test('locale and theme controls persist after reload', async ({ page }) => {
+  await mockAuthenticated(page, { theme: 'dark' })
+  await page.goto('/overview')
+  await page.getByRole('button', { name: 'Language' }).click()
+  await page.getByRole('menuitemradio', { name: /Simplified Chinese/ }).click()
+  await expect(page.getByRole('heading', { name: '运行概览' })).toBeVisible()
+  await page.getByRole('button', { name: '切换到亮色模式' }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await page.reload()
+  await expect(page.getByRole('heading', { name: '运行概览' })).toBeVisible()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+})
+
+test('language popover switches in place and preserves route, query, and focus', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'en-US', theme: 'light' })
+  await page.goto('/hosts?group=core')
+  const trigger = page.getByRole('button', { name: 'Language' })
+  await trigger.click()
+  await expect(page.getByRole('menu')).toBeVisible()
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL(/\/hosts\?group=core$/)
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
+  await expect(page.getByRole('button', { name: '语言' })).toBeFocused()
+  await page.reload()
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
+})
+
+test('account security session management captures both locales at desktop and mobile widths', async ({ browser }) => {
+  for (const locale of ['zh-CN', 'en-US'] as const) {
+    for (const viewport of [{ width: 1366, height: 900 }, { width: 390, height: 844 }]) {
+      const context = await browser.newContext({ viewport })
+      const page = await context.newPage()
+      const runtimeErrors: string[] = []
+      page.on('pageerror', (error) => runtimeErrors.push(error.message))
+      page.on('console', (message) => {
+        if (message.type() === 'error') runtimeErrors.push(message.text())
+      })
+      await mockAuthenticated(page, { locale, theme: 'light' })
+      await page.route('**/api/v1/auth/sessions', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([{
+            id: 'session-current',
+            user_id: user.id,
+            issued_at: '2026-07-28T08:00:00Z',
+            expires_at: '2026-08-04T08:00:00Z',
+            last_seen_at: '2026-07-28T08:20:00Z',
+            idle_expires_at: '2026-07-28T20:20:00Z',
+            absolute_expires_at: '2026-08-04T08:00:00Z',
+            remember_me: false,
+            step_up_until: null,
+            revoked_at: null,
+            revoke_reason: null,
+            user_agent_summary: 'desktop:chrome',
+            ip_summary: 'private',
+            created_via: 'password_totp',
+            last_activity_type: 'pointer',
+            device_name: 'Workstation',
+            current: true,
+          }]),
+        })
+      })
+      await page.route('**/api/v1/auth/recovery-codes', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ remaining: 8, low: false }),
+        })
+      })
+      await page.goto('/account-security')
+      await expect(page.getByRole('heading', {
+        name: locale === 'zh-CN' ? '账户安全' : 'Account security',
+      })).toBeVisible()
+      await expect(page.locator('html')).toHaveAttribute('lang', locale)
+      await expectNoHorizontalOverflow(page)
+      if (locale === 'en-US' && viewport.width === 390) {
+        const summary = page.locator('.rc6-session-summary small')
+        await expect(summary).toContainText('Password + TOTP')
+        await expect(summary).toContainText('Standard')
+        expect(await summary.evaluate((element) => ({
+          fits: element.scrollWidth <= element.clientWidth,
+          whiteSpace: getComputedStyle(element).whiteSpace,
+        }))).toEqual({ fits: true, whiteSpace: 'normal' })
+        expect(await summary.evaluate((element) => {
+          const parent = element.getBoundingClientRect()
+          return [...element.children].every((child) => {
+            const bounds = child.getBoundingClientRect()
+            return bounds.left >= parent.left
+              && bounds.right <= parent.right + 1
+              && bounds.top >= parent.top
+              && bounds.bottom <= parent.bottom + 1
+          })
+        })).toBe(true)
+      }
+      expect(runtimeErrors).toEqual([])
+      await capture(page, `rc6-account-security-${locale}-${viewport.width}`)
+      if (locale === 'zh-CN' && viewport.width === 1366) {
+        await page.getByRole('button', { name: '语言' }).click()
+        await expect(page.getByRole('menu')).toBeVisible()
+        await capture(page, 'rc6-language-menu-expanded-zh-1366')
+      }
+      await context.close()
+    }
+  }
+})
+
+test('test-only en-XA exposes clipping across critical routes without entering the language menu', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  const page = await context.newPage()
+  await mockAuthenticated(page, { locale: 'en-US', theme: 'light' })
+  await page.goto('/overview?__locale=en-XA')
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en-XA')
+  for (const route of ['/overview', '/hosts', '/audit', '/approvals', '/account-security']) {
+    await page.goto(`${route}?__locale=en-XA`)
+    await expectNoHorizontalOverflow(page)
+    const languageButton = page.locator('button[aria-haspopup="menu"]')
+    await expect(languageButton).toBeVisible()
+    await languageButton.click()
+    await expect(page.getByRole('menuitemradio')).toHaveCount(2)
+    await expect(page.getByRole('menu')).not.toContainText('en-XA')
+    await page.keyboard.press('Escape')
+    await capture(page, `rc6-pseudo-${route.slice(1)}-390`)
+  }
+  await context.close()
+
+  const anonymousContext = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  const anonymousPage = await anonymousContext.newPage()
+  await mockAnonymous(anonymousPage)
+  await anonymousPage.goto('/login?__locale=en-XA')
+  await expect(anonymousPage.locator('html')).toHaveAttribute('lang', 'en-XA')
+  await expectNoHorizontalOverflow(anonymousPage)
+  await capture(anonymousPage, 'rc6-pseudo-login-390')
+  await anonymousContext.close()
+})
+
+test('sensitive browser action opens localized step-up and returns focus', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'en-US', theme: 'light' })
+  await page.route('**/api/v1/auth/sessions', async (route) => {
+    if (route.request().method() === 'GET') {
+      const base = {
+        user_id: user.id,
+        issued_at: '2026-07-28T08:00:00Z',
+        expires_at: '2026-08-04T08:00:00Z',
+        last_seen_at: '2026-07-28T08:20:00Z',
+        idle_expires_at: '2026-07-28T20:20:00Z',
+        absolute_expires_at: '2026-08-04T08:00:00Z',
+        remember_me: false,
+        step_up_until: null,
+        revoked_at: null,
+        revoke_reason: null,
+        user_agent_summary: 'desktop:chrome',
+        ip_summary: 'private',
+        created_via: 'password_totp',
+        last_activity_type: 'pointer',
+        device_name: null,
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          { ...base, id: 'session-current', current: true, device_name: 'Workstation' },
+          { ...base, id: 'session-other', current: false, device_name: 'Laptop' },
+        ]),
+      })
+      return
+    }
+    await route.fallback()
+  })
+  await page.route('**/api/v1/auth/sessions/revoke-others', async (route) => {
+    await route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: { code: 'STEP_UP_REQUIRED', params: {} } }),
+    })
+  })
+  await page.route('**/api/v1/auth/step-up', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ step_up_until: '2026-07-28T08:30:00Z' }),
+    })
+  })
+  page.on('dialog', (dialog) => dialog.accept())
+  await page.goto('/account-security')
+  const action = page.getByRole('button', { name: 'Sign out other devices' })
+  await action.click()
+  const stepUpDialog = page.getByRole('dialog', { name: 'Confirm your identity' })
+  await expect(stepUpDialog).toBeVisible()
+  await page.keyboard.press('Shift+Tab')
+  await expect(stepUpDialog.getByRole('button', { name: 'Close' })).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(stepUpDialog.getByRole('button', { name: 'Confirm identity' })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(stepUpDialog.getByRole('button', { name: 'Close' })).toBeFocused()
+  const accessibility = await new AxeBuilder({ page }).include('.rc6-step-up-dialog').analyze()
+  expect(
+    accessibility.violations.filter((violation) =>
+      ['critical', 'serious'].includes(violation.impact ?? ''),
+    ),
+  ).toEqual([])
+  await page.getByLabel('Current password').last().fill('a-long-owner-password')
+  await page.getByLabel('Fresh TOTP code').last().fill('123456')
+  await stepUpDialog.getByRole('button', { name: 'Confirm identity' }).click()
+  await expect(stepUpDialog).toBeHidden()
+  await expect(action).toBeFocused()
+  await capture(page, 'rc6-account-security-step-up-en-1366')
+})
+
+test('step-up dialog is localized in Chinese', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'zh-CN', theme: 'light' })
+  await page.route('**/api/v1/auth/sessions', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{
+        id: 'session-current',
+        user_id: user.id,
+        issued_at: '2026-07-28T08:00:00Z',
+        expires_at: '2026-08-04T08:00:00Z',
+        last_seen_at: '2026-07-28T08:20:00Z',
+        idle_expires_at: '2026-07-28T20:20:00Z',
+        absolute_expires_at: '2026-08-04T08:00:00Z',
+        remember_me: false,
+        step_up_until: null,
+        revoked_at: null,
+        revoke_reason: null,
+        user_agent_summary: 'desktop:chrome',
+        ip_summary: 'private',
+        created_via: 'password_totp',
+        last_activity_type: 'pointer',
+        device_name: 'Workstation',
+        current: true,
+      }, {
+        id: 'session-other',
+        user_id: user.id,
+        issued_at: '2026-07-27T08:00:00Z',
+        expires_at: '2026-08-03T08:00:00Z',
+        last_seen_at: '2026-07-28T07:20:00Z',
+        idle_expires_at: '2026-07-28T19:20:00Z',
+        absolute_expires_at: '2026-08-03T08:00:00Z',
+        remember_me: false,
+        step_up_until: null,
+        revoked_at: null,
+        revoke_reason: null,
+        user_agent_summary: 'mobile:safari',
+        ip_summary: 'protected',
+        created_via: 'password_totp',
+        last_activity_type: 'pointer',
+        device_name: 'Phone',
+        current: false,
+      }]),
+    })
+  })
+  await page.route('**/api/v1/auth/sessions/revoke-others', async (route) => {
+    await route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: { code: 'STEP_UP_REQUIRED', params: {} } }),
+    })
+  })
+  page.on('dialog', (dialog) => dialog.accept())
+  await page.goto('/account-security')
+  await page.getByRole('button', { name: '退出其他设备' }).click()
+  await expect(page.getByRole('dialog', { name: '确认身份' })).toBeVisible()
+  await capture(page, 'rc6-account-security-step-up-zh-1366')
+})
+
+test('critical V3 routes have no serious axe accessibility violations', async ({ page }) => {
+  await mockAuthenticated(page, { theme: 'light' })
+  for (const route of ['/overview', '/services', '/incidents']) {
+    await page.goto(route)
+    await expect(page.locator('.proto-page-header h1')).toBeVisible()
+    const results = await new AxeBuilder({ page }).analyze()
+    expect(
+      results.violations
+        .filter((violation) => ['critical', 'serious'].includes(violation.impact ?? ''))
+        .map((violation) => ({
+          id: violation.id,
+          impact: violation.impact,
+          targets: violation.nodes.map((node) => node.target),
+        })),
+    ).toEqual([])
+  }
+})
+
+test('critical Chinese routes expose no object coercion or raw null markers', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'zh-CN', theme: 'light' })
+  for (const route of ['/overview', '/services', '/incidents']) {
+    await page.goto(route)
+    const body = await page.locator('body').innerText()
+    expect(body).not.toContain('[object Object]')
+    expect(body).not.toMatch(/\bundefined\b/)
+    expect(body).not.toMatch(/\bnull\b/)
+    expect(body).not.toContain('incident is open')
+    expect(body).not.toContain('Gateway requests may fail')
+    expect(body).not.toContain('Investigation started')
+    expect(body).not.toContain('Check passed')
+  }
+})
+
+test('RC5 hosts uses semantic selection, compact mobile records, and an accessible detail drawer', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'en-US', theme: 'light' })
+  await page.setViewportSize({ width: 1366, height: 900 })
+  await page.goto('/hosts')
+  await expect(page.getByRole('heading', { name: 'Hosts' })).toBeVisible()
+  await expect(page.getByRole('table', { name: 'Hosts' }).getByText('Guardian + Komari')).toBeVisible()
+  await expect(page.getByRole('table', { name: 'Hosts' }).getByText('Reporting')).toBeVisible()
+  await expect(page.getByText('komari-import')).toHaveCount(0)
+  await expect(page.getByRole('table', { name: 'Hosts' })).not.toContainText('192.0.2.10')
+  await expect(page.getByRole('table', { name: 'Hosts' })).not.toContainText('komari:')
+  await page.getByRole('row', { name: /edge-hk/ }).click()
+  const selected = page.getByRole('row', { name: /edge-hk/ })
+  await expect(selected).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('dialog', { name: 'edge-hk' })).toBeVisible()
+  const background = await selected.evaluate((element) => getComputedStyle(element).backgroundColor)
+  expect(background).not.toBe('rgb(14, 18, 22)')
+  const accessibility = await new AxeBuilder({ page }).analyze()
+  expect(accessibility.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))).toEqual([])
   await expectNoHorizontalOverflow(page)
+  await capture(page, 'rc5-hosts-drawer-1366-light')
+
+  await page.getByRole('button', { name: /close/i }).click()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expectNoHorizontalOverflow(page)
+  await expect(page.getByRole('row', { name: /edge-hk/ })).toBeVisible()
+  await capture(page, 'rc5-hosts-390-light')
+})
+
+test('RC5 audit keeps machine evidence out of the primary table and reveals it only on demand', async ({ page }) => {
+  const counts = await mockAuthenticated(page, { locale: 'zh-CN', theme: 'light' })
+  await page.setViewportSize({ width: 1366, height: 900 })
+  await page.goto('/audit')
+  await expect(page.getByText('用户登录')).toBeVisible()
+  await expect(page.getByText('Controller 内部服务')).toBeVisible()
+  await expect(page.getByText('auth.login')).not.toBeVisible()
+  await expect(page.getByText('172.19.0.4')).toHaveCount(0)
+  await page.getByRole('row', { name: /用户登录/ }).click()
+  await expect(page.getByRole('dialog', { name: '用户登录' })).toBeVisible()
+  expect(counts.get('/api/v1/audit/17/evidence') ?? 0).toBe(0)
+  await expect(page.getByText('auth.login')).not.toBeVisible()
+  await page.getByText('技术证据', { exact: true }).click()
+  await expect.poll(() => counts.get('/api/v1/audit/17/evidence')).toBe(1)
+  await expect(page.getByText('auth.login')).toBeVisible()
+  await expect(page.getByText('172.19.0.4')).toBeVisible()
+  const accessibility = await new AxeBuilder({ page }).analyze()
+  expect(accessibility.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))).toEqual([])
+  await expectNoHorizontalOverflow(page)
+  await capture(page, 'rc5-audit-drawer-1366-light')
+})
+
+test('Chinese primary surfaces reject raw machine values across the product routes', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'zh-CN', theme: 'light' })
+  const routes = [
+    '/overview', '/hosts', '/services', '/topology', '/alerts', '/incidents',
+    '/repairs', '/approvals', '/backup', '/account-security', '/security',
+    '/users', '/agents', '/notifications', '/audit', '/settings',
+  ]
+  const forbidden = [
+    /\b(?:auth|session|host|notification|approval)\.[a-z_]+\b/i,
+    /\b(?:pending_enrollment|komari-import|restricted_cleanup)\b/i,
+    /\b(?:true|false|null|undefined)\b/i,
+    /\[object Object\]/i,
+    /\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b/,
+  ]
+  for (const route of routes) {
+    await page.goto(route)
+    await page.waitForLoadState('networkidle')
+    const text = await page.locator('main').innerText()
+    for (const pattern of forbidden) expect(text, `${route} exposes ${pattern}`).not.toMatch(pattern)
+  }
+})
+
+test('all tabular product surfaces use the shared RC5 DataTable region', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'en-US', theme: 'light' })
+  const routes = [
+    '/hosts',
+    '/services',
+    '/alerts',
+    '/incidents',
+    '/approvals',
+    '/users',
+    '/agents',
+    '/notifications',
+    '/audit',
+    '/backup',
+    '/account-security',
+  ]
+  for (const route of routes) {
+    await page.goto(route)
+    await expect(page.locator('.rc5-data-region').first(), `${route} did not mount the shared DataTable`).toBeVisible()
+    const width = await page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      client: document.documentElement.clientWidth,
+      offenders: [...document.querySelectorAll<HTMLElement>('body *')]
+        .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+        .filter(({ rect }) => rect.right > document.documentElement.clientWidth + 1)
+        .slice(0, 5)
+        .map(({ element, rect }) => ({
+          tag: element.tagName,
+          className: element.className,
+          right: Math.round(rect.right),
+          width: Math.round(rect.width),
+        })),
+    }))
+    expect(width.scroll, `${route} overflowed its ${width.client}px viewport: ${JSON.stringify(width.offenders)}`).toBeLessThanOrEqual(width.client)
+  }
+})
+
+test('200 percent zoom equivalent reflows critical data routes without clipping', async ({ page }) => {
+  await mockAuthenticated(page, { locale: 'zh-CN', theme: 'light' })
+  await page.setViewportSize({ width: 683, height: 450 })
+  for (const route of ['/hosts', '/audit', '/approvals']) {
+    await page.goto(route)
+    await expect(page.locator('.rc5-data-region').first()).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+  }
+})
+
+test('shared selected rows remain readable in light, dark, hover, focus, and reduced motion', async ({ page }) => {
+  test.setTimeout(60_000)
+  await mockAuthenticated(page, { locale: 'en-US', theme: 'light' })
+  const cases = [
+    { path: '/services', row: '.services-table tbody tr', selected: '.services-table tbody tr.selected' },
+    { path: '/incidents', row: '.incidents-table tbody tr', selected: '.incidents-table tbody tr.selected' },
+    { path: '/approvals', row: '.approval-row', selected: '.approval-row.selected' },
+    { path: '/hosts', row: '.rc5-data-table tbody tr', selected: '.rc5-data-table tbody tr.is-selected' },
+    { path: '/audit', row: '.rc5-data-table tbody tr', selected: '.rc5-data-table tbody tr.is-selected' },
+  ]
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  for (const theme of ['light', 'dark'] as const) {
+    if (theme === 'dark') {
+      await page.evaluate(() => localStorage.setItem('guardian_theme', 'dark'))
+    }
+    for (const item of cases) {
+      await page.goto(item.path)
+      await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe(theme)
+      const row = page.locator(item.row).first()
+      await expect(row).toBeVisible()
+      await row.click()
+      const selected = page.locator(item.selected).first()
+      await expect(selected).toBeVisible()
+      const colors = await selected.evaluate((element) => {
+        const style = getComputedStyle(element)
+        return { background: style.backgroundColor, color: style.color }
+      })
+      expect(colors.background).not.toMatch(/rgb\((?:0|1[0-9]|2[0-5]),\s*(?:0|1[0-9]|2[0-5]),\s*(?:0|1[0-9]|2[0-5])\)/)
+      expect(await contrastRatio(page, item.selected), `${theme} ${item.path} ${JSON.stringify(colors)}`).toBeGreaterThanOrEqual(4.5)
+      await selected.hover({ force: true })
+      expect((await selected.evaluate((element) => getComputedStyle(element).backgroundColor))).not.toBe('rgb(14, 18, 22)')
+      if (await selected.getAttribute('tabindex')) {
+        await selected.focus()
+        await expect(selected).toBeFocused()
+      }
+    }
+  }
 })

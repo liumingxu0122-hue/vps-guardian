@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     database_url_file: Path | None = None
     jwt_secret: SecretStr = SecretStr("development-only-change-me-32-bytes")
     jwt_ttl_minutes: int = Field(default=30, ge=5, le=1440)
+    session_default_idle_hours: int = Field(default=12, ge=1, le=168)
+    session_default_absolute_days: int = Field(default=7, ge=1, le=90)
+    session_remember_idle_days: int = Field(default=7, ge=1, le=30)
+    session_remember_absolute_days: int = Field(default=30, ge=1, le=90)
+    session_activity_touch_interval_seconds: int = Field(default=300, ge=1, le=3600)
+    session_step_up_minutes: int = Field(default=10, ge=1, le=30)
     field_encryption_key: SecretStr = SecretStr("")
     agent_enrollment_token: SecretStr = SecretStr("development-enrollment-token")
     controller_signing_key_file: Path = Path("./secrets/controller-ed25519.pem")
@@ -80,6 +86,25 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> Settings:
+        default_idle_seconds = self.session_default_idle_hours * 3600
+        default_absolute_seconds = self.session_default_absolute_days * 86400
+        remember_idle_seconds = self.session_remember_idle_days * 86400
+        remember_absolute_seconds = self.session_remember_absolute_days * 86400
+        if default_idle_seconds > default_absolute_seconds:
+            raise ValueError(
+                "GUARDIAN_SESSION_DEFAULT_IDLE_HOURS must not exceed "
+                "GUARDIAN_SESSION_DEFAULT_ABSOLUTE_DAYS"
+            )
+        if remember_idle_seconds > remember_absolute_seconds:
+            raise ValueError(
+                "GUARDIAN_SESSION_REMEMBER_IDLE_DAYS must not exceed "
+                "GUARDIAN_SESSION_REMEMBER_ABSOLUTE_DAYS"
+            )
+        if remember_absolute_seconds < default_absolute_seconds:
+            raise ValueError(
+                "GUARDIAN_SESSION_REMEMBER_ABSOLUTE_DAYS must not be shorter than "
+                "GUARDIAN_SESSION_DEFAULT_ABSOLUTE_DAYS"
+            )
         if self.production_deployed:
             if self.environment != "production" or self.deployment_stage != "production":
                 raise ValueError(

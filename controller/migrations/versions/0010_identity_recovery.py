@@ -85,6 +85,45 @@ def upgrade() -> None:
     )
 
     tables = _tables()
+    # Revision 0001 historically creates tables from current ORM metadata. On a
+    # brand-new database, fields introduced after 0010 can therefore already be
+    # present. Normalize that bootstrap-only shape to the 0010 contract so the
+    # later migration remains independently testable and reversible.
+    if "user_sessions" in tables and "token_hash" in _columns("user_sessions"):
+        indexes = {
+            str(index["name"])
+            for index in sa.inspect(op.get_bind()).get_indexes("user_sessions")
+        }
+        for index_name in (
+            "ix_user_sessions_absolute_expires_at",
+            "ix_user_sessions_idle_expires_at",
+            "ix_user_sessions_token_hash",
+        ):
+            if index_name in indexes:
+                op.drop_index(index_name, table_name="user_sessions")
+        checks = {
+            str(check["name"])
+            for check in sa.inspect(op.get_bind()).get_check_constraints("user_sessions")
+        }
+        with op.batch_alter_table("user_sessions") as batch:
+            if "ck_user_session_idle_absolute" in checks:
+                batch.drop_constraint("ck_user_session_idle_absolute", type_="check")
+            for column in (
+                "rotated_from_session_id",
+                "device_name",
+                "last_activity_type",
+                "created_via",
+                "ip_summary",
+                "user_agent_summary",
+                "step_up_until",
+                "remember_me",
+                "absolute_expires_at",
+                "idle_expires_at",
+                "last_seen_at",
+                "csrf_secret_hash",
+                "token_hash",
+            ):
+                batch.drop_column(column)
     if "user_sessions" not in tables:
         op.create_table(
             "user_sessions",

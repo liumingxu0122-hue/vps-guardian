@@ -1,8 +1,8 @@
 # Identity recovery lifecycle
 
-This candidate patch is code-only. It has not been deployed, no online database has
-been migrated, and no live user, password, TOTP secret, recovery code, or session has
-been changed.
+RC6 replaces browser JWT persistence with an opaque server-side session. This
+candidate remains code-only until the separately authorized Staging gate succeeds;
+Production remains `NO-GO`.
 
 ## Security boundaries
 
@@ -16,9 +16,20 @@ been changed.
 - Recovery codes use cryptographically secure randomness. Only keyed SHA-256 digests
   are stored. Consumption is locked, single-use, and batch regeneration revokes every
   older unused code.
-- Every JWT contains a server-side session identifier and user session version. Every
-  authenticated request loads the current user and session row, then checks account
-  state, role, scopes, session version, revocation, and expiry.
+- Browser cookies contain a 384-bit opaque secret. The database stores only its
+  SHA-256 hash, an independently bound CSRF-secret hash, privacy-safe device/IP
+  summaries, idle expiry, absolute expiry, last activity, session version, and
+  revocation state. API Bearer JWT remains a separate non-browser path.
+- Standard browser sessions use a 12-hour idle and 7-day absolute lifetime.
+  “Keep me signed in” uses a 7-day idle and 30-day absolute lifetime. Activity
+  extends only the idle boundary, never the absolute boundary, and writes at most
+  once per five minutes.
+- Cookie mutations require a same-origin `Origin`, readable CSRF cookie, matching
+  request header, and the bound server-side hash. An invalid explicit Bearer token
+  is rejected and never falls back to the valid browser cookie.
+- Sensitive browser operations require password plus TOTP step-up. The result is
+  valid for at most ten minutes in that browser session and is not inherited by
+  any other device or API token.
 - Password changes increment the session version, revoke all other sessions, and
   reissue the explicitly retained current session. Role, scope, disable, TOTP-disable,
   and administrative password changes revoke affected sessions.
@@ -32,7 +43,8 @@ been changed.
 
 | Threat | Server control | Residual risk |
 | --- | --- | --- |
-| Stolen JWT | Server session row, expiry, revocation, session version | Valid token remains usable until detected or expired |
+| Stolen browser cookie | Hash-only server row, idle/absolute expiry, revocation, session version | An active stolen cookie remains usable until expiry or revocation |
+| CSRF | Strict same-origin check plus double-submit token bound to the session row | Compromised same-origin script can act with the user’s authority |
 | Initial-password abuse | Forced setup allowlist enforced on every request | Initial password delivery remains an operational responsibility |
 | TOTP replay | Monotonic accepted time-step counter | Concurrent use across multiple Controller replicas needs serialized database access |
 | Recovery-code database disclosure | Keyed digest only; one-time consumption | JWT secret compromise permits offline verification attempts |
@@ -41,15 +53,15 @@ been changed.
 
 ## Migration and rollback request
 
-Migration `0010_identity_recovery` is reversible and follows
-`0009_agent_provenance`. Before any future Staging authorization:
+Migration `0012_persistent_sessions` is reversible and follows
+`0011_dashboard_query_indexes`. Before Staging authorization:
 
 1. take an encrypted database backup and record its SHA-256;
 2. restore it to an isolated PostgreSQL copy;
 3. record table row counts and identity/audit integrity checks;
-4. run `alembic upgrade 0010_identity_recovery`;
+4. run `alembic upgrade 0012_persistent_sessions`;
 5. validate users, audit rows, recovery-code hashes, and session consistency;
-6. run `alembic downgrade 0009_agent_provenance`, validate compatibility, then
+6. run `alembic downgrade 0011_dashboard_query_indexes`, validate compatibility, then
    upgrade again;
 7. request a separate change window and rollback approval.
 

@@ -4,6 +4,7 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     public readonly code: string,
+    public readonly params: Record<string, unknown> = {},
   ) {
     super(code)
   }
@@ -15,11 +16,41 @@ interface RequestOptions extends RequestInit {
 }
 
 const inFlightGets = new Map<string, Promise<unknown>>()
+const sessionFailureCodes = new Set([
+  'SESSION_MISSING',
+  'SESSION_REVOKED',
+  'SESSION_IDLE_EXPIRED',
+  'SESSION_ABSOLUTE_EXPIRED',
+  'SESSION_VERSION_MISMATCH',
+  'SESSION_INVALID',
+])
+let authFailureHandler: ((error: ApiError) => void) | null = null
+let stepUpRequiredHandler: ((error: ApiError) => void) | null = null
+let authFailureRaised = false
+
+export function setAuthFailureHandler(handler: (error: ApiError) => void): void {
+  authFailureHandler = handler
+}
+
+export function setStepUpRequiredHandler(handler: (error: ApiError) => void): void {
+  stepUpRequiredHandler = handler
+}
+
+export function resetAuthFailure(): void {
+  authFailureRaised = false
+}
+
+function cookieValue(name: string): string | null {
+  if (typeof document === 'undefined') return null
+  const prefix = `${encodeURIComponent(name)}=`
+  const item = document.cookie.split('; ').find((value) => value.startsWith(prefix))
+  return item ? decodeURIComponent(item.slice(prefix.length)) : null
+}
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = (options.method ?? 'GET').toUpperCase()
   const shouldDedupe = method === 'GET' && options.dedupe !== false && !options.signal
-  const requestKey = `${method}:${path}:${sessionStorage.getItem('guardian_token') ?? ''}`
+  const requestKey = `${method}:${path}`
   const existing = inFlightGets.get(requestKey)
   if (shouldDedupe && existing) return existing as Promise<T>
 
@@ -34,9 +65,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 async function performRequest<T>(path: string, options: RequestOptions): Promise<T> {
   const { dedupe: _dedupe, ...fetchOptions } = options
   const headers = new Headers(options.headers)
-  const token = sessionStorage.getItem('guardian_token')
-  const csrf = sessionStorage.getItem('guardian_csrf')
-  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const csrf = cookieValue('guardian_csrf')
   if (csrf && !['GET', 'HEAD'].includes(options.method ?? 'GET')) {
     headers.set('X-CSRF-Token', csrf)
   }
@@ -48,14 +77,39 @@ async function performRequest<T>(path: string, options: RequestOptions): Promise
   })
   if (!response.ok) {
     let code = `http_${response.status}`
+    let params: Record<string, unknown> = {}
     try {
-      const payload = (await response.json()) as { code?: string; detail?: { code?: string } | string }
+      const payload = (await response.json()) as {
+        code?: string
+        params?: Record<string, unknown>
+        detail?: { code?: string; params?: Record<string, unknown> } | string
+      }
       if (payload.code) code = payload.code
       else if (typeof payload.detail === 'object' && payload.detail?.code) code = payload.detail.code
+      params = payload.params
+        ?? (typeof payload.detail === 'object' ? payload.detail?.params : undefined)
+        ?? {}
     } catch {
       // The status still carries enough information when the body is not JSON.
     }
-    throw new ApiError(response.status, code)
+    const error = new ApiError(response.status, code, params)
+    if (
+      response.status === 401
+      && sessionFailureCodes.has(code)
+      && !authFailureRaised
+      && authFailureHandler
+    ) {
+      authFailureRaised = true
+      authFailureHandler(error)
+    }
+    if (
+      response.status === 403
+      && (code === 'STEP_UP_REQUIRED' || code === 'STEP_UP_EXPIRED')
+      && stepUpRequiredHandler
+    ) {
+      stepUpRequiredHandler(error)
+    }
+    throw error
   }
   if (response.status === 204) return undefined as T
   return (await response.json()) as T

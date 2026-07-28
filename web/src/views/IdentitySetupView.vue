@@ -2,8 +2,10 @@
 import { Check, Copy, KeyRound, ShieldCheck } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 
 import { jsonBody, request } from '../api'
+import LanguageMenu from '../components/LanguageMenu.vue'
 import { session } from '../session'
 
 interface LoginResponse {
@@ -26,6 +28,7 @@ interface RecoveryBatch {
 }
 
 const router = useRouter()
+const { t } = useI18n()
 const currentPassword = ref('')
 const newPassword = ref('')
 const totpCode = ref('')
@@ -39,10 +42,21 @@ const error = ref('')
 const needsPassword = computed(() => session.user?.must_change_password ?? true)
 const needsTotp = computed(() => !(session.user?.totp_enabled ?? false))
 
+async function ensureStepUp(): Promise<void> {
+  await request('/api/v1/auth/step-up', {
+    method: 'POST',
+    ...jsonBody({
+      current_password: currentPassword.value,
+      totp_code: totpCode.value.trim() || null,
+    }),
+  })
+}
+
 async function changePassword(): Promise<void> {
   busy.value = true
   error.value = ''
   try {
+    await ensureStepUp()
     const payload = await request<LoginResponse>('/api/v1/auth/change-password', {
       method: 'POST',
       ...jsonBody({
@@ -55,7 +69,7 @@ async function changePassword(): Promise<void> {
     currentPassword.value = newPassword.value
     newPassword.value = ''
   } catch {
-    error.value = 'Password change failed. Check the current password and strength policy.'
+    error.value = t('identitySetup.passwordFailed')
   } finally {
     busy.value = false
   }
@@ -65,6 +79,7 @@ async function beginTotp(): Promise<void> {
   busy.value = true
   error.value = ''
   try {
+    await ensureStepUp()
     const payload = await request<TotpSetup>('/api/v1/auth/totp/setup', {
       method: 'POST',
       ...jsonBody({ current_password: currentPassword.value }),
@@ -72,7 +87,7 @@ async function beginTotp(): Promise<void> {
     secret.value = payload.secret
     provisioningUri.value = payload.provisioning_uri
   } catch {
-    error.value = 'TOTP setup could not be started. Re-enter your current password.'
+    error.value = t('identitySetup.totpStartFailed')
   } finally {
     busy.value = false
   }
@@ -95,7 +110,7 @@ async function enableTotp(): Promise<void> {
     totpCode.value = ''
     await session.refreshUser()
   } catch {
-    error.value = 'The TOTP code was invalid or the setup window expired.'
+    error.value = t('identitySetup.totpVerifyFailed')
   } finally {
     busy.value = false
   }
@@ -105,6 +120,7 @@ async function regenerateCodes(): Promise<void> {
   busy.value = true
   error.value = ''
   try {
+    await ensureStepUp()
     const payload = await request<RecoveryBatch>('/api/v1/auth/recovery-codes/regenerate', {
       method: 'POST',
       ...jsonBody({
@@ -115,7 +131,7 @@ async function regenerateCodes(): Promise<void> {
     recoveryCodes.value = payload.codes
     totpCode.value = ''
   } catch {
-    error.value = 'Recovery-code regeneration requires the current password and a fresh TOTP code.'
+    error.value = t('identitySetup.regenerateFailed')
   } finally {
     busy.value = false
   }
@@ -142,7 +158,7 @@ async function confirmSaved(): Promise<void> {
     await session.refreshUser()
     await router.replace('/overview')
   } catch {
-    error.value = 'Confirmation failed. Keep this page open and try again.'
+    error.value = t('identitySetup.confirmationFailed')
   } finally {
     busy.value = false
   }
@@ -157,47 +173,48 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="login-screen identity-setup-screen">
+    <LanguageMenu class="login-language" />
     <section class="login-panel identity-setup-panel" aria-labelledby="identity-setup-title">
       <div class="login-brand"><ShieldCheck :size="23" /><strong>VPS Guardian</strong></div>
       <header>
-        <h1 id="identity-setup-title">Complete identity recovery setup</h1>
-        <p>Administrative access stays blocked until password, TOTP, and recovery-code steps are complete.</p>
+        <h1 id="identity-setup-title">{{ t('identitySetup.title') }}</h1>
+        <p>{{ t('identitySetup.description') }}</p>
       </header>
 
       <form v-if="needsPassword" class="dialog-form" @submit.prevent="changePassword">
-        <h2><KeyRound :size="18" /> 1. Replace the initial password</h2>
-        <label><span>Initial password</span><input v-model="currentPassword" type="password" autocomplete="current-password" required minlength="12" /></label>
-        <label><span>New passphrase</span><input v-model="newPassword" type="password" autocomplete="new-password" required minlength="14" /></label>
-        <button class="primary-button" type="submit" :disabled="busy">Change password</button>
+        <h2><KeyRound :size="18" /> {{ t('identitySetup.replacePassword') }}</h2>
+        <label><span>{{ t('identitySetup.initialPassword') }}</span><input v-model="currentPassword" type="password" autocomplete="current-password" required minlength="12" /></label>
+        <label><span>{{ t('identitySetup.newPassphrase') }}</span><input v-model="newPassword" type="password" autocomplete="new-password" required minlength="14" /></label>
+        <button class="primary-button" type="submit" :disabled="busy">{{ t('identitySetup.changePassword') }}</button>
       </form>
 
       <section v-else-if="needsTotp" class="dialog-form">
-        <h2><ShieldCheck :size="18" /> 2. Enable TOTP</h2>
-        <label><span>Current password</span><input v-model="currentPassword" type="password" autocomplete="current-password" required minlength="12" /></label>
-        <button v-if="!secret" class="primary-button" type="button" :disabled="busy" @click="beginTotp">Generate one-time setup secret</button>
+        <h2><ShieldCheck :size="18" /> {{ t('identitySetup.enableTotp') }}</h2>
+        <label><span>{{ t('accountSecurity.currentPassword') }}</span><input v-model="currentPassword" type="password" autocomplete="current-password" required minlength="12" /></label>
+        <button v-if="!secret" class="primary-button" type="button" :disabled="busy" @click="beginTotp">{{ t('identitySetup.generateSecret') }}</button>
         <template v-else>
-          <p class="permission-note">This secret is shown once. It is kept only in this page's memory and is cleared when you leave.</p>
+          <p class="permission-note">{{ t('identitySetup.secretShownOnce') }}</p>
           <code class="one-time-secret">{{ secret }}</code>
           <small>{{ provisioningUri }}</small>
-          <label><span>First valid TOTP code</span><input v-model="totpCode" inputmode="numeric" autocomplete="one-time-code" pattern="\d{6}" maxlength="6" required /></label>
-          <button class="primary-button" type="button" :disabled="busy" @click="enableTotp">Verify and enable</button>
+          <label><span>{{ t('identitySetup.firstTotp') }}</span><input v-model="totpCode" inputmode="numeric" autocomplete="one-time-code" pattern="\d{6}" maxlength="6" required /></label>
+          <button class="primary-button" type="button" :disabled="busy" @click="enableTotp">{{ t('identitySetup.verifyEnable') }}</button>
         </template>
       </section>
 
       <section v-else class="dialog-form">
-        <h2><KeyRound :size="18" /> 3. Save recovery codes</h2>
+        <h2><KeyRound :size="18" /> {{ t('identitySetup.saveRecovery') }}</h2>
         <template v-if="recoveryCodes.length">
-          <p class="permission-note">These codes cannot be retrieved again. Store them offline; never paste them into support, URLs, or analytics.</p>
+          <p class="permission-note">{{ t('identitySetup.recoverySafety') }}</p>
           <div class="recovery-code-grid"><code v-for="code in recoveryCodes" :key="code">{{ code }}</code></div>
-          <button class="secondary-button" type="button" @click="copyCodes"><Check v-if="copied" :size="15" /><Copy v-else :size="15" />{{ copied ? 'Copied' : 'Copy codes' }}</button>
-          <label class="toggle-line"><input v-model="saved" type="checkbox" /><span>I saved these recovery codes in a secure offline location.</span></label>
-          <button class="primary-button" type="button" :disabled="busy || !saved" @click="confirmSaved">Finish identity setup</button>
+          <button class="secondary-button" type="button" @click="copyCodes"><Check v-if="copied" :size="15" /><Copy v-else :size="15" />{{ copied ? t('common.copied') : t('accountSecurity.copyCodes') }}</button>
+          <label class="toggle-line"><input v-model="saved" type="checkbox" /><span>{{ t('identitySetup.savedSecurely') }}</span></label>
+          <button class="primary-button" type="button" :disabled="busy || !saved" @click="confirmSaved">{{ t('identitySetup.finish') }}</button>
         </template>
         <template v-else>
-          <p class="permission-note">The previous one-time display is unavailable. Regenerate a new batch; the old batch will be revoked.</p>
-          <label><span>Current password</span><input v-model="currentPassword" type="password" autocomplete="current-password" required minlength="12" /></label>
-          <label><span>Fresh TOTP code</span><input v-model="totpCode" inputmode="numeric" autocomplete="one-time-code" pattern="\d{6}" maxlength="6" required /></label>
-          <button class="primary-button" type="button" :disabled="busy" @click="regenerateCodes">Regenerate recovery codes</button>
+          <p class="permission-note">{{ t('identitySetup.previousUnavailable') }}</p>
+          <label><span>{{ t('accountSecurity.currentPassword') }}</span><input v-model="currentPassword" type="password" autocomplete="current-password" required minlength="12" /></label>
+          <label><span>{{ t('accountSecurity.freshTotp') }}</span><input v-model="totpCode" inputmode="numeric" autocomplete="one-time-code" pattern="\d{6}" maxlength="6" required /></label>
+          <button class="primary-button" type="button" :disabled="busy" @click="regenerateCodes">{{ t('accountSecurity.regenerate') }}</button>
         </template>
       </section>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
