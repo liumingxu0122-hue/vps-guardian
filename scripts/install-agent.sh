@@ -68,15 +68,15 @@ case "$host_id" in
 esac
 for existing_config_directory in /etc/vps-guardian/agent /etc/vps-guardian-agent; do
   if [ -e "$existing_config_directory" ]; then
-    [ -d "$existing_config_directory" ] && [ ! -L "$existing_config_directory" ] || {
+    if [ ! -d "$existing_config_directory" ] || [ -L "$existing_config_directory" ]; then
       echo "existing Agent configuration path is unsafe" >&2
       exit 73
-    }
-    [ -f "$existing_config_directory/config.json" ] &&
-      grep -F '"agent_id"' "$existing_config_directory/config.json" >/dev/null 2>&1 || {
+    fi
+    if [ ! -f "$existing_config_directory/config.json" ] ||
+      ! grep -F '"agent_id"' "$existing_config_directory/config.json" >/dev/null 2>&1; then
         echo "existing configuration is not recognized as VPS Guardian Agent; refusing overwrite" >&2
         exit 73
-      }
+    fi
   fi
 done
 for digest in "$agent_sha256_amd64" "$agent_sha256_arm64" "$server_ca_sha256" \
@@ -94,10 +94,10 @@ for command in curl sha256sum install mv cp rm chmod chown id getent date mktemp
     exit 69
   }
 done
-[ -f /etc/os-release ] && [ ! -L /etc/os-release ] || {
+if [ ! -f /etc/os-release ] || [ -L /etc/os-release ]; then
   echo "Linux distribution metadata is missing or unsafe" >&2
   exit 69
-}
+fi
 detected_os="$(sed -n 's/^ID=//p' /etc/os-release | head -n 1 | tr -d '"'\'' ' | tr '[:upper:]' '[:lower:]')"
 case "$os_family:$detected_os" in
   auto:ubuntu|auto:debian|auto:rocky|auto:almalinux|auto:rhel|auto:fedora|auto:alpine) ;;
@@ -132,10 +132,10 @@ case "$(uname -m)" in
     ;;
 esac
 
-[ -f "$enrollment_token_file" ] && [ ! -L "$enrollment_token_file" ] || {
+if [ ! -f "$enrollment_token_file" ] || [ -L "$enrollment_token_file" ]; then
   echo "enrollment token file is missing or unsafe" >&2
   exit 65
-}
+fi
 chmod 0600 "$enrollment_token_file"
 
 work_directory="$(mktemp -d)"
@@ -213,10 +213,10 @@ enrollment_token="$(cat "$enrollment_token_file")"
 case "$enrollment_token" in
   *[!A-Za-z0-9._~-]*|'') echo "enrollment token format is invalid" >&2; exit 65 ;;
 esac
-[ "${#enrollment_token}" -ge 32 ] && [ "${#enrollment_token}" -le 512 ] || {
+if [ "${#enrollment_token}" -lt 32 ] || [ "${#enrollment_token}" -gt 512 ]; then
   echo "enrollment token length is invalid" >&2
   exit 65
-}
+fi
 printf 'X-Enrollment-Token: %s\n' "$enrollment_token" > "$header_file"
 chmod 0600 "$header_file"
 unset enrollment_token
@@ -293,10 +293,10 @@ progress_token="$(cat "$identity_directory/enrollment-progress-token")"
 case "$progress_token" in
   *[!A-Za-z0-9._~-]*|'') echo "progress credential format is invalid" >&2; exit 65 ;;
 esac
-[ "${#progress_token}" -ge 32 ] && [ "${#progress_token}" -le 512 ] || {
+if [ "${#progress_token}" -lt 32 ] || [ "${#progress_token}" -gt 512 ]; then
   echo "progress credential length is invalid" >&2
   exit 65
-}
+fi
 printf 'X-Enrollment-Progress-Token: %s\n' "$progress_token" > "$header_file"
 unset progress_token
 rm -f "$enrollment_token_file" "$identity_directory/enrollment-progress-token"
@@ -320,10 +320,16 @@ esac
 
 install -d -m 0700 "$backup_directory/previous"
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl is-active --quiet vps-guardian-agent.service && old_service_active=true || true
-  systemctl is-enabled --quiet vps-guardian-agent.service && old_service_enabled=true || true
+  if systemctl is-active --quiet vps-guardian-agent.service; then
+    old_service_active=true
+  fi
+  if systemctl is-enabled --quiet vps-guardian-agent.service; then
+    old_service_enabled=true
+  fi
 else
-  rc-service vps-guardian-agent status >/dev/null 2>&1 && old_openrc_started=true || true
+  if rc-service vps-guardian-agent status >/dev/null 2>&1; then
+    old_openrc_started=true
+  fi
 fi
 for existing in \
   usr/local/sbin/vps-guardian-agent \
@@ -336,8 +342,9 @@ for existing in \
     cp -a "/$existing" "$backup_directory/previous/$existing"
   fi
 done
-(cd "$backup_directory" && \
-  find . -type f ! -name SHA256SUMS -exec sha256sum {} \; | sort > SHA256SUMS)
+(cd "$backup_directory" &&
+  find . -type f -exec sha256sum {} \; | sort) > "$work_directory/SHA256SUMS"
+install -m 0600 "$work_directory/SHA256SUMS" "$backup_directory/SHA256SUMS"
 
 install_started=true
 failure_step="service account creation"
