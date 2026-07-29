@@ -2,6 +2,8 @@ FROM golang:1.26.5-alpine3.24@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1
 
 ARG RESTIC_COMMIT=6aa3a516ce654808a1f28f9fa21e9b7c8e6e90bf
 ARG RESTIC_SOURCE_SHA256=6318c51f187bafbaf33d1ab6dcb5abde9a94de11476651cbb2982f1ba89ca8a8
+ARG RESTIC_X_TEXT_VERSION=v0.40.0
+ARG RESTIC_X_TEXT_MODULE_SUM=h1:Ub2Z6/xjgF1WrYQz2nuITOEegKFtiIy+rieRJ5lHZKs=
 ARG GRPC_GO_VERSION=v1.82.1
 ARG GRPC_GO_MODULE_SUM=h1:NnAxzGRA0677vCa4BUkOAnO5+FfQqVl9iUXeD0IqcGE=
 ARG CPYTHON_HTML_PARSER_COMMIT=7933f4bf7131aa4140750f9404f5de0aa2969ced
@@ -19,14 +21,21 @@ RUN apk add --no-cache ca-certificates wget tar \
     && rm -f /tmp/restic.tar.gz
 WORKDIR /src
 RUN test "$(cat VERSION)" = '0.19.1' \
+    && go mod edit -require="golang.org/x/text@$RESTIC_X_TEXT_VERSION" \
+    && go mod download "golang.org/x/text@$RESTIC_X_TEXT_VERSION" \
+    && grep -Fx "golang.org/x/text $RESTIC_X_TEXT_VERSION $RESTIC_X_TEXT_MODULE_SUM" go.sum \
     && go mod edit -require="google.golang.org/grpc@$GRPC_GO_VERSION" \
     && go mod download "google.golang.org/grpc@$GRPC_GO_VERSION" \
     && grep -Fx "google.golang.org/grpc $GRPC_GO_VERSION $GRPC_GO_MODULE_SUM" go.sum \
     && go mod tidy \
+    && grep -Fx "golang.org/x/text $RESTIC_X_TEXT_VERSION $RESTIC_X_TEXT_MODULE_SUM" go.sum \
     && grep -Fx "google.golang.org/grpc $GRPC_GO_VERSION $GRPC_GO_MODULE_SUM" go.sum \
     && go mod verify \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = "$RESTIC_X_TEXT_VERSION" \
     && test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "$GRPC_GO_VERSION" \
     && go run build.go -o /out/restic \
+    && go version -m /out/restic \
+      | grep -F "golang.org/x/text	$RESTIC_X_TEXT_VERSION	$RESTIC_X_TEXT_MODULE_SUM" \
     && go version -m /out/restic \
       | grep -F "google.golang.org/grpc	$GRPC_GO_VERSION	$GRPC_GO_MODULE_SUM" \
     && /out/restic version | grep -Eq '^restic 0\.19\.1 compiled with go1\.26\.5 '
