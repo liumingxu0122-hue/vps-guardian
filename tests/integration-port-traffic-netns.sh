@@ -75,7 +75,14 @@ policy_json "$udp_id" udp 18081 0 | ip netns exec "$namespace" "$helper"
 policy_json "$range_id" udp 18082 0 18083 | ip netns exec "$namespace" "$helper"
 
 ip netns exec "$namespace" python3 -c \
-  'import http.server,socketserver; socketserver.TCPServer.allow_reuse_address=True; socketserver.TCPServer(("0.0.0.0",18080),http.server.SimpleHTTPRequestHandler).serve_forever()' \
+  'import http.server,socket,socketserver
+class DualStackServer(socketserver.TCPServer):
+ address_family=socket.AF_INET6
+ def server_bind(self):
+  self.socket.setsockopt(socket.IPPROTO_IPV6,socket.IPV6_V6ONLY,0)
+  super().server_bind()
+DualStackServer.allow_reuse_address=True
+DualStackServer(("::",18080),http.server.SimpleHTTPRequestHandler).serve_forever()' \
   >/tmp/vg-traffic-http.log 2>&1 &
 server_pid=$!
 sleep 1
