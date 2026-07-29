@@ -74,6 +74,10 @@ func renderNFT(current state, exists bool) []byte {
 	sort.Slice(sorted, func(left, right int) bool { return sorted[left].ID < sorted[right].ID })
 	for _, item := range sorted {
 		key := policyKey(item.ID)
+		port := fmt.Sprintf("%d", item.PortStart)
+		if item.PortStart != item.PortEnd {
+			port = fmt.Sprintf("%d-%d", item.PortStart, item.PortEnd)
+		}
 		if item.Direction == "rx" || item.Direction == "both" {
 			fmt.Fprintf(&output, "add counter inet %s %s_rx\n", tableName, key)
 		}
@@ -109,13 +113,12 @@ func renderNFT(current state, exists bool) []byte {
 			if item.Direction == "rx" || item.Direction == "both" {
 				fmt.Fprintf(
 					&output,
-					"add rule inet %s ingress %smeta l4proto %s %s dport %d-%d counter name %s_rx%s\n",
+					"add rule inet %s ingress %smeta l4proto %s %s dport %s counter name %s_rx%s\n",
 					tableName,
 					interfaceRX,
 					protocol,
 					protocol,
-					item.PortStart,
-					item.PortEnd,
+					port,
 					key,
 					enforce,
 				)
@@ -123,13 +126,12 @@ func renderNFT(current state, exists bool) []byte {
 			if item.Direction == "tx" || item.Direction == "both" {
 				fmt.Fprintf(
 					&output,
-					"add rule inet %s egress %smeta l4proto %s %s sport %d-%d counter name %s_tx%s\n",
+					"add rule inet %s egress %smeta l4proto %s %s sport %s counter name %s_tx%s\n",
 					tableName,
 					interfaceTX,
 					protocol,
 					protocol,
-					item.PortStart,
-					item.PortEnd,
+					port,
 					key,
 					enforce,
 				)

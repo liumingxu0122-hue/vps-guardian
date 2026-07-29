@@ -417,6 +417,32 @@ func TestPolicyKeyUsesTheCompleteUUID(t *testing.T) {
 	}
 }
 
+func TestRenderNFTUsesPortableSingletonPortSyntax(t *testing.T) {
+	current := state{Version: 1, Policies: []policy{
+		{
+			ID:       "12345678-1234-4123-8123-1234567890ab",
+			Protocol: "tcp", Direction: "both",
+			PortStart: 443, PortEnd: 443,
+			Mode: "monitor_only", Generation: 1,
+		},
+		{
+			ID:       "12345678-1234-4123-8123-1234567890ac",
+			Protocol: "udp", Direction: "rx",
+			PortStart: 1000, PortEnd: 1002,
+			Mode: "monitor_only", Generation: 1,
+		},
+	}}
+	rendered := string(renderNFT(current, false))
+	if strings.Contains(rendered, "443-443") {
+		t.Fatal("equal port bounds are not portable across supported nftables versions")
+	}
+	for _, expected := range []string{"tcp dport 443 ", "tcp sport 443 ", "udp dport 1000-1002 "} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("missing nftables expression %q in %q", expected, rendered)
+		}
+	}
+}
+
 func BenchmarkRenderNFTPolicies(b *testing.B) {
 	for _, count := range []int{0, 1, 10, 64} {
 		current := state{Version: 1, Policies: make([]policy, 0, count)}
