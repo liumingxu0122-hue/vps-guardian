@@ -39,10 +39,6 @@ for name in vps-guardian-net-helper.socket vps-guardian-net-helper@.service; do
     exit 66
   fi
 done
-systemd-analyze verify \
-  "$source_dir/vps-guardian-net-helper.socket" \
-  "$source_dir/vps-guardian-net-helper@.service"
-
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup="/var/backups/vps-guardian-agent/net-helper-$timestamp"
 previous_socket_enabled=false
@@ -102,6 +98,9 @@ trap 'exit 143' TERM
 install -d -o root -g root -m 0700 /var/lib/vps-guardian-net-helper
 install -d -o root -g root -m 0755 /usr/local/libexec
 install -o root -g root -m 0755 "$binary" /usr/local/libexec/vps-guardian-net-helper
+systemd-analyze verify \
+  "$source_dir/vps-guardian-net-helper.socket" \
+  "$source_dir/vps-guardian-net-helper@.service"
 install -o root -g root -m 0644 \
   "$source_dir/vps-guardian-net-helper.socket" \
   /etc/systemd/system/vps-guardian-net-helper.socket

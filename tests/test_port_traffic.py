@@ -52,6 +52,20 @@ def test_helper_install_and_agent_config_preserve_fail_closed_host_binding() -> 
     assert "host_id:$host_id" in agent_installer
 
 
+def test_helper_fresh_install_places_executable_before_systemd_verify() -> None:
+    helper_installer = Path("scripts/install-port-traffic-helper.sh").read_text(
+        encoding="utf-8"
+    )
+    binary_install = (
+        'install -o root -g root -m 0755 "$binary" '
+        "/usr/local/libexec/vps-guardian-net-helper"
+    )
+
+    assert helper_installer.index(binary_install) < helper_installer.index(
+        "systemd-analyze verify"
+    )
+
+
 def seed_host(owner: User) -> tuple[str, str]:
     with SessionLocal() as database:
         host = Host(name="traffic-node", address="192.0.2.90")
