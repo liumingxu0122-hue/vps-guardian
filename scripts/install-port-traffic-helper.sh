@@ -16,10 +16,15 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ "$(id -u)" -eq 0 ] || { echo "helper installation must run as root" >&2; exit 77; }
-[ -n "$binary" ] && [ -n "$expected" ] || usage
+if [ -z "$binary" ] || [ -z "$expected" ]; then
+  usage
+fi
 case "$expected" in *[!a-f0-9]*|'') echo "sha256 must be lowercase hexadecimal" >&2; exit 65 ;; esac
 [ "${#expected}" -eq 64 ] || { echo "sha256 must contain 64 characters" >&2; exit 65; }
-[ -f "$binary" ] && [ ! -L "$binary" ] || { echo "helper artifact must be a regular file" >&2; exit 66; }
+if [ ! -f "$binary" ] || [ -L "$binary" ]; then
+  echo "helper artifact must be a regular file" >&2
+  exit 66
+fi
 for command in sha256sum install systemctl systemd-analyze nft tc; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing command: $command" >&2; exit 69; }
 done
@@ -29,10 +34,10 @@ actual="$(sha256sum "$binary" | awk '{print $1}')"
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 source_dir="$script_dir/../deploy/systemd"
 for name in vps-guardian-net-helper.socket vps-guardian-net-helper@.service; do
-  [ -f "$source_dir/$name" ] && [ ! -L "$source_dir/$name" ] || {
+  if [ ! -f "$source_dir/$name" ] || [ -L "$source_dir/$name" ]; then
     echo "missing systemd unit: $name" >&2
     exit 66
-  }
+  fi
 done
 systemd-analyze verify \
   "$source_dir/vps-guardian-net-helper.socket" \
