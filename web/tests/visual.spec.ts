@@ -393,6 +393,7 @@ const security: DashboardSecurity = {
 interface MockOptions {
   locale?: 'en-US' | 'zh-CN'
   theme?: 'light' | 'dark'
+  userRole?: User['role']
   bootstrapStatus?: number
   bootstrapDelay?: number
   resourceStatus?: number
@@ -418,7 +419,11 @@ async function mockAuthenticated(
     const path = new URL(route.request().url()).pathname
     counts.set(path, (counts.get(path) ?? 0) + 1)
     if (path === '/api/v1/auth/me') {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(user) })
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ...user, role: options.userRole ?? user.role }),
+      })
       return
     }
     if (path === '/api/v1/dashboard/bootstrap') {
@@ -495,6 +500,68 @@ async function mockAuthenticated(
           source_ip: '172.19.0.4',
           changes: {},
           correlation_id: 'request-17',
+        }),
+      })
+      return
+    }
+    const trafficBase = '/api/v1/hosts/host-1/port-traffic/policies'
+    const trafficPolicy = {
+      id: '2d3880fe-23f0-4bd3-bca2-1eea349b2e2c',
+      host_id: 'host-1',
+      name: 'HTTPS',
+      enabled: true,
+      protocol: 'tcp',
+      direction: 'both',
+      port_start: 443,
+      port_end: 443,
+      interface_name: null,
+      mode: 'monitor_only',
+      quota_bytes: 10737418240,
+      reset_policy: { type: 'monthly', day: 1, timezone: 'UTC' },
+      egress_rate_bps: null,
+      status: 'active',
+      generation: 1,
+      created_at: '2026-07-25T07:00:00Z',
+      updated_at: '2026-07-25T07:00:00Z',
+    }
+    if (path === trafficBase) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([trafficPolicy]),
+      })
+      return
+    }
+    if (path === `${trafficBase}/${trafficPolicy.id}/summary`) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          policy: trafficPolicy,
+          runtime: null,
+          current_period_rx: null,
+          current_period_tx: null,
+          current_period_total: null,
+          quota_percent: null,
+          quota_state: 'normal',
+          estimated_exhaustion_at: null,
+          last_sample_at: null,
+          data_gap: true,
+          recent_events: [],
+        }),
+      })
+      return
+    }
+    if (path === `${trafficBase}/${trafficPolicy.id}/history`) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          policy_id: trafficPolicy.id,
+          resolution: 'raw',
+          starts_at: '2026-07-24T08:00:00Z',
+          ends_at: '2026-07-25T08:00:00Z',
+          points: [],
         }),
       })
       return
@@ -615,6 +682,7 @@ test('active navigation remains visible in light and dark themes on key routes',
   const allNavigationRoutes = [
     '/overview',
     '/hosts',
+    '/port-traffic',
     '/services',
     '/topology',
     '/alerts',
@@ -644,6 +712,36 @@ test('active navigation remains visible in light and dark themes on key routes',
       await page.getByRole('button', { name: 'Switch to dark mode' }).click()
       await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
     }
+  }
+})
+
+test('port traffic renders missing samples as a gap and gates risky controls behind approval', async ({ page }) => {
+  await mockAuthenticated(page)
+  await page.goto('/port-traffic')
+
+  await expect(page.getByRole('heading', { name: 'Port traffic' })).toBeVisible()
+  await expect(page.getByText('Traffic history is incomplete')).toBeVisible()
+  await expect(page.getByText('No data', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('0 B', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Request enforcement change' })).toBeVisible()
+  await page.getByRole('button', { name: 'Request enforcement change' }).click()
+  await expect(page.getByRole('dialog').getByText(/independent high-risk approval/)).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+})
+
+test('port traffic is read-only for Viewer and Operator but manageable for Admin and Owner', async ({ browser }) => {
+  for (const role of ['viewer', 'operator', 'admin', 'owner'] as const) {
+    const context = await browser.newContext()
+    const page = await context.newPage()
+    await mockAuthenticated(page, { userRole: role })
+    await page.goto('/port-traffic')
+    await expect(page.getByRole('heading', { name: 'Port traffic' })).toBeVisible()
+    const expected = ['admin', 'owner'].includes(role) ? 1 : 0
+    await expect(page.getByRole('button', { name: 'Add monitor policy' })).toHaveCount(expected)
+    await expect(page.getByRole('button', { name: 'Request enforcement change' })).toHaveCount(expected)
+    await expect(page.getByRole('button', { name: 'Request counter reset' })).toHaveCount(expected)
+    await expect(page.getByRole('button', { name: 'Edit or disable policy' })).toHaveCount(expected)
+    await context.close()
   }
 })
 

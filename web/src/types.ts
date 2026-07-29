@@ -58,6 +58,76 @@ export interface Host {
   disabled_at: string | null
 }
 
+export interface PortTrafficPolicy {
+  id: string
+  host_id: string
+  name: string
+  enabled: boolean
+  protocol: 'tcp' | 'udp' | 'both'
+  direction: 'rx' | 'tx' | 'both'
+  port_start: number
+  port_end: number
+  interface_name: string | null
+  mode: 'monitor_only' | 'enforcing'
+  quota_bytes: number | null
+  reset_policy: Record<string, unknown>
+  egress_rate_bps: number | null
+  status: 'pending' | 'active' | 'disabled' | 'error'
+  generation: number
+  created_at: string
+  updated_at: string
+}
+
+export interface PortTrafficRuntime {
+  policy_id: string
+  runtime_rule_state: string
+  shaping_state: string
+  counter_generation: number
+  last_sample_at: string | null
+  last_reset_at: string | null
+  next_reset_at: string | null
+  restore_error: string | null
+  updated_at: string
+}
+
+export interface PortTrafficSummary {
+  policy: PortTrafficPolicy
+  runtime: PortTrafficRuntime | null
+  current_period_rx: number | null
+  current_period_tx: number | null
+  current_period_total: number | null
+  quota_percent: number | null
+  quota_state: 'unlimited' | 'normal' | 'warning' | 'critical' | 'exhausted'
+  estimated_exhaustion_at: string | null
+  last_sample_at: string | null
+  data_gap: boolean
+  recent_events: {
+    id: string
+    kind: 'reset' | 'quota' | 'runtime' | 'shaping' | 'enforcement' | 'gap' | 'spike'
+    state: string
+    summary: string
+    occurred_at: string
+  }[]
+}
+
+export interface PortTrafficHistoryPoint {
+  at: string
+  rx_bytes: number | null
+  tx_bytes: number | null
+  combined_bytes: number | null
+  missing_intervals: number
+  discontinuity_count: number
+  discontinuity_reason: string | null
+}
+
+export interface PortTrafficHistory {
+  policy_id: string
+  resolution: 'raw' | 'hour' | 'day'
+  starts_at: string
+  ends_at: string
+  points: PortTrafficHistoryPoint[]
+}
+
 export interface HostPresentation {
   id: string
   name: string

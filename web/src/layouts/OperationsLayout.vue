@@ -9,6 +9,7 @@ import {
   CircleHelp,
   ClipboardCheck,
   FileClock,
+  Gauge,
   KeyRound,
   LayoutDashboard,
   LogOut,
@@ -55,6 +56,7 @@ const navGroups = [
     items: [
       { to: '/overview', label: 'nav.overview', icon: LayoutDashboard, exact: true },
       { to: '/hosts', label: 'nav.hosts', icon: Server },
+      { to: '/port-traffic', label: 'nav.portTraffic', icon: Gauge },
       { to: '/services', label: 'nav.services', icon: Boxes },
       { to: '/topology', label: 'nav.topology', icon: Network },
     ],
