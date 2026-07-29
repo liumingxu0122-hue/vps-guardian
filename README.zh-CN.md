@@ -24,6 +24,9 @@ VPS Guardian 是一个以安全为核心的 Linux VPS 集群监控、诊断与�
 
 ## 功能
 
+- 预览：按端口精确统计 RX/TX，明确显示数据缺口，使用有上限 PostgreSQL 聚合、
+  配额告警及经审批的出站限速
+
 - Controller、Web Dashboard、PostgreSQL 和 Linux Agent
 - TLS 1.3 mTLS、RBAC、TOTP、CSRF 防护与登录限流
 - 签名任务、Nonce 防重放、审批和追加式审计事件
@@ -39,6 +42,9 @@ VPS Guardian 是一个以安全为核心的 Linux VPS 集群监控、诊断与�
 
 ## 当前限制
 
+- 端口流量功能默认关闭；真实 nftables/TC 和 0/1/10/64 策略资源预算仍须在隔离
+  Linux Staging 验证
+
 - 尚未完成大规模多 VPS 长期运行验证
 - Telegram、SMTP、Discord 和 Webhook 外发默认关闭；真实双通道闭环仍为 Pending
 - 双主机 CSR Staging 证据属于历史结果；当前 CRL 握手、轮换和更大集群观察仍需重新验证
@@ -46,6 +52,11 @@ VPS Guardian 是一个以安全为核心的 Linux VPS 集群监控、诊断与�
 - Windows SSH Dashboard 启动脚本仍为 Experimental
 
 ## 架构
+
+端口流量预览文档：
+[统计](docs/zh-CN/PORT_TRAFFIC_ACCOUNTING.md)、
+[安全模型](docs/zh-CN/PORT_TRAFFIC_SECURITY_MODEL.md)、
+[运维](docs/zh-CN/PORT_TRAFFIC_OPERATIONS.md)。普通 Agent 安装或升级不会自动启用。
 
 ```mermaid
 flowchart LR

@@ -28,6 +28,8 @@ VPS Guardian is a security-first control plane for monitoring, diagnosing, and r
 - TLS 1.3 mTLS, RBAC, TOTP, CSRF protection, and login rate limiting
 - Signed tasks, nonce replay protection, approvals, and append-only audit events
 - Agent heartbeat, CPU and network metrics, and a durable offline queue
+- Preview per-port RX/TX accounting with explicit data gaps, bounded PostgreSQL
+  rollups, quota alerts, and approval-gated egress shaping
 - Restic backup and restore with S3-compatible storage, including Cloudflare R2
 - Decision-oriented Overview and Attention queue with explainable health, stability components, and deployment provenance
 - Grouped responsive operations console for hosts, services, topology, alerts, incidents, repairs, approvals, recovery, security, users, Agents, notifications, audit, and settings
@@ -40,6 +42,8 @@ VPS Guardian is a security-first control plane for monitoring, diagnosing, and r
 ## Current limitations
 
 - No sustained validation across a large multi-VPS fleet
+- Per-port nftables/TC integration and 0/1/10/64-policy resource budgets still
+  require isolated Linux Staging; the feature is disabled by default
 - External Telegram, SMTP, Discord, and webhook delivery is opt-in; real two-channel closure remains pending
 - Two-host CSR staging evidence is historical; current CRL handshake, rotation, and larger-fleet observation must be revalidated
 - No automatic cross-cloud rebuilding or production-grade public deployment
@@ -59,6 +63,12 @@ flowchart LR
 ```
 
 Read the [architecture guide](docs/en/ARCHITECTURE.md) for trust boundaries and data flow, the [Phase 4 completion guide](docs/en/PHASE4_COMPLETION.md) for the operational workflows and gates, and the [Phase 4C staging guide](docs/en/PHASE4C.md) for CSR bootstrap and validation status.
+
+The optional port-traffic preview is documented in
+[accounting](docs/en/PORT_TRAFFIC_ACCOUNTING.md),
+[security](docs/en/PORT_TRAFFIC_SECURITY_MODEL.md), and
+[operations](docs/en/PORT_TRAFFIC_OPERATIONS.md). It is not enabled by a normal
+Agent install or upgrade.
 
 ## Quick install
 

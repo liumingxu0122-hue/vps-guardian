@@ -8,6 +8,11 @@ Run the generated `scripts/install-agent.sh` command as root. The installer veri
 
 Identity files use generation directories under `/etc/vps-guardian-agent/identities`. The `current` symbolic link selects the active generation. Keys are protected from other users, and the previous generation remains available after renewal for controlled rollback. Public CA files live separately under the trust directory.
 
+Per-port accounting is disabled by default. Follow
+[Port traffic operations](PORT_TRAFFIC_OPERATIONS.md) to install the independently
+checksummed socket-activated helper. The Agent must remain non-root and must not
+receive `CAP_NET_ADMIN`.
+
 The Agent renews inside the configured pre-expiry window. The Controller requires the active mTLS identity, signed request, new CSR, new Ed25519 proof of possession, and an identity-version compare-and-swap. Before switching, the Agent validates the returned key pair, pinned CA, client-auth usage, SPIFFE identity, fingerprint, and encoded expiry. A renewal failure leaves the current generation active and applies a bounded retry delay.
 
 Certificate revocation is a controlled operator workflow. Build and validate a monotonic CRL candidate, publish it with `scripts/publish-agent-crl.sh`, confirm the Agent Gateway is healthy and rejects the old certificate, then record the matching identity revocation through the authorized Controller API. Do not run `forget`, `prune`, firewall changes, or unrelated-service operations as part of Agent identity maintenance.

@@ -20,6 +20,10 @@ Transfer the output over a protected channel. Never reuse a private key across h
 
 Place the binary at `/usr/local/bin/vps-guardian-agent`, configuration at `/etc/vps-guardian-agent/config.json`, identity files below `/etc/vps-guardian-agent/tls`, and the signing key as a root-only file. Use `deploy/agent-config.example.json` as the schema reference and replace every placeholder.
 
+Per-port accounting is optional and remains disabled in the example configuration.
+Install its independently checksummed helper and socket units only by following
+`docs/en/PORT_TRAFFIC_OPERATIONS.md`; never add `CAP_NET_ADMIN` to the Agent.
+
 The Controller URL must use the configured Agent gateway DNS name. `ca_file` must contain the CA that signed the gateway certificate. Set `tls_server_name` to the same DNS name. Pin the Controller public signing key and the Agent certificate fingerprint.
 
 ## 4. Install the service
