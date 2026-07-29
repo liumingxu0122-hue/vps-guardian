@@ -31,6 +31,7 @@ from guardian.port_traffic import (
     next_reset_at,
     prune_port_traffic,
     query_history,
+    quota_alert_source_id,
     validate_reset_policy,
 )
 from guardian.schemas import PortTrafficObservation
@@ -103,6 +104,27 @@ def create_policy(owner: User) -> tuple[str, str]:
         ensure_quota_alert_rules(database, policy)
         database.commit()
         return host_id, policy.id
+
+
+def test_quota_alert_source_ids_fit_the_database_column(owner: User) -> None:
+    _, policy_id = create_policy(owner)
+
+    with SessionLocal() as database:
+        source_ids = database.scalars(
+            select(AlertRule.source_id).where(
+                AlertRule.source_type == "port_traffic_quota"
+            )
+        ).all()
+
+    assert len(source_ids) == 4
+    assert all(len(source_id) <= 36 for source_id in source_ids)
+    assert {source_id.rsplit(":", 1)[1] for source_id in source_ids} == {
+        "70",
+        "85",
+        "95",
+        "100",
+    }
+    assert all(source_id.startswith(policy_id.replace("-", "")) for source_id in source_ids)
 
 
 def observation(policy_id: str, *, rx: int, tx: int, generation: int = 1) -> PortTrafficObservation:
@@ -300,7 +322,9 @@ def test_quota_alert_uses_hysteresis_and_existing_recovery_state_machine(
         )
         database.flush()
         rule = database.scalar(
-            select(AlertRule).where(AlertRule.source_id == f"{policy_id}:70")
+            select(AlertRule).where(
+                AlertRule.source_id == quota_alert_source_id(policy_id, 70)
+            )
         )
         assert rule is not None
         alert = database.query(AlertInstance).filter_by(rule_id=rule.id).one()

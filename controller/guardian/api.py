@@ -112,6 +112,7 @@ from guardian.port_traffic import (
     missing_is_gap,
     next_reset_at,
     query_history,
+    quota_alert_source_ids,
     quota_state,
     validate_reset_policy,
 )
@@ -2562,7 +2563,10 @@ def port_traffic_summary(
         .where(
             or_(
                 AlertRule.source_id == policy.id,
-                AlertRule.source_id.like(f"{policy.id}:%"),
+                and_(
+                    AlertRule.source_type == "port_traffic_quota",
+                    AlertRule.source_id.in_(quota_alert_source_ids(policy.id)),
+                ),
             )
         )
         .order_by(desc(AlertInstance.last_observed_at))

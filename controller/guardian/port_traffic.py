@@ -218,9 +218,19 @@ def next_reset_at(
     return datetime.combine(candidate, time.min, timezone).astimezone(UTC)
 
 
+def quota_alert_source_id(policy_id: str, threshold: int) -> str:
+    return f"{policy_id.replace('-', '')}:{threshold}"
+
+
+def quota_alert_source_ids(policy_id: str) -> tuple[str, ...]:
+    return tuple(
+        quota_alert_source_id(policy_id, threshold) for threshold in QUOTA_THRESHOLDS
+    )
+
+
 def ensure_quota_alert_rules(db: Session, policy: PortTrafficPolicy) -> None:
     for threshold in QUOTA_THRESHOLDS:
-        source_id = f"{policy.id}:{threshold}"
+        source_id = quota_alert_source_id(policy.id, threshold)
         if db.scalar(
             select(AlertRule).where(
                 AlertRule.source_type == "port_traffic_quota",
@@ -292,7 +302,7 @@ def _observe_quota_alerts(
     rules = db.scalars(
         select(AlertRule).where(
             AlertRule.source_type == "port_traffic_quota",
-            AlertRule.source_id.like(f"{policy.id}:%"),
+            AlertRule.source_id.in_(quota_alert_source_ids(policy.id)),
         )
     ).all()
     for rule in rules:
