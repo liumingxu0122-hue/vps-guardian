@@ -93,7 +93,14 @@ func collectPortTraffic(ctx context.Context, config Config) ([]map[string]any, e
 		len(response.Observations) > 64 {
 		return nil, errors.New("port traffic helper snapshot is invalid")
 	}
-	return response.Observations, nil
+	return normalizePortTrafficObservations(response.Observations), nil
+}
+
+func normalizePortTrafficObservations(observations []map[string]any) []map[string]any {
+	if observations == nil {
+		return []map[string]any{}
+	}
+	return observations
 }
 
 func collectSnapshot(
