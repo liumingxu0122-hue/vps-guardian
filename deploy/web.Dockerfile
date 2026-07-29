@@ -10,6 +10,8 @@ FROM golang:1.26.5-alpine3.24@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1
 ARG CADDY_VERSION=v2.11.4
 ARG CADDY_COMMIT=e2eee6a7fce366321294c9c2a79f3146891dcbdf
 ARG CADDY_SOURCE_SHA256=a593bd7077c76102ca76d19287a5e247d4e359dd67eddbc933f865afd3c131eb
+ARG CADDY_X_TEXT_VERSION=v0.40.0
+ARG CADDY_X_TEXT_MODULE_SUM=h1:Ub2Z6/xjgF1WrYQz2nuITOEegKFtiIy+rieRJ5lHZKs=
 ARG GRPC_GO_VERSION=v1.82.1
 ARG GRPC_GO_MODULE_SUM=h1:NnAxzGRA0677vCa4BUkOAnO5+FfQqVl9iUXeD0IqcGE=
 RUN apk add --no-cache ca-certificates wget tar \
@@ -21,16 +23,23 @@ RUN apk add --no-cache ca-certificates wget tar \
 WORKDIR /src
 RUN test "$(grep '^module ' go.mod | awk '{print $2}')" = 'github.com/caddyserver/caddy/v2' \
     && test "$CADDY_VERSION" = 'v2.11.4' \
+    && go mod edit -require="golang.org/x/text@$CADDY_X_TEXT_VERSION" \
+    && go mod download "golang.org/x/text@$CADDY_X_TEXT_VERSION" \
+    && grep -Fx "golang.org/x/text $CADDY_X_TEXT_VERSION $CADDY_X_TEXT_MODULE_SUM" go.sum \
     && go mod edit -require="google.golang.org/grpc@$GRPC_GO_VERSION" \
     && go mod download "google.golang.org/grpc@$GRPC_GO_VERSION" \
     && grep -Fx "google.golang.org/grpc $GRPC_GO_VERSION $GRPC_GO_MODULE_SUM" go.sum \
     && go mod tidy \
+    && grep -Fx "golang.org/x/text $CADDY_X_TEXT_VERSION $CADDY_X_TEXT_MODULE_SUM" go.sum \
     && grep -Fx "google.golang.org/grpc $GRPC_GO_VERSION $GRPC_GO_MODULE_SUM" go.sum \
     && go mod verify \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = "$CADDY_X_TEXT_VERSION" \
     && test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "$GRPC_GO_VERSION" \
     && go build -trimpath -buildvcs=false \
       -ldflags="-s -w -X github.com/caddyserver/caddy/v2.CustomVersion=$CADDY_VERSION" \
       -o /out/caddy ./cmd/caddy \
+    && go version -m /out/caddy \
+      | grep -F "golang.org/x/text	$CADDY_X_TEXT_VERSION	$CADDY_X_TEXT_MODULE_SUM" \
     && go version -m /out/caddy \
       | grep -F "google.golang.org/grpc	$GRPC_GO_VERSION	$GRPC_GO_MODULE_SUM"
 RUN /out/caddy version | grep -Eq '^v2\.11\.4( |$)'
