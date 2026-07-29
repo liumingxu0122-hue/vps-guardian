@@ -42,6 +42,7 @@ for _hex_character in "0123456789abcdef":
 
 class Role(StrEnum):
     viewer = "viewer"
+    auditor = "auditor"
     operator = "operator"
     admin = "admin"
     owner = "owner"
@@ -148,6 +149,29 @@ class EnrollmentStatus(StrEnum):
     heartbeat_received = "heartbeat_received"
     completed = "completed"
     failed = "failed"
+    expired = "expired"
+    revoked = "revoked"
+
+
+class AgentMaintenanceKind(StrEnum):
+    repair = "repair"
+    reinstall = "reinstall"
+    rotate_identity = "rotate_identity"
+    decommission = "decommission"
+
+
+class AgentMaintenanceStatus(StrEnum):
+    waiting = "waiting"
+    started = "started"
+    artifact_verified = "artifact_verified"
+    service_stopped = "service_stopped"
+    identity_rotated = "identity_rotated"
+    service_started = "service_started"
+    heartbeat_verified = "heartbeat_verified"
+    confirmation_pending = "confirmation_pending"
+    completed = "completed"
+    failed = "failed"
+    rolled_back = "rolled_back"
     expired = "expired"
     revoked = "revoked"
 
@@ -647,6 +671,85 @@ class EnrollmentEvent(Base):
     rolled_back: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
 
+class AgentMaintenanceSession(Base):
+    __tablename__ = "agent_maintenance_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('repair', 'reinstall', 'rotate_identity', 'decommission')",
+            name="ck_agent_maintenance_kind",
+        ),
+        CheckConstraint(
+            "status IN ('waiting', 'started', 'artifact_verified', 'service_stopped', "
+            "'identity_rotated', 'service_started', 'heartbeat_verified', "
+            "'confirmation_pending', 'completed', 'failed', 'rolled_back', "
+            "'expired', 'revoked')",
+            name="ck_agent_maintenance_status",
+        ),
+        CheckConstraint("length(token_hash) = 64", name="ck_agent_maintenance_token_hash"),
+        CheckConstraint(
+            "progress_token_hash IS NULL OR length(progress_token_hash) = 64",
+            name="ck_agent_maintenance_progress_hash",
+        ),
+        UniqueConstraint("token_hash", name="uq_agent_maintenance_token_hash"),
+        UniqueConstraint(
+            "progress_token_hash", name="uq_agent_maintenance_progress_hash"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    host_id: Mapped[str] = mapped_column(ForeignKey("hosts.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(24), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64))
+    progress_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), default="waiting", server_default="waiting", index=True
+    )
+    status_sequence: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    source_cidr: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    purge_local_state: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    expected_identity_version: Mapped[int] = mapped_column(Integer)
+    old_identity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_identities.id", ondelete="SET NULL"), nullable=True
+    )
+    new_identity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_identities.id", ondelete="SET NULL"), nullable=True
+    )
+    approval_id: Mapped[str | None] = mapped_column(
+        ForeignKey("approvals.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    rolled_back: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    status_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AgentMaintenanceEvent(Base):
+    __tablename__ = "agent_maintenance_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "status", name="uq_agent_maintenance_event_status"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_maintenance_sessions.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(32))
+    status_sequence: Mapped[int] = mapped_column(Integer)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    rolled_back: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+
 class ServiceCheck(Base):
     __tablename__ = "service_checks"
     __table_args__ = (
@@ -997,6 +1100,11 @@ class RecoveryPoint(Base):
 
 
 Index("ix_repair_action_created", RepairAttempt.action, RepairAttempt.created_at)
+Index(
+    "ix_agent_maintenance_host_created",
+    AgentMaintenanceSession.host_id,
+    AgentMaintenanceSession.created_at,
+)
 Index(
     "uq_agent_identity_one_active",
     AgentIdentity.agent_id,

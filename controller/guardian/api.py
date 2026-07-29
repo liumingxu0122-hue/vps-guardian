@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from guardian import __version__
 from guardian.agent_installation import (
     AgentInstallationConfigurationError,
+    build_agent_maintenance_command,
     build_one_command_install,
 )
 from guardian.agent_pki import (
@@ -82,10 +83,22 @@ from guardian.identity import (
     generate_recovery_code_batch,
     revoke_sessions,
 )
+from guardian.maintenance import (
+    MaintenanceSessionError,
+    advance_maintenance,
+    consume_maintenance_session,
+    issue_maintenance_session,
+)
+from guardian.maintenance import (
+    authenticate_progress as authenticate_maintenance_progress,
+)
 from guardian.models import (
     Agent,
     AgentIdentity,
     AgentIdentityState,
+    AgentMaintenanceEvent,
+    AgentMaintenanceKind,
+    AgentMaintenanceSession,
     AgentTask,
     AlertInstance,
     AlertRule,
@@ -144,6 +157,13 @@ from guardian.schemas import (
     AgentIdentityRevokeRequest,
     AgentIdentityValidateRequest,
     AgentIdentityView,
+    AgentMaintenanceFinalize,
+    AgentMaintenanceIssue,
+    AgentMaintenanceProgress,
+    AgentMaintenanceSessionView,
+    AgentMaintenanceStart,
+    AgentMaintenanceStartView,
+    AgentMaintenanceTokenView,
     AgentRenewRequest,
     AgentRenewResponse,
     AgentRotateRequest,
@@ -5574,6 +5594,427 @@ def revoke_agent(
         source_ip=request.client.host if request.client else None,
     )
     db.commit()
+
+
+def _require_maintenance_scope(user: User, host: Host, kind: str) -> None:
+    group_scopes = {
+        scope.removeprefix("group:").removesuffix(":maintain")
+        for scope in user.scopes
+        if scope.startswith("group:") and scope.endswith(":maintain")
+    }
+    if group_scopes and (host.group_name or "") not in group_scopes:
+        raise HTTPException(status_code=403, detail="group maintenance scope denied")
+    if user.role == Role.operator.value and kind == AgentMaintenanceKind.repair.value:
+        return
+    if user.role in {Role.admin.value, Role.owner.value}:
+        return
+    raise HTTPException(status_code=403, detail="Agent maintenance permission denied")
+
+
+def _require_maintenance_read_scope(user: User, host: Host) -> None:
+    group_scopes = {
+        scope.removeprefix("group:").removesuffix(":maintain")
+        for scope in user.scopes
+        if scope.startswith("group:") and scope.endswith(":maintain")
+    }
+    if group_scopes and (host.group_name or "") not in group_scopes:
+        raise HTTPException(status_code=403, detail="group maintenance scope denied")
+    if user.role not in {
+        Role.auditor.value,
+        Role.operator.value,
+        Role.admin.value,
+        Role.owner.value,
+    }:
+        raise HTTPException(status_code=403, detail="Agent maintenance read permission denied")
+
+
+def _maintenance_view(
+    db: Session, session: AgentMaintenanceSession
+) -> AgentMaintenanceSessionView:
+    events = list(
+        db.scalars(
+            select(AgentMaintenanceEvent)
+            .where(AgentMaintenanceEvent.session_id == session.id)
+            .order_by(AgentMaintenanceEvent.id)
+        ).all()
+    )
+    return AgentMaintenanceSessionView(
+        id=session.id,
+        host_id=session.host_id,
+        agent_id=session.agent_id,
+        kind=session.kind,
+        status=session.status,
+        status_sequence=session.status_sequence,
+        source_cidr=session.source_cidr,
+        purge_local_state=session.purge_local_state,
+        expected_identity_version=session.expected_identity_version,
+        old_identity_id=session.old_identity_id,
+        new_identity_id=session.new_identity_id,
+        approval_id=session.approval_id,
+        expires_at=session.expires_at,
+        used_at=session.used_at,
+        revoked_at=session.revoked_at,
+        completed_at=session.completed_at,
+        error_code=session.error_code,
+        error_summary=session.error_summary,
+        rolled_back=session.rolled_back,
+        created_at=session.created_at,
+        status_updated_at=session.status_updated_at,
+        events=events,
+    )
+
+
+@router.post(
+    "/api/v1/hosts/{host_id}/maintenance-sessions",
+    response_model=AgentMaintenanceTokenView,
+    status_code=201,
+    tags=["agent"],
+)
+def create_agent_maintenance_session(
+    host_id: str,
+    payload: AgentMaintenanceIssue,
+    request: Request,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.operator))],
+) -> AgentMaintenanceTokenView:
+    _require_step_up(request)
+    host = db.get(Host, host_id)
+    if host is None or host.agent is None:
+        raise HTTPException(status_code=404, detail="managed Agent not found")
+    _require_maintenance_scope(user, host, payload.kind)
+    if payload.kind == AgentMaintenanceKind.decommission.value:
+        if payload.confirmation != f"DECOMMISSION {host.name}":
+            raise HTTPException(status_code=409, detail="decommission confirmation mismatch")
+        approval = db.get(Approval, payload.approval_id or "")
+        if (
+            approval is None
+            or approval.status
+            not in {
+                ApprovalStatus.approved.value,
+                ApprovalStatus.approved_with_conditions.value,
+            }
+            or approval.action_name != "agent.decommission"
+            or approval.target_host_id != host.id
+            or approval.requested_by is None
+            or approval.decided_by is None
+            or approval.requested_by == approval.decided_by
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="independently approved host-bound decommission is required",
+            )
+    try:
+        issued = issue_maintenance_session(
+            db,
+            host=host,
+            agent=host.agent,
+            actor=user,
+            kind=payload.kind,
+            source_cidr=payload.source_cidr,
+            purge_local_state=payload.purge_local_state,
+            approval_id=payload.approval_id,
+        )
+        command = build_agent_maintenance_command(
+            settings=settings,
+            host_id=host.id,
+            token=issued.value,
+            kind=payload.kind,
+            expected_identity_version=host.agent.identity_version,
+            purge_local_state=payload.purge_local_state,
+        )
+    except (MaintenanceSessionError, AgentInstallationConfigurationError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    write_audit(
+        db,
+        actor=user,
+        action=f"agent.maintenance.{payload.kind}.issue",
+        resource_type="agent_maintenance_session",
+        resource_id=issued.session.id,
+        outcome="success",
+        details={
+            "host_id": host.id,
+            "expires_at": issued.session.expires_at.isoformat(),
+            "purge_local_state": payload.purge_local_state,
+            "approval_id": payload.approval_id,
+        },
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return AgentMaintenanceTokenView(
+        id=issued.session.id,
+        host_id=host.id,
+        kind=cast(Any, payload.kind),
+        expires_at=issued.session.expires_at,
+        command=command,
+        status="waiting",
+    )
+
+
+@router.get(
+    "/api/v1/hosts/{host_id}/maintenance-sessions",
+    response_model=list[AgentMaintenanceSessionView],
+    tags=["agent"],
+)
+def list_agent_maintenance_sessions(
+    host_id: str,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[AgentMaintenanceSessionView]:
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    _require_maintenance_read_scope(user, host)
+    sessions = db.scalars(
+        select(AgentMaintenanceSession)
+        .where(AgentMaintenanceSession.host_id == host_id)
+        .order_by(desc(AgentMaintenanceSession.created_at))
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return [_maintenance_view(db, item) for item in sessions]
+
+
+@router.get(
+    "/api/v1/hosts/{host_id}/maintenance-sessions/latest",
+    response_model=AgentMaintenanceSessionView,
+    tags=["agent"],
+)
+def latest_agent_maintenance_session(
+    host_id: str,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> AgentMaintenanceSessionView:
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    _require_maintenance_read_scope(user, host)
+    session = db.scalar(
+        select(AgentMaintenanceSession)
+        .where(AgentMaintenanceSession.host_id == host_id)
+        .order_by(desc(AgentMaintenanceSession.created_at))
+        .limit(1)
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="maintenance session not found")
+    return _maintenance_view(db, session)
+
+
+@router.post(
+    "/api/v1/agents/maintenance/start",
+    response_model=AgentMaintenanceStartView,
+    tags=["agent"],
+)
+def start_agent_maintenance(
+    payload: AgentMaintenanceStart,
+    request: Request,
+    db: DB,
+    settings: Config,
+    credential: Annotated[str | None, Header(alias="X-Maintenance-Token")] = None,
+) -> AgentMaintenanceStartView:
+    if not credential:
+        raise HTTPException(status_code=401, detail="invalid maintenance credential")
+    source = _enrollment_source_ip(request, settings)
+    try:
+        session, progress = consume_maintenance_session(
+            db, value=credential, kind=payload.kind, source_ip=source
+        )
+    except MaintenanceSessionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    agent = db.get(Agent, session.agent_id)
+    identity = db.get(AgentIdentity, session.old_identity_id or "")
+    if agent is None or identity is None:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="maintenance identity is unavailable")
+    if settings.environment == "production":
+        fingerprint, serial = trusted_client_certificate_identity(request, settings)
+    else:
+        fingerprint = normalize_certificate_fingerprint(
+            request.headers.get("x-client-cert-fingerprint", identity.certificate_fingerprint)
+        )
+        serial = normalize_certificate_serial(
+            request.headers.get("x-client-cert-serial", identity.certificate_serial or "0")
+        )
+    if (
+        fingerprint != identity.certificate_fingerprint
+        or (identity.certificate_serial and serial != identity.certificate_serial)
+    ):
+        db.rollback()
+        raise HTTPException(status_code=401, detail="maintenance certificate mismatch")
+    write_audit(
+        db,
+        actor=None,
+        action=f"agent.maintenance.{session.kind}.start",
+        resource_type="agent_maintenance_session",
+        resource_id=session.id,
+        outcome="success",
+        details={"host_id": session.host_id, "agent_id": session.agent_id},
+        source_ip=source,
+    )
+    db.commit()
+    return AgentMaintenanceStartView(
+        session_id=session.id,
+        host_id=session.host_id,
+        agent_id=session.agent_id,
+        kind=session.kind,
+        progress_token=progress,
+        expected_identity_version=session.expected_identity_version,
+        purge_local_state=session.purge_local_state,
+    )
+
+
+@router.post("/api/v1/agents/maintenance/progress", status_code=202, tags=["agent"])
+def report_agent_maintenance_progress(
+    payload: AgentMaintenanceProgress,
+    request: Request,
+    db: DB,
+    credential: Annotated[str | None, Header(alias="X-Maintenance-Progress")] = None,
+) -> None:
+    if not credential:
+        raise HTTPException(status_code=401, detail="invalid maintenance progress credential")
+    try:
+        session = authenticate_maintenance_progress(
+            db, value=credential, kind=payload.kind
+        )
+        agent = db.get(Agent, session.agent_id)
+        if payload.status == "heartbeat_verified":
+            if agent is None or agent.last_heartbeat_at is None:
+                raise MaintenanceSessionError("Controller has not observed a post-change heartbeat")
+            heartbeat = agent.last_heartbeat_at
+            if heartbeat.tzinfo is None:
+                heartbeat = heartbeat.replace(tzinfo=UTC)
+            session_started = session.used_at
+            if session_started is None:
+                raise MaintenanceSessionError("maintenance session has not started")
+            if session_started.tzinfo is None:
+                session_started = session_started.replace(tzinfo=UTC)
+            if heartbeat <= session_started:
+                raise MaintenanceSessionError(
+                    "post-change heartbeat is not newer than session start"
+                )
+            if payload.kind in {"reinstall", "rotate_identity"}:
+                if agent.identity_version <= session.expected_identity_version:
+                    raise MaintenanceSessionError("new identity generation has not been observed")
+                active = db.scalar(
+                    select(AgentIdentity).where(
+                        AgentIdentity.agent_id == agent.id,
+                        AgentIdentity.state == AgentIdentityState.active.value,
+                    )
+                )
+                if active is None or active.id == session.old_identity_id:
+                    raise MaintenanceSessionError("new active identity is not verified")
+                session.new_identity_id = active.id
+        if payload.status == "completed" and payload.kind != "repair":
+            raise MaintenanceSessionError("this maintenance kind requires Controller finalization")
+        advance_maintenance(
+            db,
+            session=session,
+            status=payload.status,
+            error_code=payload.error_code,
+            error_summary=payload.error_summary,
+            rolled_back=payload.rolled_back,
+        )
+    except MaintenanceSessionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    write_audit(
+        db,
+        actor=None,
+        action=f"agent.maintenance.{session.kind}.progress",
+        resource_type="agent_maintenance_session",
+        resource_id=session.id,
+        outcome="success",
+        details={"status": payload.status, "rolled_back": payload.rolled_back},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+
+
+@router.post(
+    "/api/v1/hosts/{host_id}/maintenance-sessions/{session_id}/finalize",
+    response_model=AgentMaintenanceSessionView,
+    tags=["agent"],
+)
+def finalize_agent_maintenance(
+    host_id: str,
+    session_id: str,
+    payload: AgentMaintenanceFinalize,
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.admin))],
+) -> AgentMaintenanceSessionView:
+    _require_step_up(request)
+    host = db.get(Host, host_id)
+    session = db.get(AgentMaintenanceSession, session_id)
+    if host is None or session is None or session.host_id != host.id:
+        raise HTTPException(status_code=404, detail="maintenance session not found")
+    _require_maintenance_scope(user, host, session.kind)
+    if session.status != "confirmation_pending":
+        raise HTTPException(status_code=409, detail="maintenance is not ready for finalization")
+    if payload.confirmation != f"FINALIZE {host.name}":
+        raise HTTPException(status_code=409, detail="finalization confirmation mismatch")
+    agent = db.get(Agent, session.agent_id)
+    if agent is None:
+        raise HTTPException(status_code=409, detail="Agent not found")
+    if agent.identity_version != payload.expected_identity_version:
+        raise HTTPException(status_code=409, detail="stale Agent identity version")
+    if session.kind == AgentMaintenanceKind.decommission.value:
+        identity = db.get(AgentIdentity, session.old_identity_id or "")
+        if identity is None or payload.crl_number is None or payload.crl_sha256 is None:
+            raise HTTPException(status_code=409, detail="decommission requires CRL evidence")
+        require_matching_crl_publication(
+            db,
+            AgentIdentityRevokeRequest(
+                expected_version=payload.expected_identity_version,
+                crl_number=payload.crl_number,
+                crl_sha256=payload.crl_sha256,
+            ),
+            identity.certificate_serial,
+        )
+        now = datetime.now(UTC)
+        identity.state = AgentIdentityState.revoked.value
+        identity.revoked_at = now
+        agent.revoked_at = now
+        host.enabled = False
+        host.disabled_at = now
+        db.execute(
+            update(AgentTask)
+            .where(AgentTask.agent_id == agent.id, AgentTask.status == "pending")
+            .values(status="cancelled", completed_at=now)
+        )
+    elif session.kind in {"reinstall", "rotate_identity"}:
+        old = db.get(AgentIdentity, session.old_identity_id or "")
+        if old is None or old.state not in {
+            AgentIdentityState.retiring.value,
+            AgentIdentityState.revoked.value,
+        }:
+            raise HTTPException(status_code=409, detail="old identity has not entered retirement")
+        if old.state != AgentIdentityState.revoked.value:
+            raise HTTPException(
+                status_code=409,
+                detail="old identity must be CRL-published and revoked before finalization",
+            )
+    advance_maintenance(db, session=session, status="completed")
+    write_audit(
+        db,
+        actor=user,
+        action=f"agent.maintenance.{session.kind}.finalize",
+        resource_type="agent_maintenance_session",
+        resource_id=session.id,
+        outcome="success",
+        details={
+            "host_id": host.id,
+            "purge_local_state": session.purge_local_state,
+            "history_preserved": True,
+        },
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return _maintenance_view(db, session)
 
 
 @router.get("/api/v1/events", tags=["events"])

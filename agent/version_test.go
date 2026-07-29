@@ -70,3 +70,26 @@ func TestCurrentBuildInfoHashesTheRunningArtifact(t *testing.T) {
 		t.Fatalf("runtime provenance is incomplete: %#v", info)
 	}
 }
+
+func TestIdentityRotationRejectsMissingCASVersionBeforeReadingConfig(t *testing.T) {
+	var output bytes.Buffer
+	dependencies := cliDependencies{
+		buildInfo: func() (BuildInfo, error) { return testBuildInfo(), nil },
+		loadConfig: func(string) (Config, error) {
+			t.Fatal("invalid rotation arguments loaded Agent configuration")
+			return Config{}, nil
+		},
+		run: func(Config, BuildInfo) error {
+			t.Fatal("invalid rotation arguments entered the Agent main loop")
+			return nil
+		},
+	}
+	if code := executeCLI(
+		[]string{"rotate-identity", "--expected-version", "0"},
+		&output,
+		&output,
+		dependencies,
+	); code != 2 {
+		t.Fatalf("invalid identity rotation returned %d, want 2", code)
+	}
+}

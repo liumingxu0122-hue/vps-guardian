@@ -4,7 +4,7 @@
 
 ## Scope and release gate
 
-This workflow adds a server from **Hosts → Add server**, then produces one command for the intended Linux host. It is disabled by default. Enabling it requires a fixed release version, credential-free HTTPS asset URLs, and exact SHA-256 values for the installer, both Agent architectures, the Controller CA, and Controller signing public key. A missing or placeholder value makes command issuance fail closed.
+This workflow adds a server from **Hosts → Add server**, then produces one command for the intended Linux host. It is disabled by default. Enabling it requires a fixed release version, credential-free HTTPS asset URLs, a detached Ed25519 manifest signature, an independently pinned release public-key SHA-256, and exact SHA-256 values for the installer, both Agent architectures, the Controller CA, and Controller signing public key. A missing or placeholder value makes command issuance fail closed.
 
 Supported targets are Ubuntu, Debian, Rocky Linux, AlmaLinux, RHEL, Fedora, and Alpine on `amd64` or `arm64`. `generic` is an explicit operator choice for another Linux distribution using systemd or OpenRC; it is not automatic compatibility.
 
@@ -47,7 +47,7 @@ The installer:
 | --- | --- | --- |
 | Command copied to the wrong host | Host binding, 10-minute expiry, optional source CIDR, immediate revoke/regenerate | A copied command can be used first from an allowed source |
 | Token leak through URLs or logs | Header-only transport, hash-only storage, safe errors, no token audit fields | The one-line command can remain in local shell history |
-| Artifact substitution | Credential-free HTTPS plus exact SHA-256 and fixed version | No independent signature is required until the release process provides one |
+| Artifact substitution | Credential-free HTTPS, fixed version, independently pinned Ed25519 manifest signature, then exact SHA-256 | Formal release authority remains blocked until the offline release key is provisioned |
 | Controller impersonation | Pinned Controller CA and TLS 1.3 | CA compromise remains a trust-root event |
 | Private-key exfiltration | Keys generated locally, atomic mode-0600 files, non-root service | Root on the Agent host can read keys |
 | Partial installation | Pre-change backup, checksum manifest, service-state capture, failure trap, scoped rollback | Host power loss can interrupt rollback; retain the backup directory |
@@ -56,7 +56,7 @@ The installer:
 
 ## Operator workflow
 
-1. Publish immutable installer and Agent assets for the exact release. Record SHA-256 values through the controlled release process.
+1. Publish immutable installer and Agent assets for the exact release. Sign the version-bound manifest with the offline release key, publish the detached signature, and record the signing-public-key and artifact SHA-256 values through the controlled release process.
 2. Configure the `GUARDIAN_AGENT_INSTALL_*` and Controller trust asset settings. Leave `GUARDIAN_ONE_COMMAND_INSTALL_ENABLED=false` until validation is complete.
 3. Back up the Controller database/configuration and record the current schema and images.
 4. Apply migration `0013_agent_enrollment`; verify migration upgrade/downgrade in isolation.
@@ -94,6 +94,9 @@ Controller rollout rollback is separate:
 Do not modify CRL, firewall, Komari, DNS, or unrelated services as part of this rollback.
 
 ## Upgrade, repair, certificate rotation, and uninstall
+
+The integrated workflow now uses migration `0014_agent_maintenance` and is described
+in [Agent maintenance and decommission](AGENT_MAINTENANCE_AND_DECOMMISSION.md).
 
 Do not reuse an initial-enrollment command for an active Agent. Binary repair or upgrade must preserve the existing identity directory and use a separately approved, fixed-version artifact workflow. Certificate replacement uses the existing dual-identity rotation API; moving a Host between groups does not require reinstallation.
 

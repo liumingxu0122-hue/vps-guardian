@@ -13,6 +13,16 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
   dedicated nftables table and TC handle, while the Agent remains non-root with
   `NoNewPrivileges`; enforcement, reset, and egress shaping require independent
   high-risk approval and host-bound expiring signed tasks.
+- Added reversible migration `0014_agent_maintenance`, isolated hash-only repair,
+  reinstall, identity-rotation, and decommission sessions, host/group RBAC, one-time
+  Web disclosure, heartbeat/identity CAS gates, CRL-gated decommission, and
+  Controller-history preservation.
+- Added an explicit read-only Auditor role; it can inspect maintenance state and
+  audit evidence but cannot issue Agent maintenance or decommission commands.
+- Added detached Ed25519 release-manifest verification before checksum trust,
+  fail-closed version replay protection, ephemeral CI signing tests, and an
+  Ubuntu/Debian/Rocky/Alpine amd64/arm64 container contract matrix. Formal release
+  signing remains blocked until an offline production signing key is provisioned.
 - Added fail-closed, host-bound 10-minute Agent enrollment sessions, hash-only
   bootstrap and progress credentials, optional source CIDR restriction, monotonic
   installation timelines, immediate revoke/regenerate, and reversible migration

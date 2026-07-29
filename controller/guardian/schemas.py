@@ -91,7 +91,7 @@ class UserView(ORMModel):
 class UserCreate(BaseModel):
     email: str = Field(min_length=3, max_length=255)
     password: str = Field(min_length=14, max_length=256)
-    role: Literal["viewer", "operator", "admin", "owner"] = "viewer"
+    role: Literal["viewer", "auditor", "operator", "admin", "owner"] = "viewer"
     scopes: list[str] = Field(default_factory=list, max_length=32)
 
     @field_validator("email")
@@ -117,7 +117,7 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    role: Literal["viewer", "operator", "admin", "owner"] | None = None
+    role: Literal["viewer", "auditor", "operator", "admin", "owner"] | None = None
     is_active: bool | None = None
     scopes: list[str] | None = Field(default=None, max_length=32)
     current_password: str = Field(min_length=12, max_length=256)
@@ -373,6 +373,96 @@ class EnrollmentSessionView(BaseModel):
     error_summary: str | None
     rolled_back: bool
     events: list[EnrollmentEventView]
+
+
+class AgentMaintenanceIssue(BaseModel):
+    kind: Literal["repair", "reinstall", "rotate_identity", "decommission"]
+    source_cidr: str | None = Field(default=None, max_length=64)
+    purge_local_state: bool = False
+    approval_id: str | None = Field(default=None, max_length=36)
+    confirmation: str | None = Field(default=None, max_length=160)
+
+
+class AgentMaintenanceTokenView(BaseModel):
+    id: str
+    host_id: str
+    kind: Literal["repair", "reinstall", "rotate_identity", "decommission"]
+    expires_at: datetime
+    command: str
+    status: str
+
+
+class AgentMaintenanceStart(BaseModel):
+    kind: Literal["repair", "reinstall", "rotate_identity", "decommission"]
+
+
+class AgentMaintenanceStartView(BaseModel):
+    session_id: str
+    host_id: str
+    agent_id: str
+    kind: str
+    progress_token: str
+    expected_identity_version: int
+    purge_local_state: bool
+
+
+class AgentMaintenanceProgress(BaseModel):
+    kind: Literal["repair", "reinstall", "rotate_identity", "decommission"]
+    status: Literal[
+        "artifact_verified",
+        "service_stopped",
+        "identity_rotated",
+        "service_started",
+        "heartbeat_verified",
+        "confirmation_pending",
+        "completed",
+        "failed",
+        "rolled_back",
+    ]
+    error_code: str | None = Field(default=None, max_length=64)
+    error_summary: str | None = Field(default=None, max_length=240)
+    rolled_back: bool = False
+
+
+class AgentMaintenanceEventView(ORMModel):
+    status: str
+    status_sequence: int
+    occurred_at: datetime
+    error_code: str | None
+    error_summary: str | None
+    rolled_back: bool
+
+
+class AgentMaintenanceSessionView(ORMModel):
+    id: str
+    host_id: str
+    agent_id: str
+    kind: str
+    status: str
+    status_sequence: int
+    source_cidr: str | None
+    purge_local_state: bool
+    expected_identity_version: int
+    old_identity_id: str | None
+    new_identity_id: str | None
+    approval_id: str | None
+    expires_at: datetime
+    used_at: datetime | None
+    revoked_at: datetime | None
+    completed_at: datetime | None
+    error_code: str | None
+    error_summary: str | None
+    rolled_back: bool
+    created_at: datetime
+    status_updated_at: datetime
+    events: list[AgentMaintenanceEventView]
+
+
+class AgentMaintenanceFinalize(BaseModel):
+    confirmation: str = Field(min_length=1, max_length=160)
+    expected_identity_version: int = Field(ge=1)
+    crl_number: int | None = Field(default=None, ge=1)
+    crl_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class EnrollmentProgressReport(BaseModel):

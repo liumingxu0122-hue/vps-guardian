@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, Copy, KeyRound, Plus, Power, RefreshCw, Search, Server, Trash2, X } from '@lucide/vue'
+import { Activity, Check, Copy, KeyRound, Plus, Power, RefreshCw, RotateCcw, Search, Server, ShieldX, Trash2, Wrench, X } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -12,9 +12,10 @@ import DataTable from '../components/v3/DataTable.vue'
 import DetailDrawer from '../components/v3/DetailDrawer.vue'
 import StatusBadge from '../components/v3/StatusBadge.vue'
 import { enrollmentSecondsRemaining as secondsRemaining, isTerminalEnrollment } from '../enrollment'
+import { canIssueMaintenance, canViewMaintenance, destroyMaintenanceDisclosure } from '../maintenance'
 import { agentLabel, dataReasonLabel, healthLabel, healthTone, managementLabel, regionLabel } from '../presentationRegistry'
 import { session } from '../session'
-import type { EnrollmentSession, EnrollmentToken, Host, HostPresentation, LatestSnapshot } from '../types'
+import type { AgentMaintenanceSession, AgentMaintenanceToken, EnrollmentSession, EnrollmentToken, Host, HostPresentation, LatestSnapshot } from '../types'
 import { formatBytes, formatDuration, percentUsed, relativeTime } from '../utils'
 
 const { locale, t } = useI18n()
@@ -36,12 +37,21 @@ const loading = ref(true)
 const loadError = ref('')
 const dialog = ref<HTMLDialogElement | null>(null)
 const tokenDialog = ref<HTMLDialogElement | null>(null)
+const maintenanceDialog = ref<HTMLDialogElement | null>(null)
 const issuedToken = ref<EnrollmentToken | null>(null)
 const enrollmentSession = ref<EnrollmentSession | null>(null)
 const enrollmentError = ref('')
 const copied = ref(false)
 const creating = ref(false)
 const formError = ref('')
+const maintenanceKind = ref<AgentMaintenanceToken['kind']>('repair')
+const maintenanceToken = ref<AgentMaintenanceToken | null>(null)
+const maintenanceStatus = ref<AgentMaintenanceSession | null>(null)
+const maintenanceError = ref('')
+const maintenanceTypedConfirmation = ref('')
+const maintenanceConfirmed = ref(false)
+const maintenancePurge = ref(false)
+const maintenanceApprovalId = ref('')
 const selectedIds = ref(new Set<string>())
 const batchGroup = ref('')
 const batchTag = ref('')
@@ -59,6 +69,9 @@ let enrollmentPoll: ReturnType<typeof setInterval> | null = null
 
 const canAddHost = computed(() => ['admin', 'owner'].includes(session.user?.role ?? 'viewer'))
 const canIssueEnrollment = computed(() => ['operator', 'admin', 'owner'].includes(session.user?.role ?? 'viewer'))
+const canRepairAgent = computed(() => canIssueMaintenance(session.user?.role, 'repair'))
+const canAdminAgent = computed(() => canIssueMaintenance(session.user?.role, 'reinstall'))
+const canViewAgentMaintenance = computed(() => canViewMaintenance(session.user?.role))
 const filtered = computed(() => {
   const needle = query.value.trim().toLocaleLowerCase()
   const values = hosts.value.filter((host) => {
@@ -120,6 +133,72 @@ async function load(): Promise<void> {
   } finally {
     loading.value = false
   }
+}
+
+function destroyMaintenanceCommand(): void {
+  maintenanceToken.value = destroyMaintenanceDisclosure(maintenanceToken.value)
+  maintenanceTypedConfirmation.value = ''
+  maintenanceConfirmed.value = false
+}
+
+function openMaintenance(kind: AgentMaintenanceToken['kind']): void {
+  maintenanceKind.value = kind
+  maintenanceStatus.value = null
+  maintenanceError.value = ''
+  maintenancePurge.value = false
+  maintenanceApprovalId.value = ''
+  destroyMaintenanceCommand()
+  maintenanceDialog.value?.showModal()
+}
+
+async function loadMaintenanceStatus(): Promise<void> {
+  if (!selected.value) return
+  maintenanceError.value = ''
+  try {
+    maintenanceStatus.value = await request<AgentMaintenanceSession>(
+      `/api/v1/hosts/${selected.value.id}/maintenance-sessions/latest`,
+    )
+    maintenanceKind.value = maintenanceStatus.value.kind
+    maintenanceDialog.value?.showModal()
+  } catch {
+    maintenanceError.value = t('hosts.maintenanceStatusFailed')
+    maintenanceDialog.value?.showModal()
+  }
+}
+
+async function issueMaintenance(): Promise<void> {
+  if (!selected.value) return
+  maintenanceError.value = ''
+  if (maintenanceKind.value === 'decommission' && (
+    !maintenanceConfirmed.value ||
+    maintenanceTypedConfirmation.value !== selected.value.name ||
+    !maintenanceApprovalId.value
+  )) {
+    maintenanceError.value = t('hosts.decommissionConfirmationRequired')
+    return
+  }
+  try {
+    maintenanceToken.value = await request<AgentMaintenanceToken>(
+      `/api/v1/hosts/${selected.value.id}/maintenance-sessions`,
+      {
+        method: 'POST',
+        ...jsonBody({
+          kind: maintenanceKind.value,
+          purge_local_state: maintenancePurge.value,
+          approval_id: maintenanceApprovalId.value || null,
+          confirmation: maintenanceKind.value === 'decommission'
+            ? `DECOMMISSION ${selected.value.name}`
+            : null,
+        }),
+      },
+    )
+  } catch {
+    maintenanceError.value = t('hosts.maintenanceIssueFailed')
+  }
+}
+
+async function copyMaintenanceCommand(): Promise<void> {
+  if (maintenanceToken.value?.command) await navigator.clipboard.writeText(maintenanceToken.value.command)
 }
 
 async function selectHost(host: HostPresentation): Promise<void> {
@@ -424,10 +503,15 @@ onUnmounted(() => {
         <EmptyState v-else :title="t('hosts.noMetrics')" />
       </section>
       <details class="rc5-technical"><summary>{{ locale === 'zh-CN' ? '技术信息' : 'Technical details' }}</summary><dl><div><dt>ID</dt><dd class="mono">{{ selected.id }}</dd></div><div><dt>{{ t('hosts.address') }}</dt><dd class="mono">{{ selected.primary_address }}</dd></div></dl></details>
-      <div v-if="canAddHost || canIssueEnrollment" class="rc5-drawer-actions">
+      <div v-if="canAddHost || canIssueEnrollment || canViewAgentMaintenance" class="rc5-drawer-actions">
         <button v-if="canAddHost" class="secondary-button" type="button" @click="setEnabled(selected)"><Power :size="15" />{{ selected.enabled ? t('hosts.disable') : t('hosts.enable') }}</button>
         <button v-if="canIssueEnrollment && !selected.enrolled_at" class="secondary-button" type="button" @click="issueEnrollment(selected.id)"><KeyRound :size="15" />{{ t('hosts.issueToken') }}</button>
         <button v-if="canAddHost && !selected.enrolled_at" class="secondary-button danger" type="button" @click="deleteHost(selected)"><Trash2 :size="15" />{{ t('hosts.delete') }}</button>
+        <button v-if="canViewAgentMaintenance && selected.enrolled_at" class="secondary-button" type="button" @click="loadMaintenanceStatus"><Activity :size="15" />{{ t('hosts.agentStatus') }}</button>
+        <button v-if="canRepairAgent && selected.enrolled_at" class="secondary-button" type="button" @click="openMaintenance('repair')"><Wrench :size="15" />{{ t('hosts.repairAgent') }}</button>
+        <button v-if="canAdminAgent && selected.enrolled_at" class="secondary-button" type="button" @click="openMaintenance('reinstall')"><RefreshCw :size="15" />{{ t('hosts.reinstallAgent') }}</button>
+        <button v-if="canAdminAgent && selected.enrolled_at" class="secondary-button" type="button" @click="openMaintenance('rotate_identity')"><RotateCcw :size="15" />{{ t('hosts.rotateIdentity') }}</button>
+        <button v-if="canAdminAgent && selected.enrolled_at" class="secondary-button danger" type="button" @click="openMaintenance('decommission')"><ShieldX :size="15" />{{ t('hosts.decommissionAgent') }}</button>
       </div>
     </div>
   </DetailDrawer>
@@ -467,6 +551,31 @@ onUnmounted(() => {
         <button v-if="enrollmentSession && ['failed', 'expired', 'revoked'].includes(enrollmentSession.status)" class="secondary-button" type="button" @click="regenerateEnrollment">{{ t('hosts.regenerateEnrollment') }}</button>
         <button class="primary-button" type="button" @click="tokenDialog?.close()">{{ t('common.done') }}</button>
       </div>
+    </div>
+  </dialog>
+  <dialog ref="maintenanceDialog" class="modal-dialog" @close="destroyMaintenanceCommand">
+    <form method="dialog" class="dialog-header"><div><h2>{{ t(`hosts.maintenance.${maintenanceKind}`) }}</h2><p>{{ t('hosts.maintenanceBoundary') }}</p></div><button class="icon-button" :aria-label="t('common.close')"><X :size="18" /></button></form>
+    <div class="dialog-form">
+      <template v-if="maintenanceStatus">
+        <dl class="metric-facts"><div><dt>{{ t('hosts.maintenanceState') }}</dt><dd>{{ maintenanceStatus.status }}</dd></div><div><dt>{{ t('hosts.maintenanceMode') }}</dt><dd>{{ maintenanceStatus.kind }}</dd></div></dl>
+        <ol class="enrollment-timeline"><li v-for="event in maintenanceStatus.events" :key="`${event.status_sequence}-${event.status}`"><strong>{{ event.status }}</strong><small>{{ relativeTime(event.occurred_at) }}</small><span v-if="event.error_summary">{{ event.error_summary }}</span></li></ol>
+      </template>
+      <template v-else-if="maintenanceToken">
+        <p class="muted">{{ t('hosts.maintenanceOneTime') }}</p>
+        <label><span>{{ t('hosts.maintenanceCommand') }}</span><textarea class="mono command-output" readonly :value="maintenanceToken.command"></textarea></label>
+      </template>
+      <template v-else>
+        <template v-if="maintenanceKind === 'decommission'">
+          <p class="form-error">{{ t('hosts.decommissionWarning') }}</p>
+          <label><span>{{ t('hosts.approvalId') }}</span><input v-model="maintenanceApprovalId" autocomplete="off" /></label>
+          <label><input v-model="maintenanceConfirmed" type="checkbox" /> {{ t('hosts.decommissionCheck') }}</label>
+          <label><span>{{ t('hosts.typeHostName') }}</span><input v-model="maintenanceTypedConfirmation" autocomplete="off" /></label>
+          <label><input v-model="maintenancePurge" type="checkbox" /> {{ t('hosts.purgeLocalState') }}</label>
+        </template>
+        <button class="primary-button" type="button" @click="issueMaintenance">{{ t('hosts.generateMaintenanceCommand') }}</button>
+      </template>
+      <p v-if="maintenanceError" class="form-error" role="alert">{{ maintenanceError }}</p>
+      <div class="dialog-actions"><button v-if="maintenanceToken" class="secondary-button" type="button" @click="copyMaintenanceCommand"><Copy :size="15" />{{ t('common.copy') }}</button><button class="primary-button" type="button" @click="maintenanceDialog?.close()">{{ t('common.done') }}</button></div>
     </div>
   </dialog>
 </template>

@@ -38,6 +38,16 @@ jobs:
       - run: ruff check .
       - run: mypy controller
       - run: sudo "$(command -v pytest)"
+      - name: PostgreSQL 0014 forward and rollback migration
+        env:
+          GUARDIAN_ENVIRONMENT: test
+          GUARDIAN_DATABASE_URL: postgresql+psycopg://guardian_test:guardian_test@127.0.0.1:5432/guardian_test
+          GUARDIAN_ONE_COMMAND_INSTALL_ENABLED: 'false'
+        run: |
+          alembic -c controller/alembic.ini upgrade head
+          test "$(alembic -c controller/alembic.ini current)" != ""
+          alembic -c controller/alembic.ini downgrade 0013_agent_enrollment
+          alembic -c controller/alembic.ini upgrade head
       - run: pip-audit --requirement requirements.lock --disable-pip
       - run: python -m pip wheel --no-deps --wheel-dir /tmp/vps-guardian-wheel .
       - run: python -m venv /tmp/vps-guardian-wheel-test
@@ -52,8 +62,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes shellcheck
-          shellcheck scripts/install-agent.sh scripts/uninstall-agent.sh
-          sh -n scripts/install-agent.sh scripts/uninstall-agent.sh
+          shellcheck scripts/install-agent.sh scripts/maintain-agent.sh scripts/uninstall-agent.sh
+          sh -n scripts/install-agent.sh scripts/maintain-agent.sh scripts/uninstall-agent.sh
       - uses: actions/setup-go@v5
         with:
           go-version-file: agent/go.mod
@@ -85,6 +95,7 @@ jobs:
         run: |
           install -d -m 0755 /tmp/vps-guardian-agent-release/sbom
           install -m 0755 ../scripts/install-agent.sh /tmp/vps-guardian-agent-release/install-agent.sh
+          install -m 0755 ../scripts/maintain-agent.sh /tmp/vps-guardian-agent-release/maintain-agent.sh
           version=0.4.0-ci
           build_time=1970-01-01T00:00:00Z
           build_id_prefix="${version}+$(printf '%s' "$GITHUB_SHA" | cut -c1-12)"
@@ -121,9 +132,25 @@ jobs:
             cd /tmp/vps-guardian-agent-release
             sha256sum \
               install-agent.sh \
+              maintain-agent.sh \
               vps-guardian-agent-linux-amd64 \
               vps-guardian-agent-linux-arm64 \
               > checksums.sha256
+            printf 'version=v%s\n' "$version" > install-manifest.txt
+            printf 'sha256_install_agent=%s\n' "$(sha256sum install-agent.sh | awk '{print $1}')" >> install-manifest.txt
+            printf 'sha256_maintain_agent=%s\n' "$(sha256sum maintain-agent.sh | awk '{print $1}')" >> install-manifest.txt
+            printf 'sha256_linux_amd64=%s\n' "$(sha256sum vps-guardian-agent-linux-amd64 | awk '{print $1}')" >> install-manifest.txt
+            printf 'sha256_linux_arm64=%s\n' "$(sha256sum vps-guardian-agent-linux-arm64 | awk '{print $1}')" >> install-manifest.txt
+            signing_dir="$(mktemp -d)"
+            trap 'rm -rf -- "$signing_dir"' EXIT HUP INT TERM
+            openssl genpkey -algorithm ED25519 -out "$signing_dir/private.pem"
+            openssl pkey -in "$signing_dir/private.pem" -pubout -out release-signing-ed25519.pem
+            openssl pkeyutl -sign -inkey "$signing_dir/private.pem" -rawin \
+              -in install-manifest.txt -out install-manifest.txt.sig
+            openssl pkeyutl -verify -pubin -inkey release-signing-ed25519.pem -rawin \
+              -in install-manifest.txt -sigfile install-manifest.txt.sig
+            test ! -e private.pem
+            ! grep -R -l -- 'BEGIN PRIVATE KEY' ./
           )
       - name: Agent release artifacts
         uses: actions/upload-artifact@v4
@@ -132,6 +159,48 @@ jobs:
           path: /tmp/vps-guardian-agent-release
           if-no-files-found: error
           retention-days: 14
+
+  agent-install-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distribution: [ubuntu, debian, rocky, alpine]
+        architecture: [amd64, arm64]
+        include:
+          - distribution: ubuntu
+            image: ubuntu:24.04
+          - distribution: debian
+            image: debian:12
+          - distribution: rocky
+            image: rockylinux:9
+          - distribution: alpine
+            image: alpine:3.21
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - name: Installer filesystem and cryptographic contract
+        env:
+          DISTRO: ${{ matrix.distribution }}
+          IMAGE: ${{ matrix.image }}
+          ARCH: ${{ matrix.architecture }}
+        run: |
+          case "$DISTRO" in
+            ubuntu|debian)
+              packages='apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssl coreutils grep sed'
+              ;;
+            rocky)
+              packages='dnf install -y openssl coreutils grep sed'
+              ;;
+            alpine)
+              packages='apk add --no-cache openssl coreutils grep sed'
+              ;;
+          esac
+          docker run --rm --platform "linux/$ARCH" \
+            -e "EXPECTED_DISTRIBUTION=$DISTRO" \
+            -e "EXPECTED_ARCHITECTURE=$ARCH" \
+            -v "$PWD:/workspace:ro" -w /workspace "$IMAGE" \
+            sh -ec "$packages; sh tests/container/agent-installer-contract.sh"
 
   web:
     runs-on: ubuntu-latest

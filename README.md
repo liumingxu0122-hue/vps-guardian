@@ -90,6 +90,12 @@ The final command securely prompts for the administrator email and hidden passwo
 
 From **Hosts → Add server**, an Admin or Owner can create a host-bound 10-minute enrollment session and copy one verified, fixed-release install command. The Agent generates its private keys and CSR locally; the Controller stores only credential hashes. The feature is disabled until immutable asset URLs and SHA-256 values are configured. See [one-command enrollment](docs/en/ONE_COMMAND_AGENT_ENROLLMENT.md) and [manual Agent installation](docs/en/AGENT_INSTALLATION.md).
 
+Existing Agents use separate, hash-only repair/reinstall/decommission sessions;
+initial enrollment credentials are never reused. Signed-manifest verification,
+identity-generation switching, CRL-gated decommission, rollback boundaries, and
+remaining two-node Staging gates are documented in
+[Agent maintenance and decommission](docs/en/AGENT_MAINTENANCE_AND_DECOMMISSION.md).
+
 The UI generates the complete command; this non-runnable shape intentionally uses placeholders:
 
 ```sh

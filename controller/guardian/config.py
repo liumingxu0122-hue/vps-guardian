@@ -73,8 +73,17 @@ class Settings(BaseSettings):
         "https://github.com/liumingxu0122-hue/vps-guardian/releases/download"
     )
     agent_installer_sha256: str = Field(default="", max_length=64)
+    agent_maintenance_script_sha256: str = Field(default="", max_length=64)
     agent_binary_amd64_sha256: str = Field(default="", max_length=64)
     agent_binary_arm64_sha256: str = Field(default="", max_length=64)
+    agent_release_manifest_url: str = "https://downloads.example.com/SHA256SUMS"
+    agent_release_manifest_signature_url: str = (
+        "https://downloads.example.com/SHA256SUMS.sig"
+    )
+    agent_release_signing_public_key_url: str = (
+        "https://downloads.example.com/release-signing-ed25519.pem"
+    )
+    agent_release_signing_public_key_sha256: str = Field(default="", max_length=64)
     agent_controller_ca_url: str = "https://downloads.example.com/controller-ca.crt"
     agent_controller_ca_sha256: str = Field(default="", max_length=64)
     agent_controller_public_key_url: str = (
@@ -126,6 +135,9 @@ class Settings(BaseSettings):
                 self.agent_install_assets_base_url,
                 self.agent_controller_ca_url,
                 self.agent_controller_public_key_url,
+                self.agent_release_manifest_url,
+                self.agent_release_manifest_signature_url,
+                self.agent_release_signing_public_key_url,
             )
             for value in urls:
                 parsed = urlparse(value)
@@ -142,10 +154,12 @@ class Settings(BaseSettings):
                     )
             hashes = (
                 self.agent_installer_sha256,
+                self.agent_maintenance_script_sha256,
                 self.agent_binary_amd64_sha256,
                 self.agent_binary_arm64_sha256,
                 self.agent_controller_ca_sha256,
                 self.agent_controller_public_key_sha256,
+                self.agent_release_signing_public_key_sha256,
             )
             if any(
                 not re.fullmatch(r"[a-f0-9]{64}", value)

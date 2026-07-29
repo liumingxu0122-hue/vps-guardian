@@ -4,7 +4,7 @@
 
 ## 范围与发布门禁
 
-本流程在 **主机 → 添加服务器** 中登记服务器，然后为目标 Linux 主机生成一条命令。功能默认关闭。只有配置固定发布版本、无凭据 HTTPS 资源地址，以及安装器、两种 Agent 架构、Controller CA 和 Controller 签名公钥的精确 SHA-256 后才可启用；缺失或占位值会失败关闭。
+本流程在 **主机 → 添加服务器** 中登记服务器，然后为目标 Linux 主机生成一条命令。功能默认关闭。只有配置固定发布版本、无凭据 HTTPS 资源地址、Ed25519 分离清单签名、独立固定的发布公钥 SHA-256，以及安装器、两种 Agent 架构、Controller CA 和 Controller 签名公钥的精确 SHA-256 后才可启用；缺失或占位值会失败关闭。
 
 支持 `amd64`、`arm64` 的 Ubuntu、Debian、Rocky Linux、AlmaLinux、RHEL、Fedora 和 Alpine。`generic` 仅供操作员明确选择其他使用 systemd 或 OpenRC 的 Linux，不代表自动兼容。
 
@@ -47,7 +47,7 @@ Agent 在本机生成 P-256 TLS 私钥、CSR 和 Ed25519 请求签名私钥。Co
 | --- | --- | --- |
 | 命令复制到错误主机 | Host 绑定、10 分钟过期、可选来源 CIDR、立即撤销/重生成 | 允许来源若先使用泄漏命令，仍可能抢先注册 |
 | Token 经 URL 或日志泄漏 | Header 传输、只存摘要、安全错误、审计不含 Token | 一条命令可能保留在目标机 Shell 历史 |
-| 安装包被替换 | 无凭据 HTTPS、精确 SHA-256、固定版本 | 发布流程尚无签名机制时，不能提供独立签名校验 |
+| 安装包被替换 | 无凭据 HTTPS、固定版本、独立固定的 Ed25519 清单签名，然后校验精确 SHA-256 | 离线正式发布私钥配置前，正式发布授权保持 BLOCKED |
 | Controller 被冒充 | 固定 Controller CA、TLS 1.3 | CA 泄漏仍属于根信任事件 |
 | 私钥外泄 | 本机生成、原子 `0600` 文件、非 root 服务 | Agent 主机 root 仍可读取 |
 | 安装中断 | 变更前备份、哈希清单、服务状态记录、失败 Trap、限定范围回滚 | 断电可能中断回滚，需保留备份目录 |
@@ -56,7 +56,7 @@ Agent 在本机生成 P-256 TLS 私钥、CSR 和 Ed25519 请求签名私钥。Co
 
 ## 操作流程
 
-1. 发布固定版本的安装器和 Agent 资源，通过受控流程记录 SHA-256。
+1. 发布固定版本的安装器和 Agent 资源；使用离线发布私钥签署版本绑定清单，发布分离签名，并通过受控流程记录发布公钥和制品 SHA-256。
 2. 配置 `GUARDIAN_AGENT_INSTALL_*` 与 Controller 信任资源；验证完成前保持 `GUARDIAN_ONE_COMMAND_INSTALL_ENABLED=false`。
 3. 备份 Controller 数据库与配置，记录当前 schema 和镜像。
 4. 在隔离环境验证迁移 `0013_agent_enrollment` 的升级和降级。
@@ -94,6 +94,9 @@ Controller 发布回滚是独立流程：
 本回滚不得修改 CRL、防火墙、Komari、DNS 或无关服务。
 
 ## 升级、修复、证书轮换与卸载
+
+集成流程使用 `0014_agent_maintenance`，详见
+[Agent 维护与退役](AGENT_MAINTENANCE_AND_DECOMMISSION.md)。
 
 不得对在线 Agent 重用初次注册命令。二进制修复或升级必须保留现有身份目录，并使用单独批准的固定版本产物流程。证书替换继续使用既有双身份轮换 API；Host 转移分组不要求重新安装。
 

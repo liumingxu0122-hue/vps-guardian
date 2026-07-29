@@ -14,6 +14,10 @@ server_ca_url=''
 server_ca_sha256=''
 controller_public_key_url=''
 controller_public_key_sha256=''
+release_manifest_url=''
+release_manifest_signature_url=''
+release_signing_public_key_url=''
+release_signing_public_key_sha256=''
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -30,6 +34,10 @@ while [ "$#" -gt 0 ]; do
     --server-ca-sha256) server_ca_sha256="$2"; shift 2 ;;
     --controller-public-key-url) controller_public_key_url="$2"; shift 2 ;;
     --controller-public-key-sha256) controller_public_key_sha256="$2"; shift 2 ;;
+    --release-manifest-url) release_manifest_url="$2"; shift 2 ;;
+    --release-manifest-signature-url) release_manifest_signature_url="$2"; shift 2 ;;
+    --release-signing-public-key-url) release_signing_public_key_url="$2"; shift 2 ;;
+    --release-signing-public-key-sha256) release_signing_public_key_sha256="$2"; shift 2 ;;
     *) echo "unknown option" >&2; exit 64 ;;
   esac
 done
@@ -37,7 +45,9 @@ done
 for value in "$controller_url" "$host_id" "$enrollment_token_file" "$release_version" "$os_family" \
   "$agent_url_amd64" "$agent_sha256_amd64" "$agent_url_arm64" "$agent_sha256_arm64" \
   "$server_ca_url" "$server_ca_sha256" "$controller_public_key_url" \
-  "$controller_public_key_sha256"; do
+  "$controller_public_key_sha256" "$release_manifest_url" \
+  "$release_manifest_signature_url" "$release_signing_public_key_url" \
+  "$release_signing_public_key_sha256"; do
   [ -n "$value" ] || { echo "required installation option is missing" >&2; exit 64; }
 done
 
@@ -48,7 +58,8 @@ fi
 
 case "$controller_url" in https://*) ;; *) echo "Controller URL must use HTTPS" >&2; exit 64 ;; esac
 for url in "$agent_url_amd64" "$agent_url_arm64" "$server_ca_url" \
-  "$controller_public_key_url"; do
+  "$controller_public_key_url" "$release_manifest_url" \
+  "$release_manifest_signature_url" "$release_signing_public_key_url"; do
   case "$url" in
     https://*) ;;
     *) echo "all download URLs must use HTTPS" >&2; exit 64 ;;
@@ -80,14 +91,14 @@ for existing_config_directory in /etc/vps-guardian/agent /etc/vps-guardian-agent
   fi
 done
 for digest in "$agent_sha256_amd64" "$agent_sha256_arm64" "$server_ca_sha256" \
-  "$controller_public_key_sha256"; do
+  "$controller_public_key_sha256" "$release_signing_public_key_sha256"; do
   case "$digest" in
     *[!a-f0-9]*|'') echo "SHA-256 value is invalid" >&2; exit 64 ;;
   esac
   [ "${#digest}" -eq 64 ] || { echo "SHA-256 value is invalid" >&2; exit 64; }
 done
 
-for command in curl sha256sum install mv cp rm chmod chown id getent date mktemp \
+for command in curl sha256sum openssl install mv cp rm chmod chown id getent date mktemp \
   uname grep sed tr head dirname find ln sort base64 wc; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "missing prerequisite: $command" >&2
@@ -205,6 +216,47 @@ rollback() {
   exit "$status"
 }
 trap rollback EXIT
+
+failure_step="release manifest verification"
+curl --fail --show-error --location --proto '=https' \
+  --connect-timeout 10 --max-time 60 \
+  -o "$work_directory/release-manifest" "$release_manifest_url"
+curl --fail --show-error --location --proto '=https' \
+  --connect-timeout 10 --max-time 60 \
+  -o "$work_directory/release-manifest.sig" "$release_manifest_signature_url"
+curl --fail --show-error --location --proto '=https' \
+  --connect-timeout 10 --max-time 60 \
+  -o "$work_directory/release-signing-public-key.pem" "$release_signing_public_key_url"
+printf '%s  %s\n' "$release_signing_public_key_sha256" \
+  "$work_directory/release-signing-public-key.pem" | sha256sum --check --status || {
+    echo "release signing public key checksum mismatch" >&2
+    exit 65
+  }
+openssl pkeyutl -verify -pubin -inkey "$work_directory/release-signing-public-key.pem" \
+  -rawin -in "$work_directory/release-manifest" \
+  -sigfile "$work_directory/release-manifest.sig" >/dev/null 2>&1 || {
+    echo "release manifest signature verification failed" >&2
+    exit 65
+  }
+manifest_version="$(sed -n 's/^version=//p' "$work_directory/release-manifest")"
+[ "$manifest_version" = "$release_version" ] || {
+  echo "signed release manifest version mismatch or replay detected" >&2
+  exit 65
+}
+manifest_amd64="$(sed -n 's/^sha256_linux_amd64=//p' "$work_directory/release-manifest")"
+manifest_arm64="$(sed -n 's/^sha256_linux_arm64=//p' "$work_directory/release-manifest")"
+manifest_installer="$(sed -n 's/^sha256_install_agent=//p' "$work_directory/release-manifest")"
+[ -f "$0" ] && [ ! -L "$0" ] || exit 65
+actual_installer="$(sha256sum "$0" | sed 's/ .*//')"
+[ "$manifest_installer" = "$actual_installer" ] || {
+  echo "signed release manifest does not match this installer" >&2
+  exit 65
+}
+[ "$manifest_amd64" = "$agent_sha256_amd64" ] &&
+  [ "$manifest_arm64" = "$agent_sha256_arm64" ] || {
+    echo "signed release manifest does not match Controller-pinned checksums" >&2
+    exit 65
+  }
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM

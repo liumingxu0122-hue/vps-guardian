@@ -66,6 +66,10 @@ def test_generated_command_uses_token_file_and_complete_installer_contract() -> 
         "--server-ca-sha256",
         "--controller-public-key-url",
         "--controller-public-key-sha256",
+        "--release-manifest-url",
+        "--release-manifest-signature-url",
+        "--release-signing-public-key-url",
+        "--release-signing-public-key-sha256",
     ):
         assert option in command_builder
         assert option in installer
@@ -106,6 +110,7 @@ def test_runtime_entrypoints_are_executable_in_git() -> None:
             "--stage",
             "deploy/agent-gateway-entrypoint.sh",
             "scripts/install-agent.sh",
+            "scripts/maintain-agent.sh",
         ],
         check=True,
         capture_output=True,

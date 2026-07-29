@@ -103,6 +103,34 @@ func executeCLI(
 	if len(arguments) > 0 && arguments[0] == "bootstrap" {
 		return executeBootstrapCLI(arguments[1:], stdout, stderr)
 	}
+	if len(arguments) > 0 && arguments[0] == "rotate-identity" {
+		flags := flag.NewFlagSet("rotate-identity", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		configPath := flags.String("config", "/etc/vps-guardian-agent/config.json", "absolute config path")
+		expectedVersion := flags.Int("expected-version", 0, "Controller identity CAS version")
+		timeout := flags.Duration("timeout", 90*time.Second, "rotation timeout")
+		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *expectedVersion < 1 {
+			return 2
+		}
+		config, err := dependencies.loadConfig(*configPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "configuration error: %v\n", err)
+			return 1
+		}
+		client, err := NewControllerClient(config)
+		if err != nil {
+			fmt.Fprintf(stderr, "identity rotation client error: %v\n", err)
+			return 1
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+		defer cancel()
+		if _, err := client.RenewCertificate(ctx, *expectedVersion); err != nil {
+			fmt.Fprintf(stderr, "identity rotation failed: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "Agent identity generation switched atomically")
+		return 0
+	}
 	flags := flag.NewFlagSet("guardian-agent", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String(

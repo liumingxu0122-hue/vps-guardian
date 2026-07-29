@@ -320,6 +320,7 @@ def get_current_user(
 
 ROLE_ORDER = {
     Role.viewer.value: 0,
+    Role.auditor.value: 0,
     Role.operator.value: 1,
     Role.admin.value: 2,
     Role.owner.value: 3,

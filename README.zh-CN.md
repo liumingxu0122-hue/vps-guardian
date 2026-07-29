@@ -91,6 +91,10 @@ docker compose exec -it controller controller-entrypoint guardian-admin create-u
 
 Admin 或 Owner 可在 **主机 → 添加服务器** 中创建与 Host 绑定的 10 分钟注册会话，并复制一条已校验、固定版本的安装命令。Agent 在本机生成私钥和 CSR，Controller 只保存凭据摘要。固定资源地址和 SHA-256 未配置前功能保持关闭。参见 [Agent 一条命令注册](docs/zh-CN/ONE_COMMAND_AGENT_ENROLLMENT.md)和[手工 Agent 安装](docs/zh-CN/AGENT_INSTALLATION.md)。
 
+已有 Agent 使用独立、只存哈希的修复/重装/退役会话，绝不复用首次注册凭据。
+签名清单校验、身份代际切换、CRL 门禁退役、回滚边界和剩余双节点 Staging
+门禁参见 [Agent 维护与退役](docs/zh-CN/AGENT_MAINTENANCE_AND_DECOMMISSION.md)。
+
 完整命令由页面生成；下面仅展示不可直接运行的占位结构：
 
 ```sh
