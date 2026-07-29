@@ -19,8 +19,13 @@ from guardian.models import (
     Approval,
     Incident,
     IncidentStatus,
+    PortTrafficPolicy,
+    PortTrafficResetEvent,
+    PortTrafficRuntimeState,
+    PortTrafficSample,
     RepairAttempt,
 )
+from guardian.port_traffic import next_reset_at
 from guardian.redaction import redact_structure
 from guardian.runbooks import RepairOrchestrator, load_runbook
 from guardian.schemas import AgentHeartbeat
@@ -28,6 +33,11 @@ from guardian.schemas import AgentHeartbeat
 STAGING_PROFILE = "staging_acceptance"
 STAGE_ID = re.compile(r"^[a-f0-9]{32}$")
 TERMINAL_TASK_STATES = {"succeeded", "failed"}
+PORT_TRAFFIC_ACTIONS = {
+    "port_traffic_apply",
+    "port_traffic_remove",
+    "port_traffic_reset",
+}
 
 
 @dataclass(slots=True)
@@ -579,6 +589,8 @@ def record_agent_results(db: Session, agent: Agent, events: list[dict[str, Any]]
             "after": result.get("after", {}),
             "exit_code": result.get("exit_code"),
         }
+        if task.action in PORT_TRAFFIC_ACTIONS:
+            _record_port_traffic_result(db, task)
         changed_task_ids.add(task.id)
         write_audit(
             db,
@@ -633,6 +645,114 @@ def record_agent_results(db: Session, agent: Agent, events: list[dict[str, Any]]
             outcome="success" if attempt.success else "failed",
             details={"runbook": attempt.action, "dry_run": attempt.dry_run},
         )
+
+
+def _record_port_traffic_result(db: Session, task: AgentTask) -> None:
+    policy_id = task.parameters.get("policy_id", "")
+    policy = db.get(PortTrafficPolicy, policy_id)
+    if policy is None:
+        return
+    runtime = db.get(PortTrafficRuntimeState, policy.id)
+    if task.status != "succeeded":
+        policy.status = "error"
+        if runtime is not None:
+            runtime.runtime_rule_state = "error"
+            runtime.restore_error = "Agent helper operation failed"
+            runtime.updated_at = datetime.now(UTC)
+            if task.action == "port_traffic_reset" and task.parameters.get(
+                "scheduled_for"
+            ):
+                try:
+                    scheduled_for = datetime.fromisoformat(
+                        str(task.parameters["scheduled_for"])
+                    )
+                except ValueError:
+                    scheduled_for = datetime.now(UTC)
+                runtime.next_reset_at = next_reset_at(
+                    policy.reset_policy,
+                    after=scheduled_for,
+                )
+    elif task.parameters.get("dry_run") != "true":
+        if task.action == "port_traffic_apply":
+            policy.mode = str(task.parameters.get("mode", policy.mode))
+            rate = int(str(task.parameters.get("egress_rate_bps", "0")))
+            policy.egress_rate_bps = rate or None
+            policy.approved_by = task.approver_id
+            policy.status = "active"
+            approval = db.get(Approval, task.approval_id) if task.approval_id else None
+            if (
+                approval is not None
+                and approval.action_name == "port_traffic_reset_schedule_change"
+            ):
+                try:
+                    reset_policy = json.loads(
+                        str(task.parameters.get("reset_policy", "{}"))
+                    )
+                    if not isinstance(reset_policy, dict):
+                        raise ValueError
+                    policy.reset_policy = reset_policy
+                except (TypeError, ValueError):
+                    policy.status = "error"
+                    if runtime is not None:
+                        runtime.restore_error = "approved reset schedule is invalid"
+                else:
+                    policy.reset_approval_id = approval.id
+                    policy.reset_requested_by = approval.requested_by
+                    policy.reset_approved_by = task.approver_id
+                    if runtime is not None:
+                        runtime.next_reset_at = next_reset_at(policy.reset_policy)
+                        runtime.restore_error = None
+        elif task.action == "port_traffic_remove":
+            policy.status = "disabled"
+        else:
+            previous = db.scalar(
+                select(PortTrafficSample)
+                .where(PortTrafficSample.policy_id == policy.id)
+                .order_by(PortTrafficSample.collected_at.desc())
+                .limit(1)
+            )
+            before_generation = (
+                runtime.counter_generation if runtime is not None else policy.generation
+            )
+            after = task.result.get("after", {}) if isinstance(task.result, dict) else {}
+            try:
+                new_generation = int(
+                    after.get("counter_generation", before_generation + 1)
+                    if isinstance(after, dict)
+                    else before_generation + 1
+                )
+            except (TypeError, ValueError):
+                new_generation = before_generation + 1
+            db.add(
+                PortTrafficResetEvent(
+                    policy_id=policy.id,
+                    host_id=policy.host_id,
+                    reason=str(task.parameters.get("reason", "manual"))[:64],
+                    previous_generation=before_generation,
+                    new_generation=new_generation,
+                    previous_rx_bytes=previous.current_period_rx if previous else 0,
+                    previous_tx_bytes=previous.current_period_tx if previous else 0,
+                    requested_by=task.requester_id,
+                    approval_id=task.approval_id,
+                )
+            )
+            policy.generation = new_generation
+            if runtime is not None:
+                runtime.counter_generation = new_generation
+                runtime.last_reset_at = datetime.now(UTC)
+                runtime.next_reset_at = next_reset_at(
+                    policy.reset_policy,
+                    after=datetime.now(UTC),
+                )
+        policy.updated_at = datetime.now(UTC)
+    if task.approval_id:
+        approval = db.get(Approval, task.approval_id)
+        if approval is not None and approval.status in {
+            "approved",
+            "dry_run_only",
+            "executing",
+        }:
+            approval.status = "executed" if task.status == "succeeded" else "failed"
 
 
 def _resolve_absent_incidents(

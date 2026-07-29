@@ -6,6 +6,7 @@ from enum import StrEnum
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -336,6 +337,200 @@ class MetricSnapshot(Base):
     payload: Mapped[dict[str, object]] = mapped_column(JSON)
 
 
+class PortTrafficPolicy(Base):
+    __tablename__ = "port_traffic_policies"
+    __table_args__ = (
+        CheckConstraint("port_start >= 1 AND port_start <= 65535", name="ck_port_traffic_start"),
+        CheckConstraint("port_end >= port_start AND port_end <= 65535", name="ck_port_traffic_end"),
+        CheckConstraint(
+            "protocol IN ('tcp', 'udp', 'both')", name="ck_port_traffic_protocol"
+        ),
+        CheckConstraint(
+            "direction IN ('rx', 'tx', 'both')", name="ck_port_traffic_direction"
+        ),
+        CheckConstraint(
+            "mode IN ('monitor_only', 'enforcing')", name="ck_port_traffic_mode"
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'active', 'disabled', 'error')",
+            name="ck_port_traffic_status",
+        ),
+        CheckConstraint("generation >= 1", name="ck_port_traffic_generation"),
+        CheckConstraint(
+            "quota_bytes IS NULL OR quota_bytes > 0", name="ck_port_traffic_quota"
+        ),
+        CheckConstraint(
+            "egress_rate_bps IS NULL OR egress_rate_bps >= 8000",
+            name="ck_port_traffic_egress_rate",
+        ),
+        Index("ix_port_traffic_host_status", "host_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    host_id: Mapped[str] = mapped_column(
+        ForeignKey("hosts.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    protocol: Mapped[str] = mapped_column(String(8))
+    direction: Mapped[str] = mapped_column(String(8))
+    port_start: Mapped[int] = mapped_column(Integer)
+    port_end: Mapped[int] = mapped_column(Integer)
+    interface_name: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    mode: Mapped[str] = mapped_column(String(16), default="monitor_only")
+    quota_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    reset_policy: Mapped[dict[str, object]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    egress_rate_bps: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    generation: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    approved_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    reset_approval_id: Mapped[str | None] = mapped_column(
+        ForeignKey("approvals.id", ondelete="SET NULL"), nullable=True
+    )
+    reset_requested_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    reset_approved_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PortTrafficSample(Base):
+    __tablename__ = "port_traffic_samples"
+    __table_args__ = (
+        UniqueConstraint(
+            "policy_id", "collected_at", name="uq_port_traffic_sample_policy_time"
+        ),
+        CheckConstraint("rx_bytes_total >= 0", name="ck_port_traffic_sample_rx"),
+        CheckConstraint("tx_bytes_total >= 0", name="ck_port_traffic_sample_tx"),
+        CheckConstraint("current_period_rx >= 0", name="ck_port_traffic_period_rx"),
+        CheckConstraint("current_period_tx >= 0", name="ck_port_traffic_period_tx"),
+        Index("ix_port_traffic_sample_host_time", "host_id", "collected_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    policy_id: Mapped[str] = mapped_column(
+        ForeignKey("port_traffic_policies.id", ondelete="CASCADE"), index=True
+    )
+    host_id: Mapped[str] = mapped_column(
+        ForeignKey("hosts.id", ondelete="CASCADE"), index=True
+    )
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    rx_bytes_total: Mapped[int] = mapped_column(BigInteger)
+    tx_bytes_total: Mapped[int] = mapped_column(BigInteger)
+    current_period_rx: Mapped[int] = mapped_column(BigInteger)
+    current_period_tx: Mapped[int] = mapped_column(BigInteger)
+    quota_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    counter_generation: Mapped[int] = mapped_column(Integer)
+    runtime_rule_state: Mapped[str] = mapped_column(String(32))
+    shaping_state: Mapped[str] = mapped_column(String(32))
+    current_egress_rate_bps: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    discontinuity_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class PortTrafficHourlyRollup(Base):
+    __tablename__ = "port_traffic_hourly_rollups"
+    __table_args__ = (
+        UniqueConstraint(
+            "policy_id", "bucket_start", name="uq_port_traffic_hourly_policy_bucket"
+        ),
+        Index("ix_port_traffic_hourly_host_bucket", "host_id", "bucket_start"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    policy_id: Mapped[str] = mapped_column(
+        ForeignKey("port_traffic_policies.id", ondelete="CASCADE"), index=True
+    )
+    host_id: Mapped[str] = mapped_column(
+        ForeignKey("hosts.id", ondelete="CASCADE"), index=True
+    )
+    bucket_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    rx_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    tx_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    missing_intervals: Mapped[int] = mapped_column(Integer, default=0)
+    discontinuity_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PortTrafficDailyRollup(Base):
+    __tablename__ = "port_traffic_daily_rollups"
+    __table_args__ = (
+        UniqueConstraint(
+            "policy_id", "bucket_start", name="uq_port_traffic_daily_policy_bucket"
+        ),
+        Index("ix_port_traffic_daily_host_bucket", "host_id", "bucket_start"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    policy_id: Mapped[str] = mapped_column(
+        ForeignKey("port_traffic_policies.id", ondelete="CASCADE"), index=True
+    )
+    host_id: Mapped[str] = mapped_column(
+        ForeignKey("hosts.id", ondelete="CASCADE"), index=True
+    )
+    bucket_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    rx_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    tx_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    missing_intervals: Mapped[int] = mapped_column(Integer, default=0)
+    discontinuity_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PortTrafficResetEvent(Base):
+    __tablename__ = "port_traffic_reset_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    policy_id: Mapped[str] = mapped_column(
+        ForeignKey("port_traffic_policies.id", ondelete="CASCADE"), index=True
+    )
+    host_id: Mapped[str] = mapped_column(
+        ForeignKey("hosts.id", ondelete="CASCADE"), index=True
+    )
+    reason: Mapped[str] = mapped_column(String(64))
+    previous_generation: Mapped[int] = mapped_column(Integer)
+    new_generation: Mapped[int] = mapped_column(Integer)
+    previous_rx_bytes: Mapped[int] = mapped_column(BigInteger)
+    previous_tx_bytes: Mapped[int] = mapped_column(BigInteger)
+    requested_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    approval_id: Mapped[str | None] = mapped_column(
+        ForeignKey("approvals.id", ondelete="SET NULL"), nullable=True
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+
+
+class PortTrafficRuntimeState(Base):
+    __tablename__ = "port_traffic_runtime_states"
+
+    policy_id: Mapped[str] = mapped_column(
+        ForeignKey("port_traffic_policies.id", ondelete="CASCADE"), primary_key=True
+    )
+    runtime_rule_state: Mapped[str] = mapped_column(String(32), default="unknown")
+    shaping_state: Mapped[str] = mapped_column(String(32), default="disabled")
+    counter_generation: Mapped[int] = mapped_column(Integer, default=1)
+    last_sample_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_reset_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    next_reset_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    restore_error: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class EnrollmentToken(Base):
     __tablename__ = "enrollment_tokens"
     __table_args__ = (
@@ -609,8 +804,8 @@ def prevent_audit_mutation(
 ) -> None:
     del flush_context, instances
     changed = session.dirty.union(session.deleted)
-    if any(isinstance(entry, AuditLog) for entry in changed):
-        raise ValueError("audit records are append-only")
+    if any(isinstance(entry, (AuditLog, PortTrafficResetEvent)) for entry in changed):
+        raise ValueError("audit and traffic reset records are append-only")
 
 
 class Nonce(Base):

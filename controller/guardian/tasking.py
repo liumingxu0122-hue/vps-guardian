@@ -28,6 +28,9 @@ REGISTERED_ACTIONS = {
     "restricted_cleanup",
     "restic_backup",
     "restic_check",
+    "port_traffic_apply",
+    "port_traffic_remove",
+    "port_traffic_reset",
 }
 
 
