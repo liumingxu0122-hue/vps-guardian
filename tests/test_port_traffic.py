@@ -67,6 +67,16 @@ def test_helper_fresh_install_places_executable_before_systemd_verify() -> None:
     )
 
 
+def test_helper_socket_directory_allows_unprivileged_agent_traversal() -> None:
+    socket_unit = Path("deploy/systemd/vps-guardian-net-helper.socket").read_text(
+        encoding="utf-8"
+    )
+
+    assert "SocketGroup=vps-guardian-agent" in socket_unit
+    assert "SocketMode=0660" in socket_unit
+    assert "DirectoryMode=0755" in socket_unit
+
+
 def seed_host(owner: User) -> tuple[str, str]:
     with SessionLocal() as database:
         host = Host(name="traffic-node", address="192.0.2.90")
