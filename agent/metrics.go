@@ -15,6 +15,7 @@ type Snapshot struct {
 	Metrics     map[string]any    `json:"metrics"`
 	Services    []map[string]any  `json:"services"`
 	Events      []json.RawMessage `json:"events"`
+	PortTraffic []map[string]any  `json:"port_traffic"`
 }
 
 func collectCommand(ctx context.Context, name string, arguments ...string) string {
@@ -66,6 +67,35 @@ func collectServices(ctx context.Context, config Config) []map[string]any {
 	return services
 }
 
+func collectPortTraffic(ctx context.Context, config Config) ([]map[string]any, error) {
+	if !config.PortTrafficEnabled {
+		return []map[string]any{}, nil
+	}
+	output, err := callNetHelper(
+		ctx,
+		config.NetHelperSocket,
+		[]byte(`{"operation":"snapshot"}`),
+	)
+	if err != nil {
+		return nil, errors.New("port traffic helper snapshot failed")
+	}
+	if len(output) > 256*1024 {
+		return nil, errors.New("port traffic helper snapshot exceeds limit")
+	}
+	var response struct {
+		Status       string           `json:"status"`
+		Observations []map[string]any `json:"observations"`
+	}
+	decoder := json.NewDecoder(newByteReader(output))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&response); err != nil ||
+		response.Status != "ok" ||
+		len(response.Observations) > 64 {
+		return nil, errors.New("port traffic helper snapshot is invalid")
+	}
+	return response.Observations, nil
+}
+
 func collectSnapshot(
 	config Config,
 	queue *DiskQueue,
@@ -100,6 +130,11 @@ func collectSnapshot(
 	metrics["probes"] = collectProbes(ctx, config)
 	services := collectServices(ctx, config)
 	services = append(services, runRemoteChecks(ctx, config, checks)...)
+	portTraffic, trafficErr := collectPortTraffic(ctx, config)
+	if trafficErr != nil {
+		metrics["port_traffic_collection_error"] = true
+		portTraffic = []map[string]any{}
+	}
 	return Snapshot{
 		time.Now().UTC().Format(time.RFC3339Nano),
 		build.Version,
@@ -107,5 +142,6 @@ func collectSnapshot(
 		metrics,
 		services,
 		events,
+		portTraffic,
 	}, nil
 }

@@ -13,6 +13,40 @@ import (
 	"time"
 )
 
+func TestPortTrafficApprovalBindingRequiresIndependentActorsAndHost(t *testing.T) {
+	task := Task{
+		ApprovalID:   "approval",
+		RequesterID:  "requester",
+		ApproverID:   "approver",
+		TargetHostID: "host",
+	}
+	if !approvalBound(task) {
+		t.Fatal("expected independently approved host-bound task")
+	}
+	task.ApproverID = task.RequesterID
+	if approvalBound(task) {
+		t.Fatal("self-approved task must be rejected")
+	}
+}
+
+func TestPortTrafficSignedChangesDoNotUseGenericCooldown(t *testing.T) {
+	registry := NewActionRegistry(Config{
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	registry.state.LastRun["port_traffic_apply:policy"] = time.Now().Unix()
+	result := registry.Execute(context.Background(), Task{
+		ID:     "traffic-change",
+		Action: "port_traffic_apply",
+		Parameters: map[string]string{
+			"policy_id": "policy",
+			"dry_run":   "false",
+		},
+	})
+	if result.Message != "port traffic helper is disabled" {
+		t.Fatalf("signed policy change was blocked by generic cooldown: %+v", result)
+	}
+}
+
 func TestUnknownAndNonAllowlistedActionsAreRejected(t *testing.T) {
 	config := Config{StateFile: filepath.Join(t.TempDir(), "state.json"), ContainerAllowlist: []string{"allowed-container"}}
 	registry := NewActionRegistry(config)

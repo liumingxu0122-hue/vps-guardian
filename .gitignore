@@ -23,6 +23,8 @@ certs/
 secrets/
 backups/
 tools/
+!tests/tools/
+!tests/tools/sign-port-task.go
 artifacts/
 *.pem
 *.key
