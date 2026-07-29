@@ -41,7 +41,10 @@ done
 
 case "$mode" in repair|reinstall|rotate_identity|decommission) ;; *) exit 64 ;; esac
 [ "$(id -u)" -eq 0 ] || { echo "Agent maintenance must run as root" >&2; exit 77; }
-[ -f "$token_file" ] && [ ! -L "$token_file" ] || { echo "unsafe maintenance token file" >&2; exit 65; }
+if [ ! -f "$token_file" ] || [ -L "$token_file" ]; then
+  echo "unsafe maintenance token file" >&2
+  exit 65
+fi
 chmod 0600 "$token_file"
 case "$controller_url" in https://*) ;; *) exit 64 ;; esac
 for url in "$agent_url_amd64" "$agent_url_arm64" "$manifest_url" \
@@ -60,11 +63,11 @@ backup_directory="$(mktemp -d /var/backups/vps-guardian-agent/maintenance-XXXXXX
 chmod 0700 "$backup_directory"
 identity_root=/etc/vps-guardian/agent/identities/current
 trust_root=/etc/vps-guardian/agent/trust
-[ -f "$identity_root/agent.crt" ] && [ -f "$identity_root/agent.key" ] &&
-  [ -f "$trust_root/controller-ca.crt" ] || {
-    echo "current Agent mTLS identity is unavailable" >&2
-    exit 65
-  }
+if [ ! -f "$identity_root/agent.crt" ] || [ ! -f "$identity_root/agent.key" ] ||
+  [ ! -f "$trust_root/controller-ca.crt" ]; then
+  echo "current Agent mTLS identity is unavailable" >&2
+  exit 65
+fi
 cp "$identity_root/agent.crt" "$work_directory/agent.crt"
 cp "$identity_root/agent.key" "$work_directory/agent.key"
 cp "$trust_root/controller-ca.crt" "$work_directory/controller-ca.crt"
@@ -96,10 +99,14 @@ report() {
 
 service_stop() {
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl is-active --quiet vps-guardian-agent.service && service_was_active=true || true
+    if systemctl is-active --quiet vps-guardian-agent.service; then
+      service_was_active=true
+    fi
     systemctl stop vps-guardian-agent.service
   elif command -v rc-service >/dev/null 2>&1; then
-    rc-service vps-guardian-agent status >/dev/null 2>&1 && service_was_active=true || true
+    if rc-service vps-guardian-agent status >/dev/null 2>&1; then
+      service_was_active=true
+    fi
     rc-service vps-guardian-agent stop
   else
     echo "supported service manager not found" >&2
@@ -149,7 +156,12 @@ curl --fail --show-error --proto '=https' --connect-timeout 10 --max-time 30 \
   "$controller_url/api/v1/agents/maintenance/start"
 unset maintenance_token
 progress_token="$(sed -n 's/.*"progress_token":"\([^"]*\)".*/\1/p' "$start_response")"
+response_host_id="$(sed -n 's/.*"host_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$start_response")"
 [ -n "$progress_token" ] || { echo "Controller did not issue progress credential" >&2; exit 65; }
+[ "$response_host_id" = "$host_id" ] || {
+  echo "Controller returned a maintenance session for a different Host" >&2
+  exit 65
+}
 
 curl --fail --show-error --location --proto '=https' -o "$work_directory/manifest" "$manifest_url"
 curl --fail --show-error --location --proto '=https' -o "$work_directory/manifest.sig" "$manifest_signature_url"

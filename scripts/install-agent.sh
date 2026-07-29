@@ -252,11 +252,11 @@ actual_installer="$(sha256sum "$0" | sed 's/ .*//')"
   echo "signed release manifest does not match this installer" >&2
   exit 65
 }
-[ "$manifest_amd64" = "$agent_sha256_amd64" ] &&
-  [ "$manifest_arm64" = "$agent_sha256_arm64" ] || {
+if [ "$manifest_amd64" != "$agent_sha256_amd64" ] ||
+  [ "$manifest_arm64" != "$agent_sha256_arm64" ]; then
     echo "signed release manifest does not match Controller-pinned checksums" >&2
     exit 65
-  }
+fi
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM

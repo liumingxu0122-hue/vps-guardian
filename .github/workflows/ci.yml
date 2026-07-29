@@ -190,7 +190,7 @@ jobs:
               packages='apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssl coreutils grep sed'
               ;;
             rocky)
-              packages='dnf install -y openssl coreutils grep sed'
+              packages='dnf install -y openssl grep sed'
               ;;
             alpine)
               packages='apk add --no-cache openssl coreutils grep sed'
