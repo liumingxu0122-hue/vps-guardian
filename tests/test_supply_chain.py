@@ -31,6 +31,17 @@ def test_controller_image_uses_hashed_locks_and_separate_wheel_builder() -> None
         "RESTIC_SOURCE_SHA256="
         "6318c51f187bafbaf33d1ab6dcb5abde9a94de11476651cbb2982f1ba89ca8a8"
     ) in dockerfile
+    assert "RESTIC_X_TEXT_VERSION=v0.40.0" in dockerfile
+    assert (
+        "RESTIC_X_TEXT_MODULE_SUM="
+        "h1:Ub2Z6/xjgF1WrYQz2nuITOEegKFtiIy+rieRJ5lHZKs="
+    ) in dockerfile
+    assert 'go mod edit -require="golang.org/x/text@$RESTIC_X_TEXT_VERSION"' in dockerfile
+    assert 'go mod download "golang.org/x/text@$RESTIC_X_TEXT_VERSION"' in dockerfile
+    assert (
+        'test "$(go list -m -f \'{{.Version}}\' golang.org/x/text)" '
+        '= "$RESTIC_X_TEXT_VERSION"'
+    ) in dockerfile
     assert "GRPC_GO_VERSION=v1.82.1" in dockerfile
     assert (
         "GRPC_GO_MODULE_SUM="
@@ -81,6 +92,17 @@ def test_web_image_rebuilds_versioned_caddy_with_the_fixed_go_toolchain() -> Non
     assert (
         "CADDY_SOURCE_SHA256="
         "a593bd7077c76102ca76d19287a5e247d4e359dd67eddbc933f865afd3c131eb"
+    ) in dockerfile
+    assert "CADDY_X_TEXT_VERSION=v0.40.0" in dockerfile
+    assert (
+        "CADDY_X_TEXT_MODULE_SUM="
+        "h1:Ub2Z6/xjgF1WrYQz2nuITOEegKFtiIy+rieRJ5lHZKs="
+    ) in dockerfile
+    assert 'go mod edit -require="golang.org/x/text@$CADDY_X_TEXT_VERSION"' in dockerfile
+    assert 'go mod download "golang.org/x/text@$CADDY_X_TEXT_VERSION"' in dockerfile
+    assert (
+        'test "$(go list -m -f \'{{.Version}}\' golang.org/x/text)" '
+        '= "$CADDY_X_TEXT_VERSION"'
     ) in dockerfile
     assert "GRPC_GO_VERSION=v1.82.1" in dockerfile
     assert (

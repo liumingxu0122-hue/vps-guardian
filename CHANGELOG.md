@@ -6,6 +6,13 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Added
 
+- Added preview per-port TCP/UDP RX/TX accounting, explicit discontinuities, bounded
+  raw/hour/day retention, quota alert thresholds, bilingual policy/history UI, and
+  reversible migration `0013_port_traffic`.
+- Added a fixed-protocol, socket-activated root network helper that owns only a
+  dedicated nftables table and TC handle, while the Agent remains non-root with
+  `NoNewPrivileges`; enforcement, reset, and egress shaping require independent
+  high-risk approval and host-bound expiring signed tasks.
 - Added RC6 opaque, hash-only browser sessions with independently enforced idle and
   absolute lifetimes, optional remembered-device lifetime, bounded activity touches,
   device/session management, current-session step-up, strict same-origin CSRF binding,
@@ -79,6 +86,10 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Security
 
+- Port-traffic helper requests accept bounded structured fields only, contain no
+  arbitrary command/URL/secret input, reject non-Guardian root qdiscs, cap policies at
+  64, preserve unrelated firewall objects, and compensate/rollback partial TC or
+  state-commit failures.
 - Browser authentication no longer stores or sends JWTs from Web Storage. An invalid
   explicit Bearer credential never falls back to a browser session; database rows
   store only session/CSRF hashes and privacy-safe device/network summaries.

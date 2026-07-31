@@ -924,6 +924,59 @@ class AgentBuildMetadata(BaseModel):
         return value.lower()
 
 
+class PortTrafficObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy_id: str = Field(min_length=36, max_length=36)
+    rx_bytes_total: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    tx_bytes_total: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    combined_bytes_total: int | None = Field(
+        default=None, ge=0, le=9_223_372_036_854_775_807
+    )
+    current_period_rx: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    current_period_tx: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    current_period_total: int | None = Field(
+        default=None, ge=0, le=9_223_372_036_854_775_807
+    )
+    quota_bytes: int | None = Field(default=None, gt=0)
+    quota_percent: float | None = Field(default=None, ge=0)
+    quota_state: Literal[
+        "unlimited", "normal", "warning", "critical", "exhausted"
+    ] | None = None
+    reset_policy: dict[str, Any] | None = None
+    current_period_start: datetime | None = None
+    next_reset_at: datetime | None = None
+    last_reset_at: datetime | None = None
+    counter_generation: int = Field(ge=1, le=2_147_483_647)
+    runtime_rule_state: Literal["active", "missing", "inconsistent", "error"]
+    shaping_state: Literal["disabled", "active", "inconsistent", "error"]
+    current_egress_rate_bps: int | None = Field(default=None, ge=8_000)
+    collected_at: datetime | None = None
+    discontinuity_reason: Literal[
+        "agent_restart",
+        "system_restart",
+        "counter_reset",
+        "counter_wrap",
+        "rule_restore",
+        "rule_missing",
+    ] | None = None
+
+    @model_validator(mode="after")
+    def require_exact_derived_totals(self) -> PortTrafficObservation:
+        if (
+            self.combined_bytes_total is not None
+            and self.combined_bytes_total != self.rx_bytes_total + self.tx_bytes_total
+        ):
+            raise ValueError("combined_bytes_total must equal RX plus TX")
+        if (
+            self.current_period_total is not None
+            and self.current_period_total
+            != self.current_period_rx + self.current_period_tx
+        ):
+            raise ValueError("current_period_total must equal current-period RX plus TX")
+        return self
+
+
 class AgentHeartbeat(BaseModel):
     collected_at: datetime
     version: str = Field(min_length=1, max_length=64)
@@ -931,12 +984,157 @@ class AgentHeartbeat(BaseModel):
     metrics: dict[str, Any]
     services: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
     events: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
+    port_traffic: list[PortTrafficObservation] = Field(default_factory=list, max_length=64)
 
     @model_validator(mode="after")
     def require_consistent_build_version(self) -> AgentHeartbeat:
         if self.build is not None and self.build.version != self.version:
             raise ValueError("Agent build version must match heartbeat version")
         return self
+
+
+class PortTrafficPolicyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    protocol: Literal["tcp", "udp", "both"]
+    direction: Literal["rx", "tx", "both"]
+    port_start: int = Field(ge=1, le=65535)
+    port_end: int = Field(ge=1, le=65535)
+    interface_name: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,30}$"
+    )
+    mode: Literal["monitor_only", "enforcing"] = "monitor_only"
+    quota_bytes: int | None = Field(
+        default=None, gt=0, le=9_223_372_036_854_775_807
+    )
+    reset_policy: dict[str, Any] = Field(default_factory=dict)
+    egress_rate_bps: int | None = Field(default=None, ge=8_000, le=100_000_000_000)
+    approval_id: str | None = Field(default=None, max_length=36)
+
+    @model_validator(mode="after")
+    def validate_range_and_enforcement(self) -> PortTrafficPolicyCreate:
+        if self.port_end < self.port_start:
+            raise ValueError("port_end must be greater than or equal to port_start")
+        if self.port_end - self.port_start + 1 > 4096:
+            raise ValueError("one policy may cover at most 4096 consecutive ports")
+        if self.egress_rate_bps is not None and self.direction == "rx":
+            raise ValueError("first-version shaping supports egress only")
+        if self.mode != "monitor_only" or self.egress_rate_bps is not None:
+            raise ValueError(
+                "new policies start in monitor_only; use a change request for enforcement"
+            )
+        if self.approval_id is not None:
+            raise ValueError("approval_id is not accepted for a monitor-only policy")
+        return self
+
+
+class PortTrafficPolicyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    enabled: bool | None = None
+    protocol: Literal["tcp", "udp", "both"] | None = None
+    direction: Literal["rx", "tx", "both"] | None = None
+    port_start: int | None = Field(default=None, ge=1, le=65535)
+    port_end: int | None = Field(default=None, ge=1, le=65535)
+    interface_name: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,30}$"
+    )
+    quota_bytes: int | None = Field(
+        default=None, gt=0, le=9_223_372_036_854_775_807
+    )
+    reset_policy: dict[str, Any] | None = None
+    egress_rate_bps: int | None = Field(default=None, ge=8_000, le=100_000_000_000)
+    approval_id: str | None = Field(default=None, max_length=36)
+
+
+class PortTrafficChangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["monitor_only", "enforcing"]
+    egress_rate_bps: int | None = Field(default=None, ge=8_000, le=100_000_000_000)
+    reset_policy: dict[str, Any] | None = None
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class PortTrafficResetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=3, max_length=500)
+    confirmation: str = Field(min_length=3, max_length=120)
+
+
+class PortTrafficPolicyView(ORMModel):
+    id: str
+    host_id: str
+    name: str
+    enabled: bool
+    protocol: str
+    direction: str
+    port_start: int
+    port_end: int
+    interface_name: str | None
+    mode: str
+    quota_bytes: int | None
+    reset_policy: dict[str, Any]
+    egress_rate_bps: int | None
+    status: str
+    generation: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class PortTrafficRuntimeView(ORMModel):
+    policy_id: str
+    runtime_rule_state: str
+    shaping_state: str
+    counter_generation: int
+    last_sample_at: datetime | None
+    last_reset_at: datetime | None
+    next_reset_at: datetime | None
+    restore_error: str | None
+    updated_at: datetime
+
+
+class PortTrafficHistoryPoint(BaseModel):
+    at: datetime
+    rx_bytes: int | None
+    tx_bytes: int | None
+    combined_bytes: int | None
+    missing_intervals: int = 0
+    discontinuity_count: int = 0
+    discontinuity_reason: str | None = None
+
+
+class PortTrafficHistoryResponse(BaseModel):
+    policy_id: str
+    resolution: Literal["raw", "hour", "day"]
+    starts_at: datetime
+    ends_at: datetime
+    points: list[PortTrafficHistoryPoint]
+
+
+class PortTrafficEventView(BaseModel):
+    id: str
+    kind: Literal["reset", "quota", "runtime", "shaping", "enforcement", "gap", "spike"]
+    state: str
+    summary: str
+    occurred_at: datetime
+
+
+class PortTrafficSummary(BaseModel):
+    policy: PortTrafficPolicyView
+    runtime: PortTrafficRuntimeView | None
+    current_period_rx: int | None
+    current_period_tx: int | None
+    current_period_total: int | None
+    quota_percent: float | None
+    quota_state: Literal["unlimited", "normal", "warning", "critical", "exhausted"]
+    estimated_exhaustion_at: datetime | None
+    last_sample_at: datetime | None
+    data_gap: bool
+    recent_events: list[PortTrafficEventView]
 
 
 class HealthResponse(BaseModel):

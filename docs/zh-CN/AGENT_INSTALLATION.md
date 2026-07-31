@@ -8,6 +8,10 @@
 
 身份文件按代际保存在 `/etc/vps-guardian-agent/identities` 下，`current` 符号链接选择当前生效代际。密钥不允许其他用户读取；续签后保留上一代身份用于受控回滚。公开 CA 文件单独保存在 trust 目录。
 
+按端口流量统计默认关闭。仅按[端口流量运维](PORT_TRAFFIC_OPERATIONS.md)安装经过
+独立 SHA-256 校验的 socket 激活 helper；Agent 必须保持非 root，禁止授予
+`CAP_NET_ADMIN`。
+
 Agent 只在配置的到期前窗口内续签。Controller 要求当前 mTLS 身份、签名请求、新 CSR、新 Ed25519 密钥持有证明和身份版本 CAS。切换前，Agent 会校验新证书与私钥、固定 CA、客户端认证用途、SPIFFE 身份、指纹和证书内实际有效期。续签失败会保留当前代际，并使用受限重试间隔。
 
 证书吊销是受控操作员流程。先生成并验证单调递增的候选 CRL，使用 `scripts/publish-agent-crl.sh` 发布，确认 Agent Gateway 健康且旧证书已被拒绝，再通过授权 Controller API 记录对应身份吊销。Agent 身份维护不得执行 `forget`、`prune`、防火墙修改或任何非项目服务操作。

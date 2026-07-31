@@ -35,6 +35,12 @@ python3 -m pip wheel --no-deps --wheel-dir "$output/dist" .
   -buildvcs=false -trimpath \
   -ldflags="-s -w -buildid= -X main.agentVersion=${version} -X main.buildCommit=${release_commit} -X main.buildTime=${build_time} -X main.buildID=${build_id_prefix}-linux-arm64 -X main.buildDirty=false" \
   -o "$output/dist/vps-guardian-agent-linux-arm64" .)
+(cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+  -buildvcs=false -trimpath -ldflags="-s -w -buildid=" \
+  -o "$output/dist/vps-guardian-net-helper-linux-amd64" ./nethelper)
+(cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+  -buildvcs=false -trimpath -ldflags="-s -w -buildid=" \
+  -o "$output/dist/vps-guardian-net-helper-linux-arm64" ./nethelper)
 "$output/dist/vps-guardian-agent-linux-amd64" version \
   | grep -Fx "git_sha=${release_commit}"
 "$output/dist/vps-guardian-agent-linux-amd64" --version \
@@ -57,6 +63,10 @@ go version -m "$output/dist/vps-guardian-agent-linux-amd64" \
   > "$output/sbom/agent-build-info.txt"
 go version -m "$output/dist/vps-guardian-agent-linux-arm64" \
   > "$output/sbom/agent-arm64-build-info.txt"
+go version -m "$output/dist/vps-guardian-net-helper-linux-amd64" \
+  > "$output/sbom/net-helper-build-info.txt"
+go version -m "$output/dist/vps-guardian-net-helper-linux-arm64" \
+  > "$output/sbom/net-helper-arm64-build-info.txt"
 python3 scripts/agent-release-metadata.py \
   --output "$output/agent-release-manifest.json" \
   --sbom-output "$output/sbom/agent.cdx.json" \

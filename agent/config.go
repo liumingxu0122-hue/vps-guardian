@@ -26,6 +26,7 @@ type ProbeTarget struct {
 type Config struct {
 	ControllerURL          string        `json:"controller_url"`
 	AgentID                string        `json:"agent_id"`
+	HostID                 string        `json:"host_id"`
 	CertificateFile        string        `json:"certificate_file"`
 	PrivateKeyFile         string        `json:"private_key_file"`
 	CAFile                 string        `json:"ca_file"`
@@ -54,6 +55,8 @@ type Config struct {
 	ResticRepositoryFile   string        `json:"restic_repository_file"`
 	ResticPasswordFile     string        `json:"restic_password_file"`
 	ResticPathsAllowlist   []string      `json:"restic_paths_allowlist"`
+	PortTrafficEnabled     bool          `json:"port_traffic_enabled"`
+	NetHelperSocket        string        `json:"net_helper_socket"`
 }
 
 type Duration time.Duration
@@ -137,6 +140,17 @@ func loadConfig(path string) (Config, error) {
 		if !filepath.IsAbs(backupPath) {
 			return Config{}, errors.New("restic backup path must be absolute")
 		}
+	}
+	if config.PortTrafficEnabled {
+		const helperSocket = "/run/vps-guardian-net-helper/helper.sock"
+		if config.HostID == "" {
+			return Config{}, errors.New("host_id is required when port traffic is enabled")
+		}
+		if config.NetHelperSocket != helperSocket {
+			return Config{}, fmt.Errorf("net_helper_socket must be %s", helperSocket)
+		}
+	} else if config.NetHelperSocket != "" {
+		return Config{}, errors.New("net_helper_socket requires port_traffic_enabled")
 	}
 	if (config.CaddyContainer == "") != (config.CaddyContainerConfig == "") {
 		return Config{}, errors.New("caddy_container and caddy_container_config must be set together")

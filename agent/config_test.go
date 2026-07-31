@@ -7,6 +7,43 @@ import (
 	"testing"
 )
 
+func TestLoadConfigRequiresHostBindingForPortTraffic(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.json")
+	values := map[string]any{
+		"controller_url":          "https://agent.example.test",
+		"agent_id":                "agent-1",
+		"certificate_file":        filepath.Join(root, "agent.crt"),
+		"private_key_file":        filepath.Join(root, "agent.key"),
+		"ca_file":                 filepath.Join(root, "controller-ca.crt"),
+		"signing_key_file":        filepath.Join(root, "signing.pem"),
+		"controller_public_key":   "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		"certificate_fingerprint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"port_traffic_enabled":    true,
+		"net_helper_socket":       "/run/vps-guardian-net-helper/helper.sock",
+	}
+	write := func() {
+		t.Helper()
+		data, err := json.Marshal(values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(configPath, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write()
+	if _, err := loadConfig(configPath); err == nil ||
+		err.Error() != "host_id is required when port traffic is enabled" {
+		t.Fatalf("missing local traffic host binding was not rejected: %v", err)
+	}
+	values["host_id"] = "host-1"
+	write()
+	if _, err := loadConfig(configPath); err != nil {
+		t.Fatalf("host-bound port traffic configuration was rejected: %v", err)
+	}
+}
+
 func TestLoadConfigRequiresPairedAllowlistedCaddyContainerSettings(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "config.json")

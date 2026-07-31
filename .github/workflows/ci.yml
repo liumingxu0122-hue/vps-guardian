@@ -58,6 +58,22 @@ jobs:
           go vet ./...
           go test ./...
           go test -race ./...
+      - name: Shell checks and isolated nftables/TC integration
+        env:
+          VPS_GUARDIAN_NETNS_TEST: "1"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nftables iproute2 shellcheck
+          bash -n \
+            scripts/install-port-traffic-helper.sh \
+            scripts/uninstall-port-traffic-helper.sh \
+            tests/integration-port-traffic-netns.sh
+          shellcheck \
+            scripts/install-port-traffic-helper.sh \
+            scripts/uninstall-port-traffic-helper.sh \
+            tests/integration-port-traffic-netns.sh
+          sudo --preserve-env=VPS_GUARDIAN_NETNS_TEST \
+            bash tests/integration-port-traffic-netns.sh
       - name: Build immutable Agent artifacts and provenance manifest
         working-directory: agent
         run: |
@@ -73,6 +89,12 @@ jobs:
             -buildvcs=false -trimpath \
             -ldflags="-s -w -buildid= -X main.agentVersion=${version} -X main.buildCommit=${GITHUB_SHA} -X main.buildTime=${build_time} -X main.buildID=${build_id_prefix}-linux-arm64 -X main.buildDirty=false" \
             -o /tmp/vps-guardian-agent-release/vps-guardian-agent-linux-arm64 .
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -buildvcs=false -trimpath -ldflags="-s -w -buildid=" \
+            -o /tmp/vps-guardian-agent-release/vps-guardian-net-helper-linux-amd64 ./nethelper
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+            -buildvcs=false -trimpath -ldflags="-s -w -buildid=" \
+            -o /tmp/vps-guardian-agent-release/vps-guardian-net-helper-linux-arm64 ./nethelper
           /tmp/vps-guardian-agent-release/vps-guardian-agent-linux-amd64 version \
             | grep -Fx "git_sha=${GITHUB_SHA}"
           /tmp/vps-guardian-agent-release/vps-guardian-agent-linux-amd64 --version \

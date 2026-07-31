@@ -106,6 +106,25 @@ def test_migrations_enforce_audit_append_only(tmp_path: Path) -> None:
         for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
     assert phase4b_tables <= actual_tables
+    assert {
+        "port_traffic_policies",
+        "port_traffic_samples",
+        "port_traffic_hourly_rollups",
+        "port_traffic_daily_rollups",
+        "port_traffic_reset_events",
+        "port_traffic_runtime_states",
+    } <= actual_tables
+    reset_triggers = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+            "AND tbl_name = 'port_traffic_reset_events'"
+        )
+    }
+    assert {
+        "guardian_traffic_reset_no_update",
+        "guardian_traffic_reset_no_delete",
+    } <= reset_triggers
     task_columns = {row[1] for row in connection.execute("PRAGMA table_info(agent_tasks)")}
     assert {
         "approval_id",

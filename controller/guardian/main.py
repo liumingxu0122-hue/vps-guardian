@@ -18,6 +18,10 @@ from guardian.database import Base, SessionLocal, engine
 from guardian.liveness import mark_stale_agents_offline
 from guardian.monitoring import prune_monitoring_history, run_due_controller_checks
 from guardian.notifications import deliver_pending_notifications
+from guardian.port_traffic import (
+    dispatch_due_port_traffic_resets,
+    prune_port_traffic,
+)
 
 
 async def monitor_agent_liveness(offline_after_seconds: int) -> None:
@@ -35,6 +39,7 @@ async def monitor_agent_liveness(offline_after_seconds: int) -> None:
 
 
 async def monitor_service_checks(settings: Settings) -> None:
+    next_traffic_prune = 0.0
     while True:
         try:
             with SessionLocal() as database:
@@ -50,6 +55,11 @@ async def monitor_service_checks(settings: Settings) -> None:
                     max_metric_rows_per_host=settings.max_metric_rows_per_host,
                     max_results_per_check=settings.max_results_per_check,
                 )
+                now = asyncio.get_running_loop().time()
+                if now >= next_traffic_prune:
+                    prune_port_traffic(database)
+                    next_traffic_prune = now + 3600
+                dispatch_due_port_traffic_resets(database, settings=settings)
                 database.commit()
         except Exception:  # noqa: BLE001 - keep the bounded monitor alive and log the failure.
             logging.exception("service monitoring reconciliation failed")

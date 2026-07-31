@@ -103,6 +103,18 @@ const evidenceLines = computed(() => {
   return evidenceText.value.split('\n').map((text, index) => ({ number: index + 1, text }))
     .filter((line) => !needle || line.text.toLocaleLowerCase().includes(needle))
 })
+const exactConfirmation = computed(() => {
+  if (!selected.value) return null
+  const policyId = selected.value.impact_facts.find((fact) => fact.key === 'policy_id')?.value
+  if (!policyId) return null
+  if (selected.value.action_name === 'port_traffic_reset_schedule_change') {
+    return `SCHEDULE ${policyId}`
+  }
+  if (selected.value.action_name === 'port_traffic_counter_reset') {
+    return `RESET ${policyId}`
+  }
+  return null
+})
 
 function actionLabel(value: string): string {
   const key = `approvals.actions.${value}`
@@ -463,6 +475,9 @@ onBeforeUnmount(() => {
     <form class="dialog-form" @submit.prevent="submitDecision">
       <label>
         <span>{{ t('approvals.confirmation') }}</span>
+        <small v-if="exactConfirmation">
+          {{ t('approvals.exactConfirmation') }} <code>{{ exactConfirmation }}</code>
+        </small>
         <textarea v-model="confirmation" required minlength="3" maxlength="255"></textarea>
       </label>
       <template v-if="selected && selected.risk_level >= 2 && ['approved', 'approved_with_conditions'].includes(decision)">

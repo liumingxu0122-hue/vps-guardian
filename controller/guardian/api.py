@@ -14,7 +14,7 @@ from typing import Annotated, Any, Literal, cast
 import pyotp
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, desc, func, select, update
+from sqlalchemy import and_, desc, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -87,6 +87,10 @@ from guardian.models import (
     MetricSnapshot,
     NotificationChannel,
     NotificationDelivery,
+    PortTrafficPolicy,
+    PortTrafficResetEvent,
+    PortTrafficRuntimeState,
+    PortTrafficSample,
     RecoveryCode,
     RecoveryPoint,
     RepairAttempt,
@@ -99,6 +103,19 @@ from guardian.models import (
 from guardian.monitoring import assigned_agent_checks, record_agent_check_results
 from guardian.notifications import NotificationConfigurationError, send_test_notification
 from guardian.operations import Window, build_operations_overview
+from guardian.port_traffic import (
+    PortTrafficError,
+    ensure_policy_capacity_and_no_overlap,
+    ensure_quota_alert_rules,
+    estimate_exhaustion,
+    ingest_observations,
+    missing_is_gap,
+    next_reset_at,
+    query_history,
+    quota_alert_source_ids,
+    quota_state,
+    validate_reset_policy,
+)
 from guardian.reconciliation import reconcile_staging_heartbeat, record_agent_results
 from guardian.redaction import redact_serialized_text, redact_structure
 from guardian.schemas import (
@@ -152,6 +169,15 @@ from guardian.schemas import (
     NotificationChannelView,
     NotificationDeliveryView,
     PasswordChangeRequest,
+    PortTrafficChangeRequest,
+    PortTrafficEventView,
+    PortTrafficHistoryResponse,
+    PortTrafficPolicyCreate,
+    PortTrafficPolicyUpdate,
+    PortTrafficPolicyView,
+    PortTrafficResetRequest,
+    PortTrafficRuntimeView,
+    PortTrafficSummary,
     ReauthenticationRequest,
     RecoveryCodeBatchView,
     RecoveryCodesConfirmRequest,
@@ -2002,6 +2028,597 @@ def delete_inactive_host(
     db.commit()
 
 
+def _port_traffic_host(db: Session, host_id: str) -> tuple[Host, Agent]:
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    if host.agent is None or host.agent.revoked_at is not None:
+        raise HTTPException(status_code=409, detail="host has no active Agent")
+    return host, host.agent
+
+
+def _require_port_traffic_group_scope(user: User, host: Host) -> None:
+    allowed_groups = {
+        scope.removeprefix("hosts:group:")
+        for scope in user.scopes
+        if scope.startswith("hosts:group:")
+    }
+    if allowed_groups and (host.group_name or "") not in allowed_groups:
+        raise HTTPException(status_code=403, detail="host group scope denied")
+
+
+def _port_traffic_policy(db: Session, host_id: str, policy_id: str) -> PortTrafficPolicy:
+    policy = db.scalar(
+        select(PortTrafficPolicy).where(
+            PortTrafficPolicy.id == policy_id,
+            PortTrafficPolicy.host_id == host_id,
+        )
+    )
+    if policy is None:
+        raise HTTPException(status_code=404, detail="port traffic policy not found")
+    return policy
+
+
+def _port_traffic_parameters(
+    policy: PortTrafficPolicy,
+    *,
+    mode: str | None = None,
+    egress_rate_bps: int | None = None,
+    reset_policy: dict[str, object] | None = None,
+) -> dict[str, str]:
+    effective_mode = mode or policy.mode
+    effective_rate = egress_rate_bps if egress_rate_bps is not None else policy.egress_rate_bps
+    effective_reset = reset_policy if reset_policy is not None else policy.reset_policy
+    reset_boundary = next_reset_at(effective_reset)
+    return {
+        "policy_id": policy.id,
+        "protocol": policy.protocol,
+        "direction": policy.direction,
+        "port_start": str(policy.port_start),
+        "port_end": str(policy.port_end),
+        "interface_name": policy.interface_name or "",
+        "mode": effective_mode,
+        "quota_bytes": str(policy.quota_bytes or 0),
+        "egress_rate_bps": str(effective_rate or 0),
+        "counter_generation": str(policy.generation),
+        "reset_policy": json.dumps(
+            effective_reset,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        "next_reset_at": reset_boundary.isoformat() if reset_boundary else "",
+        "dry_run": "false",
+    }
+
+
+def _port_traffic_change_approval(
+    db: Session,
+    *,
+    policy: PortTrafficPolicy,
+    agent: Agent,
+    user: User,
+    action_name: str,
+    action: str,
+    parameters: dict[str, str],
+    reason: str,
+    settings: Settings,
+) -> Approval:
+    now = datetime.now(UTC)
+    incident = Incident(
+        title=f"Planned port traffic change: {policy.name}",
+        fault_type="planned_port_traffic_change",
+        severity=2,
+        affected_hosts=[policy.host_id],
+        evidence=[{"policy_id": policy.id, "reason": reason}],
+        recommendations=["review nftables and egress shaping impact before approval"],
+        risk="network policy change may interrupt matching traffic",
+        verification_plan=[
+            "verify the owned nftables ruleset",
+            "verify counter continuity",
+            "verify rollback restores the previous owned ruleset",
+        ],
+    )
+    db.add(incident)
+    db.flush()
+    approval = Approval(
+        incident_id=incident.id,
+        action_name=action_name,
+        risk_level=3,
+        parameters={
+            "agent_id": agent.id,
+            "actions": [{"type": action, "parameters": parameters}],
+        },
+        impact={
+            "policy_id": policy.id,
+            "host_id": policy.host_id,
+            "risk_reason": reason,
+            "dry_run_available": True,
+        },
+        rollback_plan=[
+            "stop remaining Agent actions",
+            "restore the helper-owned nftables and tc snapshot",
+            "verify traffic and counter continuity",
+        ],
+        requested_at=now,
+        expires_at=now + timedelta(minutes=settings.approval_ttl_minutes),
+        requested_by=user.id,
+        target_host_id=policy.host_id,
+    )
+    db.add(approval)
+    db.flush()
+    return approval
+
+
+@router.get(
+    "/api/v1/hosts/{host_id}/port-traffic/policies",
+    response_model=list[PortTrafficPolicyView],
+    tags=["port-traffic"],
+)
+def list_port_traffic_policies(
+    host_id: str,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+    offset: Annotated[int, Query(ge=0, le=64)] = 0,
+    limit: Annotated[int, Query(ge=1, le=64)] = 64,
+) -> list[PortTrafficPolicy]:
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    _require_port_traffic_group_scope(user, host)
+    return list(
+        db.scalars(
+            select(PortTrafficPolicy)
+            .where(PortTrafficPolicy.host_id == host_id)
+            .order_by(PortTrafficPolicy.created_at)
+            .offset(offset)
+            .limit(limit)
+        ).all()
+    )
+
+
+@router.post(
+    "/api/v1/hosts/{host_id}/port-traffic/policies",
+    response_model=PortTrafficPolicyView,
+    status_code=201,
+    tags=["port-traffic"],
+)
+def create_port_traffic_policy(
+    host_id: str,
+    payload: PortTrafficPolicyCreate,
+    request: Request,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.admin))],
+) -> PortTrafficPolicy:
+    _require_step_up(request)
+    host, agent = _port_traffic_host(db, host_id)
+    _require_port_traffic_group_scope(user, host)
+    try:
+        ensure_policy_capacity_and_no_overlap(
+            db,
+            host_id=host_id,
+            protocol=payload.protocol,
+            port_start=payload.port_start,
+            port_end=payload.port_end,
+        )
+        reset_policy = validate_reset_policy(payload.reset_policy)
+        if reset_policy["type"] != "manual":
+            raise PortTrafficError(
+                "scheduled resets require a dedicated independently approved change request"
+            )
+    except PortTrafficError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    policy = PortTrafficPolicy(
+        host_id=host_id,
+        name=payload.name,
+        protocol=payload.protocol,
+        direction=payload.direction,
+        port_start=payload.port_start,
+        port_end=payload.port_end,
+        interface_name=payload.interface_name,
+        mode="monitor_only",
+        quota_bytes=payload.quota_bytes,
+        reset_policy=reset_policy,
+        status="pending",
+        created_by=user.id,
+    )
+    db.add(policy)
+    db.flush()
+    db.add(
+        PortTrafficRuntimeState(
+            policy_id=policy.id,
+            next_reset_at=next_reset_at(reset_policy),
+        )
+    )
+    ensure_quota_alert_rules(db, policy)
+    task = create_agent_task(
+        db,
+        agent_id=agent.id,
+        action="port_traffic_apply",
+        parameters=_port_traffic_parameters(policy),
+        settings=settings,
+        requester_id=user.id,
+        target_host_id=host_id,
+    )
+    write_audit(
+        db,
+        actor=user,
+        action="port_traffic.policy_create",
+        resource_type="port_traffic_policy",
+        resource_id=policy.id,
+        outcome="pending",
+        details={"mode": "monitor_only", "task_id": task.id},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return policy
+
+
+@router.patch(
+    "/api/v1/hosts/{host_id}/port-traffic/policies/{policy_id}",
+    response_model=PortTrafficPolicyView,
+    tags=["port-traffic"],
+)
+def update_port_traffic_policy(
+    host_id: str,
+    policy_id: str,
+    payload: PortTrafficPolicyUpdate,
+    request: Request,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.admin))],
+) -> PortTrafficPolicy:
+    _require_step_up(request)
+    host, agent = _port_traffic_host(db, host_id)
+    _require_port_traffic_group_scope(user, host)
+    policy = _port_traffic_policy(db, host_id, policy_id)
+    changes = payload.model_dump(exclude_unset=True)
+    if "approval_id" in changes or "egress_rate_bps" in changes:
+        raise HTTPException(
+            status_code=409,
+            detail="enforcement and shaping changes require a dedicated change request",
+        )
+    kernel_fields = {
+        "enabled",
+        "protocol",
+        "direction",
+        "port_start",
+        "port_end",
+        "interface_name",
+        "quota_bytes",
+        "reset_policy",
+    }
+    if policy.mode != "monitor_only" and kernel_fields.intersection(changes):
+        raise HTTPException(
+            status_code=409,
+            detail="return the policy to monitor_only through approval before editing it",
+        )
+    if "reset_policy" in changes:
+        raise HTTPException(
+            status_code=409,
+            detail="reset schedule changes require a dedicated change request",
+        )
+    candidate_start = int(changes.get("port_start", policy.port_start))
+    candidate_end = int(changes.get("port_end", policy.port_end))
+    if candidate_end < candidate_start or candidate_end - candidate_start + 1 > 4096:
+        raise HTTPException(status_code=422, detail="port range is invalid")
+    try:
+        ensure_policy_capacity_and_no_overlap(
+            db,
+            host_id=host_id,
+            protocol=str(changes.get("protocol", policy.protocol)),
+            port_start=candidate_start,
+            port_end=candidate_end,
+            exclude_policy_id=policy.id,
+        )
+    except PortTrafficError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    candidate_direction = str(changes.get("direction", policy.direction))
+    if candidate_direction == "rx" and policy.egress_rate_bps:
+        raise HTTPException(
+            status_code=409,
+            detail="remove egress shaping before changing direction to rx",
+        )
+    for key, value in changes.items():
+        setattr(policy, key, value)
+    policy.updated_at = datetime.now(UTC)
+    policy.status = "pending"
+    runtime = db.get(PortTrafficRuntimeState, policy.id)
+    if runtime is not None and "reset_policy" in changes:
+        runtime.next_reset_at = next_reset_at(policy.reset_policy)
+    action = "port_traffic_apply" if policy.enabled else "port_traffic_remove"
+    task = create_agent_task(
+        db,
+        agent_id=agent.id,
+        action=action,
+        parameters=_port_traffic_parameters(policy),
+        settings=settings,
+        requester_id=user.id,
+        target_host_id=host_id,
+    )
+    write_audit(
+        db,
+        actor=user,
+        action="port_traffic.policy_update",
+        resource_type="port_traffic_policy",
+        resource_id=policy.id,
+        outcome="pending",
+        details={"changed_fields": sorted(changes), "task_id": task.id},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return policy
+
+
+@router.post(
+    "/api/v1/hosts/{host_id}/port-traffic/policies/{policy_id}/change-requests",
+    response_model=ApprovalView,
+    status_code=202,
+    tags=["port-traffic"],
+)
+def request_port_traffic_change(
+    host_id: str,
+    policy_id: str,
+    payload: PortTrafficChangeRequest,
+    request: Request,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.admin))],
+) -> Approval:
+    _require_step_up(request)
+    host, agent = _port_traffic_host(db, host_id)
+    _require_port_traffic_group_scope(user, host)
+    policy = _port_traffic_policy(db, host_id, policy_id)
+    if payload.egress_rate_bps is not None and policy.direction == "rx":
+        raise HTTPException(status_code=422, detail="first-version shaping supports egress only")
+    try:
+        requested_reset_policy = (
+            validate_reset_policy(payload.reset_policy)
+            if payload.reset_policy is not None
+            else policy.reset_policy
+        )
+    except PortTrafficError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    parameters = _port_traffic_parameters(
+        policy,
+        mode=payload.mode,
+        egress_rate_bps=payload.egress_rate_bps,
+        reset_policy=requested_reset_policy,
+    )
+    schedule_changed = requested_reset_policy != policy.reset_policy
+    approval = _port_traffic_change_approval(
+        db,
+        policy=policy,
+        agent=agent,
+        user=user,
+        action_name=(
+            "port_traffic_reset_schedule_change"
+            if schedule_changed
+            else "port_traffic_enforcement_change"
+        ),
+        action="port_traffic_apply",
+        parameters=parameters,
+        reason=payload.reason,
+        settings=settings,
+    )
+    write_audit(
+        db,
+        actor=user,
+        action="port_traffic.change_requested",
+        resource_type="approval",
+        resource_id=approval.id,
+        outcome="pending",
+        details={"policy_id": policy.id},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return approval
+
+
+@router.post(
+    "/api/v1/hosts/{host_id}/port-traffic/policies/{policy_id}/reset-requests",
+    response_model=ApprovalView,
+    status_code=202,
+    tags=["port-traffic"],
+)
+def request_port_traffic_reset(
+    host_id: str,
+    policy_id: str,
+    payload: PortTrafficResetRequest,
+    request: Request,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.admin))],
+) -> Approval:
+    _require_step_up(request)
+    expected = f"RESET {policy_id}"
+    if payload.confirmation != expected:
+        raise HTTPException(status_code=409, detail=f"confirmation must be exactly: {expected}")
+    host, agent = _port_traffic_host(db, host_id)
+    _require_port_traffic_group_scope(user, host)
+    policy = _port_traffic_policy(db, host_id, policy_id)
+    parameters = _port_traffic_parameters(policy)
+    parameters["reason"] = payload.reason
+    approval = _port_traffic_change_approval(
+        db,
+        policy=policy,
+        agent=agent,
+        user=user,
+        action_name="port_traffic_counter_reset",
+        action="port_traffic_reset",
+        parameters=parameters,
+        reason=payload.reason,
+        settings=settings,
+    )
+    write_audit(
+        db,
+        actor=user,
+        action="port_traffic.reset_requested",
+        resource_type="approval",
+        resource_id=approval.id,
+        outcome="pending",
+        details={"policy_id": policy.id},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return approval
+
+
+@router.get(
+    "/api/v1/hosts/{host_id}/port-traffic/policies/{policy_id}/history",
+    response_model=PortTrafficHistoryResponse,
+    tags=["port-traffic"],
+)
+def port_traffic_history(
+    host_id: str,
+    policy_id: str,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+    starts_at: datetime,
+    ends_at: datetime,
+    limit: Annotated[int, Query(ge=1, le=10_000)] = 5000,
+) -> PortTrafficHistoryResponse:
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    _require_port_traffic_group_scope(user, host)
+    _port_traffic_policy(db, host_id, policy_id)
+    try:
+        resolution, points = query_history(
+            db,
+            policy_id=policy_id,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            limit=limit,
+        )
+    except PortTrafficError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PortTrafficHistoryResponse(
+        policy_id=policy_id,
+        resolution=cast(Literal["raw", "hour", "day"], resolution),
+        starts_at=starts_at,
+        ends_at=ends_at,
+        points=points,
+    )
+
+
+@router.get(
+    "/api/v1/hosts/{host_id}/port-traffic/policies/{policy_id}/summary",
+    response_model=PortTrafficSummary,
+    tags=["port-traffic"],
+)
+def port_traffic_summary(
+    host_id: str,
+    policy_id: str,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> PortTrafficSummary:
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    _require_port_traffic_group_scope(user, host)
+    policy = _port_traffic_policy(db, host_id, policy_id)
+    runtime = db.get(PortTrafficRuntimeState, policy.id)
+    sample = db.scalar(
+        select(PortTrafficSample)
+        .where(PortTrafficSample.policy_id == policy.id)
+        .order_by(desc(PortTrafficSample.collected_at))
+        .limit(1)
+    )
+    current_rx = sample.current_period_rx if sample else None
+    current_tx = sample.current_period_tx if sample else None
+    total = current_rx + current_tx if current_rx is not None and current_tx is not None else None
+    percent = (
+        total * 100 / policy.quota_bytes
+        if total is not None and policy.quota_bytes
+        else None
+    )
+    now = datetime.now(UTC)
+    recent_events = [
+        PortTrafficEventView(
+            id=f"reset:{event.id}",
+            kind="reset",
+            state="completed",
+            summary=f"Counter reset: {event.reason}",
+            occurred_at=event.occurred_at,
+        )
+        for event in db.scalars(
+            select(PortTrafficResetEvent)
+            .where(PortTrafficResetEvent.policy_id == policy.id)
+            .order_by(desc(PortTrafficResetEvent.occurred_at))
+            .limit(10)
+        ).all()
+    ]
+    event_kinds = {
+        "port_traffic_quota": "quota",
+        "port_traffic_runtime": "runtime",
+        "port_traffic_shaping": "shaping",
+        "port_traffic_enforcement": "enforcement",
+        "port_traffic_snapshot_gap": "gap",
+        "port_traffic_spike": "spike",
+    }
+    alert_rows = db.execute(
+        select(AlertInstance, AlertRule)
+        .join(AlertRule, AlertRule.id == AlertInstance.rule_id)
+        .where(
+            or_(
+                AlertRule.source_id == policy.id,
+                and_(
+                    AlertRule.source_type == "port_traffic_quota",
+                    AlertRule.source_id.in_(quota_alert_source_ids(policy.id)),
+                ),
+            )
+        )
+        .order_by(desc(AlertInstance.last_observed_at))
+        .limit(10)
+    ).all()
+    for alert, rule in alert_rows:
+        kind = event_kinds.get(rule.source_type)
+        if kind is None or not alert.summary:
+            continue
+        recent_events.append(
+            PortTrafficEventView(
+                id=f"alert:{alert.id}",
+                kind=cast(
+                    Literal[
+                        "quota",
+                        "runtime",
+                        "shaping",
+                        "enforcement",
+                        "gap",
+                        "spike",
+                    ],
+                    kind,
+                ),
+                state=alert.state,
+                summary=alert.summary,
+                occurred_at=alert.last_observed_at,
+            )
+        )
+    recent_events.sort(key=lambda item: item.occurred_at, reverse=True)
+    return PortTrafficSummary(
+        policy=PortTrafficPolicyView.model_validate(policy),
+        runtime=PortTrafficRuntimeView.model_validate(runtime) if runtime else None,
+        current_period_rx=current_rx,
+        current_period_tx=current_tx,
+        current_period_total=total,
+        quota_percent=round(percent, 3) if percent is not None else None,
+        quota_state=cast(
+            Literal["unlimited", "normal", "warning", "critical", "exhausted"],
+            quota_state(percent),
+        ),
+        estimated_exhaustion_at=estimate_exhaustion(
+            period_total=total or 0,
+            quota_bytes=policy.quota_bytes,
+            period_start=(runtime.last_reset_at if runtime else None) or policy.created_at,
+            now=now,
+        ),
+        last_sample_at=sample.collected_at if sample else None,
+        data_gap=missing_is_gap(sample.collected_at if sample else None, now=now),
+        recent_events=recent_events[:10],
+    )
+
+
 @router.post(
     "/api/v1/hosts/{host_id}/enrollment-token",
     response_model=EnrollmentTokenView,
@@ -3123,6 +3740,7 @@ def _approval_summary(
 
 
 _APPROVAL_IMPACT_FIELDS: tuple[tuple[str, str], ...] = (
+    ("policy_id", "policy_id"),
     ("service", "service"),
     ("scope", "scope"),
     ("downtime", "downtime"),
@@ -3436,6 +4054,13 @@ async def decide_approval(
         ApprovalStatus.approved.value,
         ApprovalStatus.dry_run_only.value,
     }:
+        if approval.action_name == "port_traffic_reset_schedule_change":
+            policy_id = str(approval.impact.get("policy_id", ""))
+            if payload.confirmation != f"SCHEDULE {policy_id}":
+                raise HTTPException(
+                    status_code=409,
+                    detail="reset schedule change requires the exact second confirmation",
+                )
         agent_id = str(approval.parameters.get("agent_id", ""))
         agent = db.get(Agent, agent_id)
         raw_actions = approval.parameters.get("actions", [])
@@ -3457,6 +4082,15 @@ async def decide_approval(
                     raise HTTPException(
                         status_code=409,
                         detail="restricted cleanup requires the exact second confirmation",
+                    )
+                parameters["second_confirmation"] = "confirmed"
+            if action == "port_traffic_reset":
+                policy_id = parameters.get("policy_id", "")
+                expected_confirmation = f"RESET {policy_id}"
+                if payload.confirmation != expected_confirmation:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="port traffic reset requires the exact second confirmation",
                     )
                 parameters["second_confirmation"] = "confirmed"
             task = create_agent_task(
@@ -4902,6 +5536,12 @@ async def agent_heartbeat(
     )
     record_agent_results(db, agent, payload.events)
     record_agent_check_results(db, agent=agent, services=payload.services, now=now)
+    ingest_observations(
+        db,
+        host_id=agent.host_id,
+        collected_at=payload.collected_at,
+        observations=payload.port_traffic,
+    )
     reconcile_staging_heartbeat(db, agent=agent, payload=payload, settings=settings)
     tasks = list(
         db.scalars(

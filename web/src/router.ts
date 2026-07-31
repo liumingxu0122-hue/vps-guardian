@@ -26,6 +26,11 @@ const router = createRouter({
         { path: 'overview', name: 'overview', component: () => import('./views/OverviewView.vue') },
         { path: 'attention', name: 'attention', component: () => import('./views/AttentionView.vue') },
         ...hostRoutes,
+        {
+          path: 'port-traffic',
+          name: 'port-traffic',
+          component: () => import('./views/PortTrafficView.vue'),
+        },
         { path: 'services', name: 'services', component: () => import('./views/ServicesView.vue') },
         { path: 'topology', name: 'topology', component: () => import('./views/TopologyView.vue') },
         { path: 'alerts', name: 'alerts', component: () => import('./views/AlertsView.vue') },

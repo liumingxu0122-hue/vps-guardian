@@ -103,9 +103,13 @@ func (r *ActionRegistry) Execute(ctx context.Context, task Task) ActionResult {
 		return result
 	}
 	key := task.Action + ":" + task.Parameters["target"]
-	if last := r.state.LastRun[key]; last > 0 && time.Since(time.Unix(last, 0)) < 10*time.Minute {
-		result.Message = "action cooldown is active"
-		return result
+	portTrafficAction := strings.HasPrefix(task.Action, "port_traffic_")
+	if !portTrafficAction {
+		if last := r.state.LastRun[key]; last > 0 &&
+			time.Since(time.Unix(last, 0)) < 10*time.Minute {
+			result.Message = "action cooldown is active"
+			return result
+		}
 	}
 	var err error
 	switch task.Action {
@@ -137,6 +141,8 @@ func (r *ActionRegistry) Execute(ctx context.Context, task Task) ActionResult {
 		err = r.resticCheck(ctx, dryRun, &result)
 	case "rollback_caddy_config":
 		err = r.rollbackCaddyConfig(ctx, task.Parameters["target"], task.Parameters["snapshot"], dryRun, &result)
+	case "port_traffic_apply", "port_traffic_remove", "port_traffic_reset":
+		err = r.portTraffic(ctx, task, dryRun, &result)
 	default:
 		err = errors.New("action is not registered")
 	}
@@ -148,13 +154,88 @@ func (r *ActionRegistry) Execute(ctx context.Context, task Task) ActionResult {
 	} else if result.Message == "" {
 		result.Message = "action completed"
 	}
-	if !dryRun && err == nil {
+	if !portTrafficAction && !dryRun && err == nil {
 		r.state.LastRun[key] = time.Now().Unix()
 	}
 	r.state.Completed[task.ID] = time.Now().Unix()
 	result.DurationMS = float64(time.Since(started).Microseconds()) / 1000
 	_ = r.saveState()
 	return result
+}
+
+func approvalBound(task Task) bool {
+	return task.ApprovalID != "" &&
+		task.RequesterID != "" &&
+		task.ApproverID != "" &&
+		task.RequesterID != task.ApproverID &&
+		task.TargetHostID != ""
+}
+
+func (r *ActionRegistry) portTraffic(
+	ctx context.Context,
+	task Task,
+	dryRun bool,
+	result *ActionResult,
+) error {
+	if !r.config.PortTrafficEnabled || r.config.NetHelperSocket == "" {
+		return errors.New("port traffic helper is disabled")
+	}
+	risky := task.Action == "port_traffic_reset" ||
+		task.Parameters["mode"] == "enforcing" ||
+		task.Parameters["egress_rate_bps"] != "0"
+	if risky && !approvalBound(task) {
+		return errors.New("port traffic change requires bound independent approval")
+	}
+	if task.Action == "port_traffic_reset" &&
+		(!approvalBound(task) || task.Parameters["second_confirmation"] != "confirmed") {
+		return errors.New("port traffic reset requires independent approval and confirmation")
+	}
+	operation := map[string]string{
+		"port_traffic_apply":  "apply",
+		"port_traffic_remove": "remove",
+		"port_traffic_reset":  "reset",
+	}[task.Action]
+	request := map[string]any{
+		"operation":     operation,
+		"dry_run":       dryRun,
+		"authorization": task,
+		"policy": map[string]string{
+			"id":                 task.Parameters["policy_id"],
+			"protocol":           task.Parameters["protocol"],
+			"direction":          task.Parameters["direction"],
+			"port_start":         task.Parameters["port_start"],
+			"port_end":           task.Parameters["port_end"],
+			"interface_name":     task.Parameters["interface_name"],
+			"mode":               task.Parameters["mode"],
+			"quota_bytes":        task.Parameters["quota_bytes"],
+			"egress_rate_bps":    task.Parameters["egress_rate_bps"],
+			"counter_generation": task.Parameters["counter_generation"],
+			"reset_policy":       task.Parameters["reset_policy"],
+			"next_reset_at":      task.Parameters["next_reset_at"],
+		},
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return errors.New("port traffic request encoding failed")
+	}
+	output, err := callNetHelper(ctx, r.config.NetHelperSocket, encoded)
+	if err != nil {
+		return fmt.Errorf("port traffic helper rejected the request: %w", err)
+	}
+	if len(output) > 16*1024 {
+		return errors.New("port traffic helper response exceeds limit")
+	}
+	var response struct {
+		Status     string `json:"status"`
+		Generation int64  `json:"generation"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil || response.Status != "ok" {
+		return errors.New("port traffic helper returned an invalid response")
+	}
+	result.After["helper_status"] = response.Status
+	result.After["counter_generation"] = fmt.Sprintf("%d", response.Generation)
+	result.Message = "bounded port traffic operation completed"
+	return nil
 }
 
 func (r *ActionRegistry) collectDiagnostics(result *ActionResult) error {

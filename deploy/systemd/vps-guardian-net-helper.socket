@@ -1,0 +1,14 @@
+[Unit]
+Description=VPS Guardian bounded network helper socket
+
+[Socket]
+ListenStream=/run/vps-guardian-net-helper/helper.sock
+SocketUser=root
+SocketGroup=vps-guardian-agent
+SocketMode=0660
+DirectoryMode=0755
+Accept=yes
+MaxConnections=4
+
+[Install]
+WantedBy=sockets.target

@@ -1,6 +1,7 @@
 {
   "controller_url": "https://agent.guardian.example.com",
   "agent_id": "replace-after-enrollment",
+  "host_id": "replace-with-controller-host-uuid",
   "certificate_file": "/etc/vps-guardian-agent/tls/agent.crt",
   "private_key_file": "/etc/vps-guardian-agent/tls/agent.key",
   "ca_file": "/etc/vps-guardian-agent/tls/controller-ca.crt",
@@ -22,5 +23,7 @@
   "caddy_container_config": "",
   "snapshot_directory": "/var/lib/vps-guardian-agent/snapshots",
   "action_backup_directory": "/var/lib/vps-guardian-agent/action-backups",
+  "port_traffic_enabled": false,
+  "net_helper_socket": "",
   "local_health_urls": []
 }
