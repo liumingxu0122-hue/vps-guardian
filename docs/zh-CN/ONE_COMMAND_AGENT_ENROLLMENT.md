@@ -59,7 +59,7 @@ Agent 在本机生成 P-256 TLS 私钥、CSR 和 Ed25519 请求签名私钥。Co
 1. 发布固定版本的安装器和 Agent 资源；使用离线发布私钥签署版本绑定清单，发布分离签名，并通过受控流程记录发布公钥和制品 SHA-256。
 2. 配置 `GUARDIAN_AGENT_INSTALL_*` 与 Controller 信任资源；验证完成前保持 `GUARDIAN_ONE_COMMAND_INSTALL_ENABLED=false`。
 3. 备份 Controller 数据库与配置，记录当前 schema 和镜像。
-4. 在隔离环境验证迁移 `0013_agent_enrollment` 的升级和降级。
+4. 在隔离环境验证迁移 `0014_agent_enrollment` 的升级和降级。
 5. 只在隔离 Staging 启用。
 6. 在“添加服务器”中填写名称、地区/分组、系统系列、可选来源 CIDR 和备注。
 7. 把命令复制到目标服务器。关闭对话框后页面会清除命令。
@@ -88,14 +88,14 @@ Controller 发布回滚是独立流程：
 2. 撤销未使用注册会话；
 3. 除非另行批准吊销，不改变已注册 Agent 证书；
 4. 回滚 Web 与 Controller 到兼容镜像；
-5. 仅在确认旧 Controller 不读取新增表/字段后降级 `0013_agent_enrollment`；
+5. 仅在确认旧 Controller 不读取新增表/字段后降级 `0014_agent_enrollment`；
 6. 验证登录、健康、现有 Agent 心跳和审计只追加约束。
 
 本回滚不得修改 CRL、防火墙、Komari、DNS 或无关服务。
 
 ## 升级、修复、证书轮换与卸载
 
-集成流程使用 `0014_agent_maintenance`，详见
+集成流程使用 `0015_agent_maintenance`，详见
 [Agent 维护与退役](AGENT_MAINTENANCE_AND_DECOMMISSION.md)。
 
 不得对在线 Agent 重用初次注册命令。二进制修复或升级必须保留现有身份目录，并使用单独批准的固定版本产物流程。证书替换继续使用既有双身份轮换 API；Host 转移分组不要求重新安装。

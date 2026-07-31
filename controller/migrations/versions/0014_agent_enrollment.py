@@ -1,7 +1,7 @@
 """Add one-command Agent enrollment sessions and progress events.
 
-Revision ID: 0013_agent_enrollment
-Revises: 0012_persistent_sessions
+Revision ID: 0014_agent_enrollment
+Revises: 0013_port_traffic
 """
 
 from collections.abc import Sequence
@@ -9,8 +9,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0013_agent_enrollment"
-down_revision = "0012_persistent_sessions"
+revision = "0014_agent_enrollment"
+down_revision = "0013_port_traffic"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

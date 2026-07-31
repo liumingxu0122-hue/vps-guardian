@@ -13,7 +13,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
   dedicated nftables table and TC handle, while the Agent remains non-root with
   `NoNewPrivileges`; enforcement, reset, and egress shaping require independent
   high-risk approval and host-bound expiring signed tasks.
-- Added reversible migration `0014_agent_maintenance`, isolated hash-only repair,
+- Added reversible migration `0015_agent_maintenance`, isolated hash-only repair,
   reinstall, identity-rotation, and decommission sessions, host/group RBAC, one-time
   Web disclosure, heartbeat/identity CAS gates, CRL-gated decommission, and
   Controller-history preservation.
@@ -26,7 +26,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 - Added fail-closed, host-bound 10-minute Agent enrollment sessions, hash-only
   bootstrap and progress credentials, optional source CIDR restriction, monotonic
   installation timelines, immediate revoke/regenerate, and reversible migration
-  `0013_agent_enrollment`.
+  `0014_agent_enrollment`.
 - Added the bilingual **Add server** wizard and a fixed-version `amd64`/`arm64`
   installer for Ubuntu, Debian, Rocky/Alma/RHEL, Fedora, and Alpine. The Agent
   generates TLS/signing keys and its CSR locally, verifies returned identity

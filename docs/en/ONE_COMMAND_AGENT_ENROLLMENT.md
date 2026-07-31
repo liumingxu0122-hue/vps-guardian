@@ -59,7 +59,7 @@ The installer:
 1. Publish immutable installer and Agent assets for the exact release. Sign the version-bound manifest with the offline release key, publish the detached signature, and record the signing-public-key and artifact SHA-256 values through the controlled release process.
 2. Configure the `GUARDIAN_AGENT_INSTALL_*` and Controller trust asset settings. Leave `GUARDIAN_ONE_COMMAND_INSTALL_ENABLED=false` until validation is complete.
 3. Back up the Controller database/configuration and record the current schema and images.
-4. Apply migration `0013_agent_enrollment`; verify migration upgrade/downgrade in isolation.
+4. Apply migration `0014_agent_enrollment`; verify migration upgrade/downgrade in isolation.
 5. Enable the feature in isolated Staging only.
 6. In **Add server**, enter name, region/group, OS family, optional source CIDR, and notes.
 7. Copy the displayed command to the intended host. Closing the dialog removes it from the browser view.
@@ -88,14 +88,14 @@ Controller rollout rollback is separate:
 2. revoke unused enrollment sessions;
 3. keep enrolled Agent certificates intact unless a distinct revocation decision is approved;
 4. roll back Web and Controller to the compatible image;
-5. downgrade `0013_agent_enrollment` only after verifying the old Controller does not read its tables/columns;
+5. downgrade `0014_agent_enrollment` only after verifying the old Controller does not read its tables/columns;
 6. validate login, health, existing Agent heartbeat, and audit append-only behavior.
 
 Do not modify CRL, firewall, Komari, DNS, or unrelated services as part of this rollback.
 
 ## Upgrade, repair, certificate rotation, and uninstall
 
-The integrated workflow now uses migration `0014_agent_maintenance` and is described
+The integrated workflow now uses migration `0015_agent_maintenance` and is described
 in [Agent maintenance and decommission](AGENT_MAINTENANCE_AND_DECOMMISSION.md).
 
 Do not reuse an initial-enrollment command for an active Agent. Binary repair or upgrade must preserve the existing identity directory and use a separately approved, fixed-version artifact workflow. Certificate replacement uses the existing dual-identity rotation API; moving a Host between groups does not require reinstallation.

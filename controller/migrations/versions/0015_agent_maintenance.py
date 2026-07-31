@@ -1,7 +1,7 @@
 """Add isolated repair and decommission sessions.
 
-Revision ID: 0014_agent_maintenance
-Revises: 0013_agent_enrollment
+Revision ID: 0015_agent_maintenance
+Revises: 0014_agent_enrollment
 """
 
 from collections.abc import Sequence
@@ -9,8 +9,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0014_agent_maintenance"
-down_revision = "0013_agent_enrollment"
+revision = "0015_agent_maintenance"
+down_revision = "0014_agent_enrollment"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
