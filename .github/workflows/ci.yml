@@ -38,16 +38,21 @@ jobs:
       - run: ruff check .
       - run: mypy controller
       - run: sudo "$(command -v pytest)"
-      - name: PostgreSQL 0014 forward and rollback migration
+      - name: PostgreSQL 0013 to 0015 forward and rollback migration
         env:
           GUARDIAN_ENVIRONMENT: test
           GUARDIAN_DATABASE_URL: postgresql+psycopg://guardian_test:guardian_test@127.0.0.1:5432/guardian_test
           GUARDIAN_ONE_COMMAND_INSTALL_ENABLED: 'false'
         run: |
-          alembic -c controller/alembic.ini upgrade head
-          test "$(alembic -c controller/alembic.ini current)" != ""
-          alembic -c controller/alembic.ini downgrade 0013_agent_enrollment
-          alembic -c controller/alembic.ini upgrade head
+          alembic -c controller/alembic.ini upgrade 0015_agent_maintenance
+          alembic -c controller/alembic.ini current | grep -F 0015_agent_maintenance
+          alembic -c controller/alembic.ini downgrade 0014_agent_enrollment
+          alembic -c controller/alembic.ini current | grep -F 0014_agent_enrollment
+          alembic -c controller/alembic.ini downgrade 0013_port_traffic
+          alembic -c controller/alembic.ini current | grep -F 0013_port_traffic
+          alembic -c controller/alembic.ini upgrade 0014_agent_enrollment
+          alembic -c controller/alembic.ini upgrade 0015_agent_maintenance
+          alembic -c controller/alembic.ini current | grep -F 0015_agent_maintenance
       - run: pip-audit --requirement requirements.lock --disable-pip
       - run: python -m pip wheel --no-deps --wheel-dir /tmp/vps-guardian-wheel .
       - run: python -m venv /tmp/vps-guardian-wheel-test

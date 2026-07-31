@@ -13,6 +13,7 @@ from guardian.models import (
     AlertInstance,
     AlertRule,
     Approval,
+    EnrollmentToken,
     Host,
     Incident,
     PortTrafficDailyRollup,
@@ -49,8 +50,9 @@ def test_helper_install_and_agent_config_preserve_fail_closed_host_binding() -> 
     assert "previous_socket_active=false" in helper_installer
     assert 'if ! "$completed"; then' in helper_installer
     assert "rollback" in helper_installer
-    assert "--arg host_id" in agent_installer
-    assert "host_id:$host_id" in agent_installer
+    assert 'case "$host_id" in' in agent_installer
+    assert "????????-????-????-????-????????????" in agent_installer
+    assert '"host_id":"$host_id"' in agent_installer
 
 
 def test_helper_fresh_install_places_executable_before_systemd_verify() -> None:
@@ -75,6 +77,60 @@ def test_helper_socket_directory_allows_unprivileged_agent_traversal() -> None:
     assert "SocketGroup=vps-guardian-agent" in socket_unit
     assert "SocketMode=0660" in socket_unit
     assert "DirectoryMode=0755" in socket_unit
+
+
+def test_enrollment_and_port_traffic_apis_coexist_for_the_same_host(
+    client: TestClient,
+    owner_token: str,
+) -> None:
+    headers = {"Authorization": f"Bearer {owner_token}"}
+    created_host = client.post(
+        "/api/v1/hosts",
+        headers=headers,
+        json={"name": "enrollment-traffic-node"},
+    )
+    assert created_host.status_code == 201
+    host_id = str(created_host.json()["id"])
+
+    enrollment = client.post(
+        f"/api/v1/hosts/{host_id}/enrollment-token",
+        headers=headers,
+        json={},
+    )
+    assert enrollment.status_code == 201
+
+    with SessionLocal() as database:
+        assert database.query(EnrollmentToken).filter_by(host_id=host_id).count() == 1
+        database.add(
+            Agent(
+                host_id=host_id,
+                signing_public_key="B" * 44,
+                certificate_fingerprint="CD" * 32,
+            )
+        )
+        database.commit()
+
+    policy = client.post(
+        f"/api/v1/hosts/{host_id}/port-traffic/policies",
+        headers=headers,
+        json={
+            "name": "enrollment-smoke",
+            "protocol": "tcp",
+            "direction": "both",
+            "port_start": 9443,
+            "port_end": 9443,
+        },
+    )
+    assert policy.status_code == 201, policy.text
+
+    with SessionLocal() as database:
+        assert (
+            database.query(PortTrafficPolicy)
+            .filter_by(host_id=host_id, id=str(policy.json()["id"]))
+            .count()
+            == 1
+        )
+        assert database.query(EnrollmentToken).filter_by(host_id=host_id).count() == 1
 
 
 def seed_host(owner: User) -> tuple[str, str]:
