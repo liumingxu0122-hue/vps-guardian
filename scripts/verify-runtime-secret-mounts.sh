@@ -11,12 +11,12 @@ done
 [ "$(id -u)" -eq 0 ] || { echo "runtime mount verification requires root" >&2; exit 77; }
 [ -n "$runtime_dir" ] || { echo "--runtime-dir is required" >&2; exit 64; }
 case "$runtime_dir" in /*) ;; *) echo "runtime directory must be absolute" >&2; exit 64 ;; esac
-[ -d "$runtime_dir" ] && [ ! -L "$runtime_dir" ] && \
-  [ "$(readlink -f "$runtime_dir")" = "$runtime_dir" ] && \
-  [ "$(stat -c '%u:%g:%a' "$runtime_dir")" = '0:0:711' ] || {
+if [ ! -d "$runtime_dir" ] || [ -L "$runtime_dir" ] || \
+  [ "$(readlink -f "$runtime_dir")" != "$runtime_dir" ] || \
+  [ "$(stat -c '%u:%g:%a' "$runtime_dir")" != '0:0:711' ]; then
   echo "runtime directory is unsafe" >&2
   exit 77
-}
+fi
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 69; }
 
 database_image="${VPS_GUARDIAN_DATABASE_IMAGE:-vps-guardian-postgres:0.3.0-alpha.1}"
@@ -39,11 +39,11 @@ backup/restic-password|10002|10002|$controller_image|backup"
 
 printf '%s\n' "$contracts" | while IFS='|' read -r relative uid gid image identity; do
   path="$runtime_dir/$relative"
-  [ -f "$path" ] && [ ! -L "$path" ] && \
-    [ "$(readlink -f "$path")" = "$path" ] || {
+  if [ ! -f "$path" ] || [ -L "$path" ] || \
+    [ "$(readlink -f "$path")" != "$path" ]; then
     echo "runtime Secret is missing or unsafe: $relative" >&2
     exit 77
-  }
+  fi
   [ "$(stat -c '%u:%g:%a' "$path")" = "$uid:$gid:400" ] || {
     echo "runtime Secret contract mismatch: $relative" >&2
     exit 77

@@ -25,42 +25,42 @@ if [ -z "$secrets_dir" ]; then
 fi
 command -v flock >/dev/null 2>&1 || { echo "flock is required" >&2; exit 69; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required" >&2; exit 69; }
-script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 switch_helper="$script_dir/atomic-directory-switch.py"
 materializer="$script_dir/materialize-runtime-secret.py"
 for helper in "$switch_helper" "$materializer"; do
-  [ -f "$helper" ] && [ ! -L "$helper" ] || {
+  if [ ! -f "$helper" ] || [ -L "$helper" ]; then
     echo "runtime Secret helper is missing or unsafe" >&2
     exit 69
-  }
+  fi
 done
 case "$secrets_dir" in
   /*) ;;
   *) echo "Secret directory must be absolute" >&2; exit 64 ;;
 esac
-[ -d "$secrets_dir" ] && [ ! -L "$secrets_dir" ] && \
-  [ "$(readlink -f "$secrets_dir")" = "$secrets_dir" ] && \
-  [ "$(stat -c '%u:%g:%a' "$secrets_dir")" = '0:0:700' ] || {
+if [ ! -d "$secrets_dir" ] || [ -L "$secrets_dir" ] || \
+  [ "$(readlink -f "$secrets_dir")" != "$secrets_dir" ] || \
+  [ "$(stat -c '%u:%g:%a' "$secrets_dir")" != '0:0:700' ]; then
   echo "canonical Secret directory must be root:root with mode 0700" >&2
   exit 77
-}
+fi
 exec 9<>"$secrets_dir/.runtime.lock"
 chmod 0600 "$secrets_dir/.runtime.lock"
 flock -n 9 || { echo "another runtime Secret transaction is active" >&2; exit 75; }
 runtime_dir="$secrets_dir/runtime"
 
 if [ "$destroy" = 'true' ]; then
-  [ "$refresh" = 'false' ] && [ "$confirmation" = 'DESTROY RUNTIME SECRETS' ] || {
+  if [ "$refresh" != 'false' ] || [ "$confirmation" != 'DESTROY RUNTIME SECRETS' ]; then
     echo "runtime Secret destruction requires exact confirmation" >&2
     exit 64
-  }
+  fi
   if [ -e "$runtime_dir" ] || [ -L "$runtime_dir" ]; then
-    [ -d "$runtime_dir" ] && [ ! -L "$runtime_dir" ] && \
-      [ "$(readlink -f "$runtime_dir")" = "$runtime_dir" ] && \
-      [ "$(stat -c '%u:%g:%a' "$runtime_dir")" = '0:0:711' ] || {
+    if [ ! -d "$runtime_dir" ] || [ -L "$runtime_dir" ] || \
+      [ "$(readlink -f "$runtime_dir")" != "$runtime_dir" ] || \
+      [ "$(stat -c '%u:%g:%a' "$runtime_dir")" != '0:0:711' ]; then
       echo "runtime Secret directory is unsafe" >&2
       exit 77
-    }
+    fi
     rm -rf -- "$runtime_dir"
   fi
   for previous in "$secrets_dir"/runtime.previous.*; do
@@ -79,10 +79,10 @@ fi
   exit 73
 }
 if [ -e "$runtime_dir" ] || [ -L "$runtime_dir" ]; then
-  [ "$refresh" = 'true' ] && [ "$confirmation" = 'REFRESH COMPOSE SECRETS' ] || {
+  if [ "$refresh" != 'true' ] || [ "$confirmation" != 'REFRESH COMPOSE SECRETS' ]; then
     echo "runtime Secret directory exists; exact refresh confirmation is required" >&2
     exit 73
-  }
+  fi
 fi
 
 required='postgres-password database-url jwt-secret field-encryption-key enrollment-token proxy-auth controller-ed25519.pem restic-password server.crt server.key'
@@ -91,21 +91,21 @@ agent_ca_certificate="$secrets_dir/pki/agent-ca.crt"
 agent_ca_private_key="$secrets_dir/pki/private/agent-ca.key"
 for name in $required; do
   path="$secrets_dir/$name"
-  [ -f "$path" ] && [ ! -L "$path" ] && [ -s "$path" ] || {
+  if [ ! -f "$path" ] || [ -L "$path" ] || [ ! -s "$path" ]; then
     echo "required canonical Secret is missing, empty, or unsafe: $name" >&2
     exit 66
-  }
+  fi
   [ "$(stat -c '%u:%g:%a' "$path")" = '0:0:600' ] || {
     echo "canonical Secret must be root:root with mode 0600: $name" >&2
     exit 77
   }
 done
 for path in "$agent_ca_certificate" "$agent_ca_private_key"; do
-  [ -f "$path" ] && [ ! -L "$path" ] && [ -s "$path" ] && \
-    [ "$(stat -c '%u:%g:%a' "$path")" = '0:0:600' ] || {
+  if [ ! -f "$path" ] || [ -L "$path" ] || [ ! -s "$path" ] || \
+    [ "$(stat -c '%u:%g:%a' "$path")" != '0:0:600' ]; then
     echo "canonical Agent CA material must be root:root with mode 0600" >&2
     exit 77
-  }
+  fi
 done
 
 s3_count=0
@@ -119,11 +119,11 @@ case "$s3_count" in
   3)
     for name in $s3_optional; do
       path="$secrets_dir/$name"
-      [ -f "$path" ] && [ ! -L "$path" ] && [ -s "$path" ] && \
-        [ "$(stat -c '%u:%g:%a' "$path")" = '0:0:600' ] || {
+      if [ ! -f "$path" ] || [ -L "$path" ] || [ ! -s "$path" ] || \
+        [ "$(stat -c '%u:%g:%a' "$path")" != '0:0:600' ]; then
         echo "S3 canonical Secret must be root:root with mode 0600: $name" >&2
         exit 77
-      }
+      fi
     done
     ;;
   *) echo "S3 Secrets must be supplied as one complete set" >&2; exit 66 ;;

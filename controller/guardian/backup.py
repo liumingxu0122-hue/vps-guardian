@@ -169,12 +169,17 @@ def _validate_controlled_secret_metadata(
     path: Path,
     mode: int,
     owner_uid: int,
+    process_uid: int,
     platform_name: str,
 ) -> None:
     if platform_name != "posix":
         return
     if owner_uid != 0:
-        raise BackupError("controlled secret file must be root-owned")
+        if owner_uid != process_uid:
+            raise BackupError("controlled secret file must be owned by root or the service UID")
+        if mode != 0o400:
+            raise BackupError("service-owned controlled secret file mode must be 0400")
+        return
     allowed_modes = set(_CONTROLLED_SECRET_MODES)
     if path.is_relative_to(Path("/run/secrets")):
         allowed_modes.add(_COMPOSE_SECRET_MODE)
@@ -189,7 +194,7 @@ def read_controlled_secret_file(
     label: str,
     maximum_bytes: int = 4096,
 ) -> str:
-    """Read one root-owned secret without following symlinks or accepting loose modes."""
+    """Read one root- or service-owned secret without accepting unsafe metadata."""
     if not path.is_absolute():
         raise BackupError(f"{label} file must be an absolute path")
     try:
@@ -212,6 +217,7 @@ def read_controlled_secret_file(
             path=path,
             mode=stat.S_IMODE(metadata.st_mode),
             owner_uid=metadata.st_uid,
+            process_uid=os.geteuid() if hasattr(os, "geteuid") else 0,
             platform_name=os.name,
         )
         if metadata.st_size < 1 or metadata.st_size > maximum_bytes:
