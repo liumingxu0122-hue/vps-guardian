@@ -6,6 +6,10 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ### Added
 
+- Added atomic per-service runtime Secret materialization: canonical files remain
+  `root:root` `0600`, while fixed non-root container UIDs receive only isolated
+  `0400` read-only bind mounts; Compose file-secret permission emulation is no
+  longer trusted for local deployments.
 - Added preview per-port TCP/UDP RX/TX accounting, explicit discontinuities, bounded
   raw/hour/day retention, quota alert thresholds, bilingual policy/history UI, and
   reversible migration `0013_port_traffic`.

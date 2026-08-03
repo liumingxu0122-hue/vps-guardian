@@ -67,8 +67,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes shellcheck
-          shellcheck scripts/install-agent.sh scripts/maintain-agent.sh scripts/uninstall-agent.sh
-          sh -n scripts/install-agent.sh scripts/maintain-agent.sh scripts/uninstall-agent.sh
+          shellcheck \
+            scripts/install-agent.sh \
+            scripts/maintain-agent.sh \
+            scripts/uninstall-agent.sh \
+            scripts/prepare-compose-secrets.sh \
+            scripts/verify-runtime-secret-mounts.sh \
+            operations/scripts/tests/runtime-secret-materializer.test.sh \
+            operations/scripts/tests/runtime-secret-compose.test.sh
+          sh -n \
+            scripts/install-agent.sh \
+            scripts/maintain-agent.sh \
+            scripts/uninstall-agent.sh \
+            scripts/prepare-compose-secrets.sh \
+            scripts/verify-runtime-secret-mounts.sh
       - uses: actions/setup-go@v5
         with:
           go-version-file: agent/go.mod
@@ -254,6 +266,11 @@ jobs:
           bash -n operations/scripts/read-root-secret-file.sh
           bash -n operations/scripts/tests/read-root-secret-file.test.sh
           sudo bash operations/scripts/tests/read-root-secret-file.test.sh
+      - name: Non-root runtime Secret materializer regression
+        run: |
+          bash -n scripts/prepare-compose-secrets.sh
+          bash -n operations/scripts/tests/runtime-secret-materializer.test.sh
+          sudo bash operations/scripts/tests/runtime-secret-materializer.test.sh
       - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -262,6 +279,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VPS_GUARDIAN_CONTROLLER_IMAGE: ci-vps-guardian-controller:${{ github.sha }}
+      VPS_GUARDIAN_GATEWAY_IMAGE: ci-vps-guardian-agent-gateway:${{ github.sha }}
       VPS_GUARDIAN_BACKUP_IMAGE: ci-vps-guardian-backup:${{ github.sha }}
       VPS_GUARDIAN_WEB_IMAGE: ci-vps-guardian-web:${{ github.sha }}
       VPS_GUARDIAN_DATABASE_IMAGE: ci-vps-guardian-postgres:${{ github.sha }}
@@ -284,19 +302,31 @@ jobs:
           for name in restic-repository restic-password aws-access-key-id aws-secret-access-key aws-default-region; do
             install -m 0600 /dev/null "/tmp/guardian-offsite-secrets/$name"
           done
-          GUARDIAN_OFFSITE_SECRETS_DIR=/tmp/guardian-offsite-secrets \
+          GUARDIAN_OFFSITE_RUNTIME_SECRETS_DIR=/tmp/guardian-offsite-secrets \
           GUARDIAN_NOTIFICATION_SECRETS_DIR=/tmp/guardian-notification-secrets \
             docker compose \
               -f docker-compose.yml \
               -f deploy/offsite-backup.compose.yml \
               -f deploy/notification-secrets.compose.yml \
               config --quiet
-      - run: docker compose build database controller backup web
+      - run: docker compose build database controller agent-gateway backup web
+      - name: Fixed non-root image UID contract
+        run: |
+          test "$(docker image inspect "$VPS_GUARDIAN_DATABASE_IMAGE" --format '{{index .Config.Labels "org.vps-guardian.runtime.uid"}}:{{index .Config.Labels "org.vps-guardian.runtime.gid"}}:{{.Config.User}}')" = '70:70:70:70'
+          test "$(docker image inspect "$VPS_GUARDIAN_CONTROLLER_IMAGE" --format '{{index .Config.Labels "org.vps-guardian.runtime.uid"}}:{{index .Config.Labels "org.vps-guardian.runtime.gid"}}:{{.Config.User}}')" = '10001:10001:10001:10001'
+          test "$(docker image inspect "$VPS_GUARDIAN_CONTROLLER_IMAGE" --format '{{index .Config.Labels "org.vps-guardian.runtime.backup.uid"}}:{{index .Config.Labels "org.vps-guardian.runtime.backup.gid"}}')" = '10002:10002'
+          test "$(docker image inspect "$VPS_GUARDIAN_GATEWAY_IMAGE" --format '{{index .Config.Labels "org.vps-guardian.runtime.uid"}}:{{index .Config.Labels "org.vps-guardian.runtime.gid"}}:{{.Config.User}}')" = '99:99:99:99'
+      - name: Runtime Secret Compose lifecycle
+        run: |
+          bash -n operations/scripts/tests/runtime-secret-compose.test.sh
+          sudo --preserve-env=VPS_GUARDIAN_DATABASE_IMAGE,VPS_GUARDIAN_CONTROLLER_IMAGE,VPS_GUARDIAN_GATEWAY_IMAGE,VPS_GUARDIAN_BACKUP_IMAGE,VPS_GUARDIAN_WEB_IMAGE,VPS_GUARDIAN_SOURCE_COMMIT,VPS_GUARDIAN_RELEASE_VERSION,VPS_GUARDIAN_BUILD_TIME,VPS_GUARDIAN_SOURCE_URL,VPS_GUARDIAN_LICENSE \
+            bash operations/scripts/tests/runtime-secret-compose.test.sh
       - name: Immutable OCI label gate
         run: |
           for image in \
             "$VPS_GUARDIAN_DATABASE_IMAGE" \
             "$VPS_GUARDIAN_CONTROLLER_IMAGE" \
+            "$VPS_GUARDIAN_GATEWAY_IMAGE" \
             "$VPS_GUARDIAN_BACKUP_IMAGE" \
             "$VPS_GUARDIAN_WEB_IMAGE"; do
             test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$VPS_GUARDIAN_RELEASE_VERSION"

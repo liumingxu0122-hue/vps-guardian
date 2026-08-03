@@ -23,6 +23,12 @@ docker compose ps
 docker compose exec -it controller controller-entrypoint guardian-admin create-user
 ```
 
+Canonical Secret 始终保持 `root:root` 和 `0600`。准备脚本使用临时文件、`fsync`
+和原子替换，为固定的非 root 服务 UID 生成相互隔离的 `0400` runtime 副本；每个
+容器只读挂载自身需要的文件。runtime 副本不进入 Git、镜像、构建上下文或备份
+输入。普通 Compose 重启保留副本；显式 refresh 会安全重建，正式退役只能通过
+脚本的 `--destroy-runtime` 确认门禁删除 runtime 树，不影响 canonical Secret。
+
 管理员命令会交互询问邮箱、角色、TOTP 选项及隐藏密码。禁止把密码写入 argv、`.env`、Git、Shell 历史或日志。等待 `database`、`controller`、`agent-gateway` 和 `web` 全部健康后，打开 `https://<GUARDIAN_DOMAIN>/overview`。
 
 升级前必须验证备份与恢复，阅读 `CHANGELOG.md`，检出明确版本，重新构建并只重建 Guardian 服务。保留数据卸载使用 `docker compose down`；快速流程有意不包含 volume 删除。

@@ -38,7 +38,7 @@ def load_helper() -> ModuleType:
 def test_install_and_refresh_never_remove_the_runtime_path(tmp_path: Path) -> None:
     staged = tmp_path / ".runtime.new.first"
     runtime = tmp_path / "runtime"
-    staged.mkdir(mode=0o700)
+    staged.mkdir(mode=0o711)
     (staged / "value").write_text("first\n", encoding="utf-8")
 
     installed = run_helper("install", staged, runtime)
@@ -47,7 +47,7 @@ def test_install_and_refresh_never_remove_the_runtime_path(tmp_path: Path) -> No
 
     replacement = tmp_path / ".runtime.new.second"
     previous = tmp_path / "runtime.previous.test"
-    replacement.mkdir(mode=0o700)
+    replacement.mkdir(mode=0o711)
     (replacement / "value").write_text("second\n", encoding="utf-8")
     refreshed = run_helper("refresh", replacement, runtime, previous)
 
@@ -62,9 +62,9 @@ def test_refresh_failure_leaves_the_original_runtime_in_place(tmp_path: Path) ->
     runtime = tmp_path / "runtime"
     staged = tmp_path / ".runtime.new.failure"
     previous = tmp_path / "runtime.previous.existing"
-    runtime.mkdir(mode=0o700)
-    staged.mkdir(mode=0o700)
-    previous.mkdir(mode=0o700)
+    runtime.mkdir(mode=0o711)
+    staged.mkdir(mode=0o711)
+    previous.mkdir(mode=0o711)
     (runtime / "value").write_text("original\n", encoding="utf-8")
     (staged / "value").write_text("replacement\n", encoding="utf-8")
 
@@ -83,8 +83,8 @@ def test_interruption_after_exchange_preserves_both_secret_trees(
     runtime = tmp_path / "runtime"
     staged = tmp_path / ".runtime.new.interrupted"
     previous = tmp_path / "runtime.previous.interrupted"
-    runtime.mkdir(mode=0o700)
-    staged.mkdir(mode=0o700)
+    runtime.mkdir(mode=0o711)
+    staged.mkdir(mode=0o711)
     (runtime / "value").write_text("original\n", encoding="utf-8")
     (staged / "value").write_text("replacement\n", encoding="utf-8")
     rename_exchange = helper.rename_exchange

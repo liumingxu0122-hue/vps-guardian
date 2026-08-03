@@ -84,6 +84,13 @@ docker compose build && docker compose up -d
 docker compose exec -it controller controller-entrypoint guardian-admin create-user
 ```
 
+Canonical Secrets remain `root:root` mode `0600`. Preparation atomically creates
+per-service `0400` runtime copies for fixed PostgreSQL (`70:70`), Controller
+(`10001:10001`), Gateway (`99:99`), and backup (`10002:10002`) identities. Each
+container receives only its own read-only files. Compose restarts retain the
+runtime tree; explicit refresh safely rebuilds it. Formal decommission can remove
+only runtime copies with `--destroy-runtime --confirm 'DESTROY RUNTIME SECRETS'`.
+
 The final command securely prompts for the administrator email and hidden password. Never put a password in argv, `.env`, Git, or logs. Read the [complete quick start](docs/en/QUICKSTART.md) before exposing ports.
 
 ## Agent enrollment

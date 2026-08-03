@@ -15,12 +15,15 @@ RUN test "$(cat version.go | sed -n 's/const Version = "\([^"]*\)"/\1/p')" = '1.
     && /out/gosu --version | grep -Eq '^1\.19 \(go1\.26\.5 on linux/'
 
 FROM postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+RUN test "$(id -u postgres):$(id -g postgres)" = '70:70'
 ARG GUARDIAN_SOURCE_COMMIT=0000000000000000000000000000000000000000
 ARG GUARDIAN_RELEASE_VERSION=0.0.0-development
 ARG GUARDIAN_BUILD_TIME=1970-01-01T00:00:00Z
 ARG GUARDIAN_SOURCE_URL=https://github.com/liumingxu0122-hue/vps-guardian
 ARG GUARDIAN_LICENSE=Apache-2.0
 LABEL org.vps-guardian.source-commit=$GUARDIAN_SOURCE_COMMIT \
+      org.vps-guardian.runtime.uid=70 \
+      org.vps-guardian.runtime.gid=70 \
       org.opencontainers.image.version=$GUARDIAN_RELEASE_VERSION \
       org.opencontainers.image.revision=$GUARDIAN_SOURCE_COMMIT \
       org.opencontainers.image.created=$GUARDIAN_BUILD_TIME \
@@ -29,3 +32,4 @@ LABEL org.vps-guardian.source-commit=$GUARDIAN_SOURCE_COMMIT \
 COPY --from=gosu-build /out/gosu /usr/local/bin/gosu
 RUN chmod 0755 /usr/local/bin/gosu \
     && gosu --version | grep -Eq '^1\.19 \(go1\.26\.5 on linux/'
+USER 70:70

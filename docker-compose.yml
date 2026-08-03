@@ -66,15 +66,14 @@ services:
     depends_on:
       database-volume-init:
         condition: service_completed_successfully
-    user: postgres:postgres
+    user: "70:70"
     environment:
       POSTGRES_DB: guardian
       POSTGRES_USER: guardian
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-    secrets:
-      - postgres_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/postgresql/postgres-password:/run/secrets/postgres_password:ro
     networks:
       - backend
     read_only: true
@@ -143,6 +142,7 @@ services:
         org.opencontainers.image.source: ${VPS_GUARDIAN_SOURCE_URL:-https://github.com/liumingxu0122-hue/vps-guardian}
         org.opencontainers.image.licenses: ${VPS_GUARDIAN_LICENSE:-Apache-2.0}
     restart: unless-stopped
+    user: "10001:10001"
     depends_on:
       database:
         condition: service_healthy
@@ -191,18 +191,17 @@ services:
       GUARDIAN_OPERATIONS_GATE_DECISION: ${GUARDIAN_OPERATIONS_GATE_DECISION:-no_go_phase4_observation_pending}
       GUARDIAN_RELEASE_VERSION: ${GUARDIAN_RELEASE_VERSION:-0.4.0-phase4-preview}
       GUARDIAN_DEPLOYMENT_COMMIT: ${GUARDIAN_DEPLOYMENT_COMMIT:-unknown}
-    secrets:
-      - database_url
-      - jwt_secret
-      - field_encryption_key
-      - enrollment_token
-      - proxy_auth
-      - controller_signing_key
-      - agent_ca_certificate
-      - agent_ca_private_key
     volumes:
       - controller_data:/var/lib/vps-guardian
       - recovery_exchange:/var/lib/vps-guardian-recovery:ro
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/controller/database-url:/run/secrets/database_url:ro
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/controller/jwt-secret:/run/secrets/jwt_secret:ro
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/controller/field-encryption-key:/run/secrets/field_encryption_key:ro
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/controller/enrollment-token:/run/secrets/enrollment_token:ro
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/controller/proxy-auth:/run/secrets/proxy_auth:ro
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/controller/controller-ed25519.pem:/run/secrets/controller_signing_key:ro
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/controller/agent-ca.crt:/run/secrets/agent_ca_certificate:ro
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/controller/agent-ca.key:/run/secrets/agent_ca_private_key:ro
     expose:
       - "8090"
     networks:
@@ -222,19 +221,28 @@ services:
       retries: 8
 
   agent-gateway:
-    image: haproxy:3.4.2-alpine3.24@sha256:0878b11eb64c433be1b0f578a584b8aca12f6caaa64c8f239b8b556c0dd5eeeb
+    image: ${VPS_GUARDIAN_GATEWAY_IMAGE:-vps-guardian-agent-gateway:local}
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: deploy/agent-gateway.Dockerfile
+      args:
+        GUARDIAN_SOURCE_COMMIT: ${VPS_GUARDIAN_SOURCE_COMMIT:-0000000000000000000000000000000000000000}
+        GUARDIAN_RELEASE_VERSION: ${VPS_GUARDIAN_RELEASE_VERSION:-0.0.0-development}
+        GUARDIAN_BUILD_TIME: ${VPS_GUARDIAN_BUILD_TIME:-1970-01-01T00:00:00Z}
+        GUARDIAN_SOURCE_URL: ${VPS_GUARDIAN_SOURCE_URL:-https://github.com/liumingxu0122-hue/vps-guardian}
+        GUARDIAN_LICENSE: ${VPS_GUARDIAN_LICENSE:-Apache-2.0}
     restart: unless-stopped
     depends_on:
       controller:
         condition: service_healthy
-    secrets:
-      - proxy_auth
-      - agent_gateway_certificate
-      - agent_gateway_private_key
     volumes:
       - ./deploy/agent-gateway-entrypoint.sh:/usr/local/bin/guardian-agent-gateway-entrypoint:ro
       - ./deploy/agent-gateway.haproxy.cfg:/etc/vps-guardian/agent-gateway.haproxy.cfg:ro
       - ${GUARDIAN_GATEWAY_PKI_DIR:-./secrets/gateway-pki}:/etc/vps-guardian/gateway-pki:ro
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/gateway/proxy-auth:/run/secrets/proxy_auth:ro
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/gateway/server.crt:/run/secrets/agent_gateway_certificate:ro
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/gateway/server.key:/run/secrets/agent_gateway_private_key:ro
     entrypoint:
       - /usr/local/bin/guardian-agent-gateway-entrypoint
     command:
@@ -253,7 +261,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
-    user: "haproxy:haproxy"
+    user: "99:99"
     cap_drop:
       - ALL
     security_opt:
@@ -301,19 +309,18 @@ services:
       RESTIC_BACKUP_TIMEOUT_SECONDS: ${VPS_GUARDIAN_BACKUP_TIMEOUT_SECONDS:-14400}
       RESTIC_CACHE_DIR: /var/cache/vps-guardian-backup
       TMPDIR: /var/lib/vps-guardian-backup/staging
-    secrets:
-      - database_url
-      - restic_password
     volumes:
       - backup_state:/var/lib/vps-guardian-backup
       - backup_cache:/var/cache/vps-guardian-backup
       - recovery_exchange:/var/lib/vps-guardian-backup/recovery
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/backup/database-url:/run/secrets/database_url:ro
+      - ${GUARDIAN_RUNTIME_SECRETS_DIR:-./secrets/runtime}/backup/restic-password:/run/secrets/restic_password:ro
     networks:
       - backend
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
-    user: "guardian-backup:guardian-backup"
+    user: "10002:10002"
     entrypoint: []
     command:
       - guardian-backup
@@ -397,29 +404,3 @@ volumes:
   recovery_exchange:
   caddy_data:
   caddy_config:
-
-secrets:
-  postgres_password:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/postgres-password
-  database_url:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/database-url
-  jwt_secret:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/jwt-secret
-  field_encryption_key:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/field-encryption-key
-  enrollment_token:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/enrollment-token
-  proxy_auth:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/proxy-auth
-  controller_signing_key:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/controller-ed25519.pem
-  agent_ca_certificate:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/agent-ca.crt
-  agent_ca_private_key:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/agent-ca.key
-  restic_password:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/restic-password
-  agent_gateway_certificate:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/server.crt
-  agent_gateway_private_key:
-    file: ${GUARDIAN_SECRETS_DIR:-./secrets}/runtime/server.key

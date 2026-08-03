@@ -31,6 +31,7 @@ chmod 0600 "$target"/*
 
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 sh "$script_dir/pki-init.sh" "$target/pki"
+chmod 0600 "$target/pki/agent-ca.crt" "$target/pki/private/agent-ca.key"
 openssl genpkey -algorithm ED25519 -out "$target/server.key"
 openssl req -new -key "$target/server.key" -subj "/CN=$gateway_name" \
   -addext "subjectAltName=DNS:$gateway_name" -out "$target/server.csr"
