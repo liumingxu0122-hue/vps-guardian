@@ -204,7 +204,7 @@ jobs:
         run: |
           case "$DISTRO" in
             ubuntu|debian)
-              packages='apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssl coreutils grep sed'
+              packages='apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssl coreutils grep sed curl'
               ;;
             rocky)
               packages='dnf install -y openssl grep sed'

@@ -99,17 +99,31 @@ for digest in "$agent_sha256_amd64" "$agent_sha256_arm64" "$server_ca_sha256" \
 done
 
 for command in curl sha256sum openssl install mv cp rm chmod chown id getent date mktemp \
-  uname grep sed tr head dirname find ln sort base64 wc; do
+  uname grep sed tr head dirname find ln sort base64 wc readlink stat; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "missing prerequisite: $command" >&2
     exit 69
   }
 done
-if [ ! -f /etc/os-release ] || [ -L /etc/os-release ]; then
+os_release=/etc/os-release
+if [ -L "$os_release" ]; then
+  resolved_os_release="$(readlink -f -- "$os_release")" || {
+    echo "Linux distribution metadata is missing or unsafe" >&2
+    exit 69
+  }
+  [ "$resolved_os_release" = /usr/lib/os-release ] || {
+    echo "Linux distribution metadata is missing or unsafe" >&2
+    exit 69
+  }
+  os_release="$resolved_os_release"
+fi
+if [ ! -f "$os_release" ] || [ -L "$os_release" ] || \
+  [ "$(stat -c %u -- "$os_release")" -ne 0 ] || \
+  [ $((0$(stat -c %a -- "$os_release") & 022)) -ne 0 ]; then
   echo "Linux distribution metadata is missing or unsafe" >&2
   exit 69
 fi
-detected_os="$(sed -n 's/^ID=//p' /etc/os-release | head -n 1 | tr -d '"'\'' ' | tr '[:upper:]' '[:lower:]')"
+detected_os="$(sed -n 's/^ID=//p' "$os_release" | head -n 1 | tr -d '"'\'' ' | tr '[:upper:]' '[:lower:]')"
 case "$os_family:$detected_os" in
   auto:ubuntu|auto:debian|auto:rocky|auto:almalinux|auto:rhel|auto:fedora|auto:alpine) ;;
   debian:ubuntu|debian:debian) ;;
