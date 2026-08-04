@@ -375,6 +375,9 @@ def test_maintenance_scripts_fail_closed_and_destroy_plaintext() -> None:
     assert "trap 'exit 130' INT" in maintainer
     assert 'rm -f -- "$token_file"' in maintainer
     assert "--maintenance-token-file" in command_builder
+    assert 'curl --config' in command_builder
+    assert "embedded_https_ca_bundle" in command_builder
+    assert maintainer.count('--cacert "$work_directory/enrollment-https-ca-bundle.pem"') >= 6
     assert "?token=" not in maintainer and "--maintenance-token " not in command_builder
     assert "rm -rf /var/lib/vps-guardian-agent" in maintainer
     assert maintainer.index('if [ "$purge_local_state" = true ]') < maintainer.index(

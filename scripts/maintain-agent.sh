@@ -164,9 +164,15 @@ response_host_id="$(sed -n 's/.*"host_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/
   exit 65
 }
 
-curl --fail --show-error --location --proto '=https' -o "$work_directory/manifest" "$manifest_url"
-curl --fail --show-error --location --proto '=https' -o "$work_directory/manifest.sig" "$manifest_signature_url"
-curl --fail --show-error --location --proto '=https' -o "$work_directory/release-key.pem" "$signing_key_url"
+curl --fail --show-error --location --proto '=https' \
+  --cacert "$work_directory/enrollment-https-ca-bundle.pem" \
+  -o "$work_directory/manifest" "$manifest_url"
+curl --fail --show-error --location --proto '=https' \
+  --cacert "$work_directory/enrollment-https-ca-bundle.pem" \
+  -o "$work_directory/manifest.sig" "$manifest_signature_url"
+curl --fail --show-error --location --proto '=https' \
+  --cacert "$work_directory/enrollment-https-ca-bundle.pem" \
+  -o "$work_directory/release-key.pem" "$signing_key_url"
 printf '%s  %s\n' "$signing_key_sha256" "$work_directory/release-key.pem" |
   sha256sum --check --status || exit 65
 openssl pkeyutl -verify -pubin -inkey "$work_directory/release-key.pem" -rawin \
@@ -202,6 +208,7 @@ if [ "$mode" = decommission ]; then
 fi
 
 curl --fail --show-error --location --proto '=https' --connect-timeout 10 --max-time 180 \
+  --cacert "$work_directory/enrollment-https-ca-bundle.pem" \
   -o "$work_directory/agent" "$agent_url"
 printf '%s  %s\n' "$agent_sha256" "$work_directory/agent" | sha256sum --check --status
 chmod 0755 "$work_directory/agent"

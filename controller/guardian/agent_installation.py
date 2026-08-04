@@ -191,13 +191,21 @@ def build_agent_maintenance_command(
             settings.agent_release_signing_public_key_sha256, "release signing public key"
         ),
     }
+    embedded_https_ca_bundle = _embedded_https_ca_bundle(settings)
     q = shlex.quote
     arguments = [
         "umask 077;",
         'guardian_tmp="$(mktemp -d)"',
         "&&", "trap", q('rm -rf -- "$guardian_tmp"'), "EXIT HUP INT TERM",
         "&&", "printf", q("%s"), q(token), '>"$guardian_tmp/maintenance-token"',
-        "&&", "curl --fail --show-error --location --proto '=https'",
+        "&&", "printf", q("%s"), q(embedded_https_ca_bundle), "| base64 -d",
+        '>"$guardian_tmp/enrollment-https-ca-bundle.pem"',
+        "&& chmod 0600", '"$guardian_tmp/enrollment-https-ca-bundle.pem"',
+        "&& printf", q('cacert = "%s"\n'),
+        '"$guardian_tmp/enrollment-https-ca-bundle.pem"',
+        '>"$guardian_tmp/curl.conf"', "&& chmod 0600", '"$guardian_tmp/curl.conf"',
+        "&&", "curl --config", '"$guardian_tmp/curl.conf"',
+        "--fail --show-error --location --proto '=https'",
         "--connect-timeout 10 --max-time 120 -o", '"$guardian_tmp/maintain-agent.sh"',
         q(urljoin(release_base, "maintain-agent.sh")),
         "&&", "printf", q("%s  %s\\n"), q(values["script_sha"]),
