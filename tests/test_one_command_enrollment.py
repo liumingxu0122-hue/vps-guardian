@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -50,13 +52,51 @@ def test_one_command_is_fixed_verified_and_contains_token_once() -> None:
     )
 
     assert command.count(token) == 1
-    assert "curl --fail --show-error --location --proto '=https'" in command
+    assert "curl --config \"$guardian_tmp/curl.conf\"" in command
+    assert "enrollment-https-ca-bundle.pem" in command
+    assert "base64 -d" in command
     assert "sha256sum --check --status" in command
     assert "trap 'rm -rf -- \"$guardian_tmp\"' EXIT HUP INT TERM" in command
     assert "latest" not in command
     assert "?token=" not in command
     assert "curl | sh" not in command and "curl|sh" not in command
     assert settings.agent_install_release_version in command
+    assert settings.agent_enrollment_https_ca_bundle_url not in command
+
+
+def test_one_command_fails_closed_for_missing_or_mismatched_embedded_ca(
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    missing = settings.model_copy(
+        update={"agent_enrollment_https_ca_bundle_file": tmp_path / "missing.pem"}
+    )
+    with pytest.raises(ValueError, match="missing or unsafe"):
+        build_one_command_install(
+            settings=missing,
+            host_id="19ca9b96-a220-44ce-b37d-e27ca4a77701",
+            enrollment_token="enrollment-token-value-that-is-long-enough",
+            os_family="debian",
+        )
+
+    source = Path(settings.agent_enrollment_https_ca_bundle_file)
+    bundle = tmp_path / "transport-ca.pem"
+    bundle.write_bytes(source.read_bytes())
+    mismatch = settings.model_copy(
+        update={
+            "agent_enrollment_https_ca_bundle_file": bundle,
+            "agent_enrollment_https_ca_bundle_sha256": hashlib.sha256(
+                b"wrong"
+            ).hexdigest(),
+        }
+    )
+    with pytest.raises(ValueError, match="does not match"):
+        build_one_command_install(
+            settings=mismatch,
+            host_id="19ca9b96-a220-44ce-b37d-e27ca4a77701",
+            enrollment_token="enrollment-token-value-that-is-long-enough",
+            os_family="debian",
+        )
 
 
 def test_one_command_configuration_fails_closed() -> None:

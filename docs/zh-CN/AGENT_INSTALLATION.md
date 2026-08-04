@@ -4,7 +4,9 @@
 
 `enrollment_https_ca_bundle_file` 只用于验证 Enrollment HTTPS Gateway；`agent_mtls_ca_bundle_file` 只用于验证 Agent 客户端证书与身份轮换。两者必须使用不同字段和文件，不能互相覆盖。
 
-临时 HTTPS CA 文件权限必须为 `0600`，并在成功、失败或信号中断后删除。Gateway 必须提供 leaf 和必要 intermediate，但不能发送 root。禁止关闭 TLS 或主机名校验。
+经认证的一条命令响应会内嵌公开且固定 SHA-256 的 `enrollment_https_ca_bundle`，在首次下载前写入权限为 `0600` 的临时文件；安装器、发布资产下载和 Enrollment Gateway 请求均使用该独立传输信任根。临时 HTTPS CA 文件会在成功、失败或信号中断后删除。Gateway 必须提供 leaf 和必要 intermediate，但不能发送 root。禁止关闭 TLS 或主机名校验。
+
+启用一条命令安装时，应将公开传输 CA 只读挂载到 `GUARDIAN_AGENT_ENROLLMENT_HTTPS_CA_BUNDLE_FILE`。文件内容必须与 `GUARDIAN_AGENT_ENROLLMENT_HTTPS_CA_BUNDLE_SHA256` 一致；缺失、符号链接、过大、格式错误或哈希不匹配都会失败关闭。CA 内容不得进入环境变量或日志。
 
 [English](../en/AGENT_INSTALLATION.md) | [简体中文](AGENT_INSTALLATION.md)
 

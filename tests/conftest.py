@@ -1,6 +1,13 @@
+# Test configuration must be established before importing the application.
+# ruff: noqa: E402
+
 from __future__ import annotations
 
+import hashlib
 import os
+from pathlib import Path
+
+import certifi
 
 os.environ["GUARDIAN_ENVIRONMENT"] = "test"
 os.environ["GUARDIAN_DATABASE_URL"] = "sqlite://"
@@ -20,7 +27,13 @@ os.environ["GUARDIAN_AGENT_BINARY_ARM64_SHA256"] = "3" * 64
 os.environ["GUARDIAN_AGENT_ENROLLMENT_HTTPS_CA_BUNDLE_URL"] = (
     "https://controller.example.test/assets/enrollment-https-ca-bundle.pem"
 )
-os.environ["GUARDIAN_AGENT_ENROLLMENT_HTTPS_CA_BUNDLE_SHA256"] = "4" * 64
+test_https_ca_bundle = Path(certifi.where())
+os.environ["GUARDIAN_AGENT_ENROLLMENT_HTTPS_CA_BUNDLE_FILE"] = str(
+    test_https_ca_bundle
+)
+os.environ["GUARDIAN_AGENT_ENROLLMENT_HTTPS_CA_BUNDLE_SHA256"] = hashlib.sha256(
+    test_https_ca_bundle.read_bytes()
+).hexdigest()
 os.environ["GUARDIAN_AGENT_CONTROLLER_PUBLIC_KEY_URL"] = (
     "https://controller.example.test/assets/controller-ed25519.pub"
 )

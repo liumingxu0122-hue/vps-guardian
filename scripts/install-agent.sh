@@ -44,7 +44,7 @@ done
 
 for value in "$controller_url" "$host_id" "$enrollment_token_file" "$release_version" "$os_family" \
   "$agent_url_amd64" "$agent_sha256_amd64" "$agent_url_arm64" "$agent_sha256_arm64" \
-  "$enrollment_https_ca_bundle_url" "$enrollment_https_ca_bundle_sha256" \
+  "$enrollment_https_ca_bundle_sha256" \
   "$controller_public_key_url" \
   "$controller_public_key_sha256" "$release_manifest_url" \
   "$release_manifest_signature_url" "$release_signing_public_key_url" \
@@ -58,7 +58,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 case "$controller_url" in https://*) ;; *) echo "Controller URL must use HTTPS" >&2; exit 64 ;; esac
-for url in "$agent_url_amd64" "$agent_url_arm64" "$enrollment_https_ca_bundle_url" \
+for url in "$agent_url_amd64" "$agent_url_arm64" \
   "$controller_public_key_url" "$release_manifest_url" \
   "$release_manifest_signature_url" "$release_signing_public_key_url"; do
   case "$url" in
@@ -233,14 +233,44 @@ rollback() {
 }
 trap rollback EXIT
 
+# The authenticated one-command response places the public Enrollment HTTPS
+# trust bundle next to the token before this installer starts. A URL fallback is
+# retained for standalone packaging, but it is never the one-command trust root.
+failure_step="Enrollment HTTPS trust material verification"
+embedded_https_ca_bundle="$(dirname -- "$enrollment_token_file")/enrollment-https-ca-bundle.pem"
+if [ -f "$embedded_https_ca_bundle" ] && [ ! -L "$embedded_https_ca_bundle" ]; then
+  cp "$embedded_https_ca_bundle" "$work_directory/enrollment-https-ca-bundle.pem"
+elif [ -n "$enrollment_https_ca_bundle_url" ]; then
+  curl --fail --show-error --silent --location --proto '=https' \
+    --connect-timeout 10 --max-time 60 \
+    -o "$work_directory/enrollment-https-ca-bundle.pem" \
+    "$enrollment_https_ca_bundle_url"
+else
+  echo "Enrollment HTTPS CA bundle is missing" >&2
+  exit 65
+fi
+printf '%s  %s\n' "$enrollment_https_ca_bundle_sha256" \
+  "$work_directory/enrollment-https-ca-bundle.pem" | sha256sum --check --status || {
+    echo "Enrollment HTTPS CA bundle checksum verification failed" >&2
+    exit 65
+  }
+chmod 0600 "$work_directory/enrollment-https-ca-bundle.pem"
+printf 'cacert = "%s"\n' "$work_directory/enrollment-https-ca-bundle.pem" \
+  > "$work_directory/enrollment-curl.conf"
+chmod 0600 "$work_directory/enrollment-curl.conf"
+
+enrollment_https_curl() {
+  curl --config "$work_directory/enrollment-curl.conf" "$@"
+}
+
 failure_step="release manifest verification"
-curl --fail --show-error --location --proto '=https' \
+enrollment_https_curl --fail --show-error --location --proto '=https' \
   --connect-timeout 10 --max-time 60 \
   -o "$work_directory/release-manifest" "$release_manifest_url"
-curl --fail --show-error --location --proto '=https' \
+enrollment_https_curl --fail --show-error --location --proto '=https' \
   --connect-timeout 10 --max-time 60 \
   -o "$work_directory/release-manifest.sig" "$release_manifest_signature_url"
-curl --fail --show-error --location --proto '=https' \
+enrollment_https_curl --fail --show-error --location --proto '=https' \
   --connect-timeout 10 --max-time 60 \
   -o "$work_directory/release-signing-public-key.pem" "$release_signing_public_key_url"
 printf '%s  %s\n' "$release_signing_public_key_sha256" \
@@ -277,21 +307,6 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# The Enrollment HTTPS trust bundle is public material, but its exact digest is
-# pinned in the authenticated one-command response. It must be available before
-# any request carries the short-lived enrollment credential.
-failure_step="Enrollment HTTPS trust download"
-curl --fail --show-error --silent --location --proto '=https' \
-  --connect-timeout 10 --max-time 60 \
-  -o "$work_directory/enrollment-https-ca-bundle.pem" \
-  "$enrollment_https_ca_bundle_url"
-printf '%s  %s\n' "$enrollment_https_ca_bundle_sha256" \
-  "$work_directory/enrollment-https-ca-bundle.pem" | sha256sum --check --status || {
-    echo "Enrollment HTTPS CA bundle checksum verification failed" >&2
-    exit 65
-  }
-chmod 0600 "$work_directory/enrollment-https-ca-bundle.pem"
-
 enrollment_token="$(cat "$enrollment_token_file")"
 case "$enrollment_token" in
   *[!A-Za-z0-9._~-]*|'') echo "enrollment token format is invalid" >&2; exit 65 ;;
@@ -306,9 +321,8 @@ unset enrollment_token
 
 report_progress() {
   progress="$1"
-  curl --fail --show-error --silent --proto '=https' \
+  enrollment_https_curl --fail --show-error --silent --proto '=https' \
     --connect-timeout 10 --max-time 30 \
-    --cacert "$work_directory/enrollment-https-ca-bundle.pem" \
     -H 'Content-Type: application/json' -H "@$header_file" \
     --data "{\"status\":\"$progress\"}" \
     "${controller_url%/}/api/v1/agents/enrollment-progress" >/dev/null
@@ -317,9 +331,8 @@ report_progress() {
 report_failure() {
   failed_step="$1"
   was_rolled_back="$2"
-  curl --fail --show-error --silent --proto '=https' \
+  enrollment_https_curl --fail --show-error --silent --proto '=https' \
     --connect-timeout 10 --max-time 30 \
-    --cacert "$work_directory/enrollment-https-ca-bundle.pem" \
     -H 'Content-Type: application/json' -H "@$header_file" \
     --data "{\"status\":\"failed\",\"error_code\":\"installer_failed\",\"error_summary\":\"Agent installation failed during $failed_step\",\"rolled_back\":$was_rolled_back}" \
     "${controller_url%/}/api/v1/agents/enrollment-progress" >/dev/null
@@ -332,7 +345,7 @@ report_progress installer_verified
 report_progress prerequisites_checked
 
 failure_step="Agent download"
-curl --fail --show-error --silent --location --proto '=https' \
+enrollment_https_curl --fail --show-error --silent --location --proto '=https' \
   --connect-timeout 10 --max-time 180 -o "$work_directory/agent" "$agent_url"
 report_progress agent_downloaded
 printf '%s  %s\n' "$agent_sha256" "$work_directory/agent" | \
@@ -348,7 +361,7 @@ chmod 0755 "$work_directory/agent"
 report_progress agent_verified
 
 failure_step="Controller signing trust download"
-curl --fail --show-error --silent --location --proto '=https' \
+enrollment_https_curl --fail --show-error --silent --location --proto '=https' \
   --connect-timeout 10 --max-time 60 \
   -o "$work_directory/controller-public-key.txt" "$controller_public_key_url"
 printf '%s  %s\n' "$controller_public_key_sha256" \

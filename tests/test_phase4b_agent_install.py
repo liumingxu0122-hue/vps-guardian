@@ -62,7 +62,6 @@ def test_generated_command_uses_token_file_and_complete_installer_contract() -> 
         "--agent-sha256-amd64",
         "--agent-url-arm64",
         "--agent-sha256-arm64",
-        "--enrollment-https-ca-bundle-url",
         "--enrollment-https-ca-bundle-sha256",
         "--controller-public-key-url",
         "--controller-public-key-sha256",
@@ -76,7 +75,7 @@ def test_generated_command_uses_token_file_and_complete_installer_contract() -> 
     for forbidden in ("--private-key", "--certificate", "--signing-key"):
         assert forbidden not in command_builder
     assert "latest" not in command_builder
-    assert "curl --fail --show-error --location --proto '=https'" in command_builder
+    assert 'curl --config' in command_builder
 
 
 def test_installer_refuses_redirects_when_sending_short_lived_credentials() -> None:
@@ -86,10 +85,8 @@ def test_installer_refuses_redirects_when_sending_short_lived_credentials() -> N
     ]
     assert credential_request_blocks
     assert all("--location" not in block for block in credential_request_blocks)
-    assert all(
-        '--cacert "$work_directory/enrollment-https-ca-bundle.pem"' in block
-        for block in credential_request_blocks
-    )
+    assert all("enrollment_https_curl" in block for block in credential_request_blocks)
+    assert '--cacert "$work_directory/enrollment-https-ca-bundle.pem"' not in installer
 
 
 def test_installer_keeps_https_and_mtls_ca_material_isolated_and_ephemeral() -> None:

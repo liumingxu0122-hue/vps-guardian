@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import re
 import shlex
+from pathlib import Path
 from urllib.parse import urljoin
 
 from guardian.config import Settings
@@ -15,6 +18,28 @@ def _sha256(value: str, label: str) -> str:
     if not re.fullmatch(r"[a-f0-9]{64}", value):
         raise AgentInstallationConfigurationError(f"{label} SHA-256 is not configured")
     return value
+
+
+def _embedded_https_ca_bundle(settings: Settings) -> str:
+    path = Path(settings.agent_enrollment_https_ca_bundle_file)
+    if path.is_symlink() or not path.is_file():
+        raise AgentInstallationConfigurationError(
+            "Enrollment HTTPS CA bundle file is missing or unsafe"
+        )
+    payload = path.read_bytes()
+    if not payload or len(payload) > 262_144 or b"-----BEGIN CERTIFICATE-----" not in payload:
+        raise AgentInstallationConfigurationError(
+            "Enrollment HTTPS CA bundle file is invalid"
+        )
+    expected = _sha256(
+        settings.agent_enrollment_https_ca_bundle_sha256,
+        "Enrollment HTTPS CA bundle",
+    )
+    if not hashlib.sha256(payload).hexdigest() == expected:
+        raise AgentInstallationConfigurationError(
+            "Enrollment HTTPS CA bundle file does not match its configured SHA-256"
+        )
+    return base64.b64encode(payload).decode("ascii")
 
 
 def build_one_command_install(
@@ -57,6 +82,7 @@ def build_one_command_install(
             "release signing public key",
         ),
     }
+    embedded_https_ca_bundle = _embedded_https_ca_bundle(settings)
     quoted = {key: shlex.quote(value) for key, value in values.items()}
     q = shlex.quote
     return " ".join(
@@ -73,7 +99,23 @@ def build_one_command_install(
             q(enrollment_token),
             '>"$guardian_tmp/enrollment-token"',
             "&&",
-            "curl --fail --show-error --location --proto '=https'",
+            "printf",
+            q("%s"),
+            q(embedded_https_ca_bundle),
+            "| base64 -d",
+            '>"$guardian_tmp/enrollment-https-ca-bundle.pem"',
+            "&& chmod 0600",
+            '"$guardian_tmp/enrollment-https-ca-bundle.pem"',
+            "&& printf",
+            q('cacert = "%s"\n'),
+            '"$guardian_tmp/enrollment-https-ca-bundle.pem"',
+            '>"$guardian_tmp/curl.conf"',
+            "&& chmod 0600",
+            '"$guardian_tmp/curl.conf"',
+            "&&",
+            "curl --config",
+            '"$guardian_tmp/curl.conf"',
+            "--fail --show-error --location --proto '=https'",
             "--connect-timeout 10 --max-time 120",
             "-o",
             '"$guardian_tmp/install-agent.sh"',
@@ -106,8 +148,6 @@ def build_one_command_install(
             q(agent_arm64_url),
             "--agent-sha256-arm64",
             quoted["agent_arm64_sha"],
-            "--enrollment-https-ca-bundle-url",
-            q(settings.agent_enrollment_https_ca_bundle_url),
             "--enrollment-https-ca-bundle-sha256",
             quoted["enrollment_https_ca_bundle_sha"],
             "--controller-public-key-url",

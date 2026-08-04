@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     agent_enrollment_https_ca_bundle_url: str = (
         "https://downloads.example.com/enrollment-https-ca-bundle.pem"
     )
+    agent_enrollment_https_ca_bundle_file: Path = Path(
+        "/run/public/enrollment-https-ca-bundle.pem"
+    )
     agent_enrollment_https_ca_bundle_sha256: str = Field(default="", max_length=64)
     agent_controller_public_key_url: str = (
         "https://downloads.example.com/controller-public-key.txt"
