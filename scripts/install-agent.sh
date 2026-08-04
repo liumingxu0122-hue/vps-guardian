@@ -496,19 +496,22 @@ chmod 0640 /etc/vps-guardian/agent/config.json
 
 failure_step="service installation"
 if command -v systemctl >/dev/null 2>&1; then
-  systemd_namespace_hardening="PrivateTmp=true
+  systemd_privileged_hardening="PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 ReadWritePaths=/var/lib/vps-guardian/agent /var/log/vps-guardian /etc/vps-guardian/agent/identities"
   if command -v systemd-detect-virt >/dev/null 2>&1 \
     && systemd-detect-virt --quiet --container; then
     # Rootless/container guests commonly lack CAP_SYS_ADMIN in the outer
-    # bounding set. systemd needs it transiently to construct the mount
-    # namespace used by these directives before dropping to User=.
-    systemd_namespace_hardening=""
+    # bounding set. systemd needs it transiently to construct mount namespaces
+    # and to install seccomp filters after switching to User=.
+    systemd_privileged_hardening=""
   fi
   cat > /etc/systemd/system/vps-guardian-agent.service <<EOF
 [Unit]
@@ -526,17 +529,14 @@ RestartSec=10s
 TimeoutStopSec=30s
 UMask=0077
 NoNewPrivileges=true
-$systemd_namespace_hardening
-RestrictSUIDSGID=true
-LockPersonality=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+$systemd_privileged_hardening
 CapabilityBoundingSet=
 AmbientCapabilities=
 
 [Install]
 WantedBy=multi-user.target
 EOF
-  unset systemd_namespace_hardening
+  unset systemd_privileged_hardening
   chmod 0644 /etc/systemd/system/vps-guardian-agent.service
   systemctl daemon-reload
   report_progress service_installed

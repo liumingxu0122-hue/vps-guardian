@@ -14,8 +14,9 @@ def test_agent_installer_verifies_artifact_runs_nonroot_and_rolls_back() -> None
     assert "NoNewPrivileges=true" in installer
     assert "CapabilityBoundingSet=" in installer
     assert "systemd-detect-virt --quiet --container" in installer
-    assert 'systemd_namespace_hardening=""' in installer
+    assert 'systemd_privileged_hardening=""' in installer
     assert "Rootless/container guests commonly lack CAP_SYS_ADMIN" in installer
+    assert "install seccomp filters after switching to User=" in installer
     assert "SupplementaryGroups=docker" not in installer
     assert "curl |" not in installer and "curl|" not in installer
     assert "rm -rf /etc/vps-guardian\n" not in installer
