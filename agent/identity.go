@@ -33,7 +33,7 @@ type renewalIdentity struct {
 type renewalResponse struct {
 	Identity             renewalIdentity `json:"identity"`
 	CertificatePEM       string          `json:"certificate_pem"`
-	CABundlePEM          string          `json:"ca_bundle_pem"`
+	AgentMTLSCABundlePEM string          `json:"agent_mtls_ca_bundle_pem"`
 	CertificateExpiresAt time.Time       `json:"certificate_expires_at"`
 }
 
@@ -121,14 +121,14 @@ func validateRenewedIdentity(config Config, response renewalResponse, privateKey
 	if response.CertificateExpiresAt.IsZero() || !certificate.NotAfter.Equal(response.CertificateExpiresAt) {
 		return errors.New("renewed certificate expiry does not match the response")
 	}
-	currentCA, err := os.ReadFile(config.AgentCAFile)
+	currentCA, err := os.ReadFile(config.AgentMTLSCABundleFile)
 	if err != nil {
 		return fmt.Errorf("read pinned Agent CA: %w", err)
 	}
 	pinnedRoots := x509.NewCertPool()
 	returnedRoots := x509.NewCertPool()
 	if !pinnedRoots.AppendCertsFromPEM(currentCA) ||
-		!returnedRoots.AppendCertsFromPEM([]byte(response.CABundlePEM)) {
+		!returnedRoots.AppendCertsFromPEM([]byte(response.AgentMTLSCABundlePEM)) {
 		return errors.New("Agent CA bundle is invalid")
 	}
 	verifyOptions := x509.VerifyOptions{Roots: pinnedRoots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}

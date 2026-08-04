@@ -1,5 +1,25 @@
 # Release notes index
 
+## Unreleased Phase 4 Agent lifecycle acceptance
+
+Automated validation passed for enrollment/maintenance credential isolation,
+approval separation, CRL gates, rollback, and decommission path boundaries. Real
+Staging at fixed commit `2122fa7` passed one-command enrollment, local CSR/mTLS
+bootstrap, repair, reinstall, identity rotation, CRL publication, and rejection
+of the old certificate. Real two-person decommission preserve/purge is
+**PENDING HUMAN ACCEPTANCE**; Agent B/OpenRC and KVM whole-machine reboot are not
+covered. This is not a Production release or Production-readiness declaration.
+Production remains **NO-GO**.
+
+### 未发布的 Phase 4 Agent 生命周期验收
+
+自动化验证已覆盖并通过注册/维护凭据隔离、审批职责分离、CRL 门禁、回滚和
+退役路径边界。固定提交 `2122fa7` 已在真实 Staging 通过一条命令注册、本地
+CSR/mTLS Bootstrap、Repair、Reinstall、身份轮换、CRL 发布和旧证书拒绝。
+真实双人 Decommission preserve/purge 为 **PENDING HUMAN ACCEPTANCE**；
+Agent B/OpenRC 和 KVM 整机重启尚未覆盖。本说明不代表 Production 发布或
+Production Ready；Production 继续为 **NO-GO**。
+
 Current release: [v0.3.0-alpha.1](RELEASE_NOTES_v0.3.0-alpha.1.md) | [简体中文](RELEASE_NOTES_v0.3.0-alpha.1.zh-CN.md)
 
 # v0.1.0-alpha.1 / Public Alpha

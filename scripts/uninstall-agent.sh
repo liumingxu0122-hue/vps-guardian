@@ -16,28 +16,45 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-backup_dir="/var/backups/vps-guardian-agent/uninstall-$timestamp"
-install -d -m 0700 "$backup_dir"
+install -d -m 0700 /var/backups/vps-guardian-agent
+backup_dir="$(mktemp -d "/var/backups/vps-guardian-agent/uninstall-$timestamp-XXXXXX")"
+chmod 0700 "$backup_dir"
 [ ! -e /usr/local/sbin/vps-guardian-agent ] || \
   cp -a /usr/local/sbin/vps-guardian-agent "$backup_dir/agent-binary"
 [ ! -e /etc/vps-guardian-agent ] || \
   cp -a /etc/vps-guardian-agent "$backup_dir/etc-vps-guardian-agent"
+[ ! -e /etc/vps-guardian/agent ] || \
+  cp -a /etc/vps-guardian/agent "$backup_dir/etc-vps-guardian-agent-current"
 [ ! -e /etc/systemd/system/vps-guardian-agent.service ] || \
   cp -a /etc/systemd/system/vps-guardian-agent.service "$backup_dir/systemd-service"
-find "$backup_dir" -type f -exec sha256sum {} \; > "$backup_dir/SHA256SUMS"
+[ ! -e /etc/init.d/vps-guardian-agent ] || \
+  cp -a /etc/init.d/vps-guardian-agent "$backup_dir/openrc-service"
+find "$backup_dir" -type f ! -name SHA256SUMS -exec sha256sum {} \; > "$backup_dir/SHA256SUMS"
 
-systemctl disable --now vps-guardian-agent.service >/dev/null 2>&1 || true
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl disable --now vps-guardian-agent.service >/dev/null 2>&1 || true
+else
+  rc-service vps-guardian-agent stop >/dev/null 2>&1 || true
+  rc-update del vps-guardian-agent default >/dev/null 2>&1 || true
+fi
 rm -f /etc/systemd/system/vps-guardian-agent.service
+rm -f /etc/init.d/vps-guardian-agent
 rm -f /usr/local/sbin/vps-guardian-agent
 rm -rf /etc/vps-guardian-agent
-systemctl daemon-reload
+rm -rf /etc/vps-guardian/agent
+rmdir /etc/vps-guardian >/dev/null 2>&1 || true
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload
+fi
 
 if [ "$purge_state" = true ]; then
   rm -rf /var/lib/vps-guardian-agent
+  rm -rf /var/lib/vps-guardian/agent /var/log/vps-guardian
+  rmdir /var/lib/vps-guardian >/dev/null 2>&1 || true
   userdel vps-guardian-agent >/dev/null 2>&1 || true
   groupdel vps-guardian-agent >/dev/null 2>&1 || true
 else
-  echo 'Local queue and state were preserved in /var/lib/vps-guardian-agent'
+  echo 'Local queue and state were preserved in /var/lib/vps-guardian/agent or the legacy path'
 fi
 echo "Controller-side host history and audit records were not modified"
 echo "Uninstall backup: $backup_dir"

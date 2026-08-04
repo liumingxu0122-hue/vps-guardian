@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Check, Copy, KeyRound, Plus, Power, RefreshCw, Search, Server, Trash2, X } from '@lucide/vue'
-import { computed, onMounted, ref, watch } from 'vue'
+import { Activity, Check, Copy, KeyRound, Plus, Power, RefreshCw, RotateCcw, Search, Server, ShieldX, Trash2, Wrench, X } from '@lucide/vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
@@ -11,9 +11,11 @@ import PageHeader from '../components/PageHeader.vue'
 import DataTable from '../components/v3/DataTable.vue'
 import DetailDrawer from '../components/v3/DetailDrawer.vue'
 import StatusBadge from '../components/v3/StatusBadge.vue'
+import { enrollmentSecondsRemaining as secondsRemaining, isTerminalEnrollment } from '../enrollment'
+import { canIssueMaintenance, canViewMaintenance, destroyMaintenanceDisclosure } from '../maintenance'
 import { agentLabel, dataReasonLabel, healthLabel, healthTone, managementLabel, regionLabel } from '../presentationRegistry'
 import { session } from '../session'
-import type { EnrollmentToken, Host, HostPresentation, LatestSnapshot } from '../types'
+import type { AgentMaintenanceSession, AgentMaintenanceToken, EnrollmentSession, EnrollmentToken, Host, HostPresentation, LatestSnapshot } from '../types'
 import { formatBytes, formatDuration, percentUsed, relativeTime } from '../utils'
 
 const { locale, t } = useI18n()
@@ -35,16 +37,41 @@ const loading = ref(true)
 const loadError = ref('')
 const dialog = ref<HTMLDialogElement | null>(null)
 const tokenDialog = ref<HTMLDialogElement | null>(null)
+const maintenanceDialog = ref<HTMLDialogElement | null>(null)
 const issuedToken = ref<EnrollmentToken | null>(null)
+const enrollmentSession = ref<EnrollmentSession | null>(null)
+const enrollmentError = ref('')
 const copied = ref(false)
 const creating = ref(false)
 const formError = ref('')
+const maintenanceKind = ref<AgentMaintenanceToken['kind']>('repair')
+const maintenanceToken = ref<AgentMaintenanceToken | null>(null)
+const maintenanceStatus = ref<AgentMaintenanceSession | null>(null)
+const maintenanceError = ref('')
+const maintenanceTypedConfirmation = ref('')
+const maintenanceConfirmed = ref(false)
+const maintenancePurge = ref(false)
+const maintenanceApprovalId = ref('')
 const selectedIds = ref(new Set<string>())
 const batchGroup = ref('')
 const batchTag = ref('')
-const newHost = ref({ name: '', address: '', location: '', group_name: '' })
+const newHost = ref({
+  name: '',
+  location: '',
+  group_name: '',
+  tags: '',
+  notes: '',
+  os_family: 'auto',
+  source_cidr: '',
+})
+const clock = ref(Date.now())
+let enrollmentPoll: ReturnType<typeof setInterval> | null = null
 
-const canManage = computed(() => ['admin', 'owner'].includes(session.user?.role ?? 'viewer'))
+const canAddHost = computed(() => ['admin', 'owner'].includes(session.user?.role ?? 'viewer'))
+const canIssueEnrollment = computed(() => ['operator', 'admin', 'owner'].includes(session.user?.role ?? 'viewer'))
+const canRepairAgent = computed(() => canIssueMaintenance(session.user?.role, 'repair'))
+const canAdminAgent = computed(() => canIssueMaintenance(session.user?.role, 'reinstall'))
+const canViewAgentMaintenance = computed(() => canViewMaintenance(session.user?.role))
 const filtered = computed(() => {
   const needle = query.value.trim().toLocaleLowerCase()
   const values = hosts.value.filter((host) => {
@@ -82,6 +109,15 @@ const selectedEnrollmentHost = computed(() => {
   const host = hosts.value.find((candidate) => candidate.id === hostId)
   return host?.management === 'pending_enrollment' ? host : null
 })
+const enrollmentSecondsRemaining = computed(() => {
+  if (!issuedToken.value) return 0
+  return secondsRemaining(issuedToken.value.expires_at, clock.value)
+})
+const enrollmentStatusLabel = computed(() => {
+  const status = enrollmentSession.value?.status ?? issuedToken.value?.status ?? 'waiting'
+  const key = `hosts.enrollmentStatus.${status}`
+  return t(key)
+})
 watch([query, stateFilter, managementFilter, agentFilter, regionFilter, groupFilter, sortBy, sortDirection], () => {
   page.value = 1
 })
@@ -97,6 +133,72 @@ async function load(): Promise<void> {
   } finally {
     loading.value = false
   }
+}
+
+function destroyMaintenanceCommand(): void {
+  maintenanceToken.value = destroyMaintenanceDisclosure(maintenanceToken.value)
+  maintenanceTypedConfirmation.value = ''
+  maintenanceConfirmed.value = false
+}
+
+function openMaintenance(kind: AgentMaintenanceToken['kind']): void {
+  maintenanceKind.value = kind
+  maintenanceStatus.value = null
+  maintenanceError.value = ''
+  maintenancePurge.value = false
+  maintenanceApprovalId.value = ''
+  destroyMaintenanceCommand()
+  maintenanceDialog.value?.showModal()
+}
+
+async function loadMaintenanceStatus(): Promise<void> {
+  if (!selected.value) return
+  maintenanceError.value = ''
+  try {
+    maintenanceStatus.value = await request<AgentMaintenanceSession>(
+      `/api/v1/hosts/${selected.value.id}/maintenance-sessions/latest`,
+    )
+    maintenanceKind.value = maintenanceStatus.value.kind
+    maintenanceDialog.value?.showModal()
+  } catch {
+    maintenanceError.value = t('hosts.maintenanceStatusFailed')
+    maintenanceDialog.value?.showModal()
+  }
+}
+
+async function issueMaintenance(): Promise<void> {
+  if (!selected.value) return
+  maintenanceError.value = ''
+  if (maintenanceKind.value === 'decommission' && (
+    !maintenanceConfirmed.value ||
+    maintenanceTypedConfirmation.value !== selected.value.name ||
+    !maintenanceApprovalId.value
+  )) {
+    maintenanceError.value = t('hosts.decommissionConfirmationRequired')
+    return
+  }
+  try {
+    maintenanceToken.value = await request<AgentMaintenanceToken>(
+      `/api/v1/hosts/${selected.value.id}/maintenance-sessions`,
+      {
+        method: 'POST',
+        ...jsonBody({
+          kind: maintenanceKind.value,
+          purge_local_state: maintenancePurge.value,
+          approval_id: maintenanceApprovalId.value || null,
+          confirmation: maintenanceKind.value === 'decommission'
+            ? `DECOMMISSION ${selected.value.name}`
+            : null,
+        }),
+      },
+    )
+  } catch {
+    maintenanceError.value = t('hosts.maintenanceIssueFailed')
+  }
+}
+
+async function copyMaintenanceCommand(): Promise<void> {
+  if (maintenanceToken.value?.command) await navigator.clipboard.writeText(maintenanceToken.value.command)
 }
 
 async function selectHost(host: HostPresentation): Promise<void> {
@@ -115,12 +217,33 @@ async function createHost(): Promise<void> {
   try {
     const host = await request<Host>('/api/v1/hosts', {
       method: 'POST',
-      ...jsonBody({ ...newHost.value, os_name: null, tags: [], labels: {} }),
+      ...jsonBody({
+        name: newHost.value.name,
+        address: 'pending-enrollment',
+        location: newHost.value.location || null,
+        group_name: newHost.value.group_name || null,
+        notes: newHost.value.notes || null,
+        desired_os_family: newHost.value.os_family,
+        os_name: null,
+        tags: newHost.value.tags.split(',').map((value) => value.trim()).filter(Boolean),
+        labels: {},
+      }),
     })
     dialog.value?.close()
-    newHost.value = { name: '', address: '', location: '', group_name: '' }
     await load()
-    await issueEnrollment(host.id)
+    await issueEnrollment(host.id, {
+      os_family: newHost.value.os_family,
+      source_cidr: newHost.value.source_cidr || null,
+    })
+    newHost.value = {
+      name: '',
+      location: '',
+      group_name: '',
+      tags: '',
+      notes: '',
+      os_family: 'auto',
+      source_cidr: '',
+    }
   } catch {
     formError.value = t('hosts.createFailed')
   } finally {
@@ -202,13 +325,83 @@ async function deleteHost(host: HostPresentation): Promise<void> {
   await load()
 }
 
-async function issueEnrollment(hostId: string): Promise<void> {
-  issuedToken.value = await request<EnrollmentToken>(`/api/v1/hosts/${hostId}/enrollment-token`, {
-    method: 'POST',
-    ...jsonBody({ expires_in_minutes: 15 }),
-  })
+function stopEnrollmentPoll(): void {
+  if (enrollmentPoll) clearInterval(enrollmentPoll)
+  enrollmentPoll = null
+}
+
+function destroyEnrollmentCommand(): void {
+  stopEnrollmentPoll()
+  issuedToken.value = null
   copied.value = false
-  tokenDialog.value?.showModal()
+}
+
+async function loadEnrollmentStatus(hostId: string): Promise<void> {
+  try {
+    enrollmentSession.value = await request<EnrollmentSession>(
+      `/api/v1/hosts/${hostId}/enrollment-sessions/latest`,
+      { dedupe: false },
+    )
+    if (isTerminalEnrollment(enrollmentSession.value.status)) stopEnrollmentPoll()
+  } catch {
+    enrollmentError.value = t('hosts.enrollmentStatusFailed')
+  }
+}
+
+function startEnrollmentPoll(hostId: string): void {
+  stopEnrollmentPoll()
+  void loadEnrollmentStatus(hostId)
+  enrollmentPoll = setInterval(() => void loadEnrollmentStatus(hostId), 2_000)
+}
+
+async function issueEnrollment(
+  hostId: string,
+  options: { os_family?: string; source_cidr?: string | null } = {},
+): Promise<void> {
+  enrollmentError.value = ''
+  enrollmentSession.value = null
+  try {
+    issuedToken.value = await request<EnrollmentToken>(
+      `/api/v1/hosts/${hostId}/enrollment-token`,
+      {
+        method: 'POST',
+        ...jsonBody({
+          expires_in_minutes: 10,
+          os_family: options.os_family ?? 'auto',
+          source_cidr: options.source_cidr ?? null,
+        }),
+      },
+    )
+    copied.value = false
+    tokenDialog.value?.showModal()
+    startEnrollmentPoll(hostId)
+  } catch {
+    enrollmentError.value = t('hosts.enrollmentIssueFailed')
+  }
+}
+
+async function revokeEnrollment(): Promise<void> {
+  if (!issuedToken.value) return
+  enrollmentError.value = ''
+  try {
+    await request<void>(
+      `/api/v1/hosts/${issuedToken.value.host_id}/enrollment-tokens/${issuedToken.value.id}/revoke`,
+      { method: 'POST' },
+    )
+    await loadEnrollmentStatus(issuedToken.value.host_id)
+    issuedToken.value = null
+  } catch {
+    enrollmentError.value = t('hosts.enrollmentRevokeFailed')
+  }
+}
+
+async function regenerateEnrollment(): Promise<void> {
+  const hostId = issuedToken.value?.host_id ?? enrollmentSession.value?.host_id
+  if (!hostId) return
+  await issueEnrollment(hostId, {
+    os_family: enrollmentSession.value?.os_family ?? 'auto',
+    source_cidr: enrollmentSession.value?.source_cidr ?? null,
+  })
 }
 
 async function copyCommand(): Promise<void> {
@@ -224,13 +417,20 @@ onMounted(async () => {
     if (host) await selectHost(host)
   }
 })
+const clockInterval = setInterval(() => {
+  clock.value = Date.now()
+}, 1_000)
+onUnmounted(() => {
+  clearInterval(clockInterval)
+  stopEnrollmentPoll()
+})
 </script>
 
 <template>
   <PageHeader :title="t('hosts.title')" :description="t('hosts.description')">
     <template #actions>
       <button class="icon-button bordered" type="button" :aria-label="t('hosts.refresh')" @click="load"><RefreshCw :size="17" /></button>
-      <button v-if="canManage" class="primary-button" type="button" @click="dialog?.showModal()"><Plus :size="16" />{{ t('hosts.add') }}</button>
+      <button v-if="canAddHost" class="primary-button" type="button" @click="dialog?.showModal()"><Plus :size="16" />{{ t('hosts.add') }}</button>
     </template>
   </PageHeader>
 
@@ -258,6 +458,7 @@ onMounted(async () => {
   </div>
 
   <p v-if="loadError" class="inline-error" role="alert">{{ loadError }}</p>
+  <p v-if="enrollmentError" class="inline-error" role="alert">{{ enrollmentError }}</p>
   <div v-else-if="loading" class="row-skeletons" :aria-label="t('hosts.loading')"><span v-for="item in 6" :key="item"></span></div>
   <div v-if="selectedIds.size" class="rc5-batch-bar">
     <strong>{{ locale === 'zh-CN' ? `已选 ${selectedIds.size} 台` : `${selectedIds.size} selected` }}</strong>
@@ -265,7 +466,7 @@ onMounted(async () => {
     <button class="secondary-button" type="button" @click="applyBatch({ enabled: false })">{{ locale === 'zh-CN' ? '停用' : 'Disable' }}</button>
     <label><span>{{ locale === 'zh-CN' ? '分组' : 'Group' }}</span><input v-model="batchGroup" /><button type="button" @click="applyBatch({ group_name: batchGroup })">{{ locale === 'zh-CN' ? '应用' : 'Apply' }}</button></label>
     <label><span>{{ locale === 'zh-CN' ? '添加标签' : 'Add tag' }}</span><input v-model="batchTag" /><button type="button" @click="applyBatch({ add_tags: [batchTag] })">{{ locale === 'zh-CN' ? '添加' : 'Add' }}</button></label>
-    <button v-if="selectedEnrollmentHost" class="secondary-button" type="button" @click="issueEnrollment(selectedEnrollmentHost.id)"><KeyRound :size="15" />{{ locale === 'zh-CN' ? '重新发送注册说明' : 'Resend enrollment instructions' }}</button>
+    <button v-if="canIssueEnrollment && selectedEnrollmentHost" class="secondary-button" type="button" @click="issueEnrollment(selectedEnrollmentHost.id)"><KeyRound :size="15" />{{ locale === 'zh-CN' ? '重新发送注册说明' : 'Resend enrollment instructions' }}</button>
     <button class="secondary-button" type="button" @click="exportSelected">{{ locale === 'zh-CN' ? '导出' : 'Export' }}</button>
   </div>
   <DataTable v-if="!loading && filtered.length" :label="t('hosts.title')" :selected-key="selected?.id" :page="page" :page-size="pageSize" :total="filtered.length" @previous="page -= 1" @next="page += 1">
@@ -302,10 +503,15 @@ onMounted(async () => {
         <EmptyState v-else :title="t('hosts.noMetrics')" />
       </section>
       <details class="rc5-technical"><summary>{{ locale === 'zh-CN' ? '技术信息' : 'Technical details' }}</summary><dl><div><dt>ID</dt><dd class="mono">{{ selected.id }}</dd></div><div><dt>{{ t('hosts.address') }}</dt><dd class="mono">{{ selected.primary_address }}</dd></div></dl></details>
-      <div v-if="canManage" class="rc5-drawer-actions">
-        <button class="secondary-button" type="button" @click="setEnabled(selected)"><Power :size="15" />{{ selected.enabled ? t('hosts.disable') : t('hosts.enable') }}</button>
-        <button v-if="!selected.enrolled_at" class="secondary-button" type="button" @click="issueEnrollment(selected.id)"><KeyRound :size="15" />{{ t('hosts.issueToken') }}</button>
-        <button v-if="!selected.enrolled_at" class="secondary-button danger" type="button" @click="deleteHost(selected)"><Trash2 :size="15" />{{ t('hosts.delete') }}</button>
+      <div v-if="canAddHost || canIssueEnrollment || canViewAgentMaintenance" class="rc5-drawer-actions">
+        <button v-if="canAddHost" class="secondary-button" type="button" @click="setEnabled(selected)"><Power :size="15" />{{ selected.enabled ? t('hosts.disable') : t('hosts.enable') }}</button>
+        <button v-if="canIssueEnrollment && !selected.enrolled_at" class="secondary-button" type="button" @click="issueEnrollment(selected.id)"><KeyRound :size="15" />{{ t('hosts.issueToken') }}</button>
+        <button v-if="canAddHost && !selected.enrolled_at" class="secondary-button danger" type="button" @click="deleteHost(selected)"><Trash2 :size="15" />{{ t('hosts.delete') }}</button>
+        <button v-if="canViewAgentMaintenance && selected.enrolled_at" class="secondary-button" type="button" @click="loadMaintenanceStatus"><Activity :size="15" />{{ t('hosts.agentStatus') }}</button>
+        <button v-if="canRepairAgent && selected.enrolled_at" class="secondary-button" type="button" @click="openMaintenance('repair')"><Wrench :size="15" />{{ t('hosts.repairAgent') }}</button>
+        <button v-if="canAdminAgent && selected.enrolled_at" class="secondary-button" type="button" @click="openMaintenance('reinstall')"><RefreshCw :size="15" />{{ t('hosts.reinstallAgent') }}</button>
+        <button v-if="canAdminAgent && selected.enrolled_at" class="secondary-button" type="button" @click="openMaintenance('rotate_identity')"><RotateCcw :size="15" />{{ t('hosts.rotateIdentity') }}</button>
+        <button v-if="canAdminAgent && selected.enrolled_at" class="secondary-button danger" type="button" @click="openMaintenance('decommission')"><ShieldX :size="15" />{{ t('hosts.decommissionAgent') }}</button>
       </div>
     </div>
   </DetailDrawer>
@@ -314,14 +520,62 @@ onMounted(async () => {
     <form method="dialog" class="dialog-header"><div><h2>{{ t('hosts.addTitle') }}</h2><p>{{ t('hosts.addDescription') }}</p></div><button class="icon-button" :aria-label="t('common.close')"><X :size="18" /></button></form>
     <form class="dialog-form" @submit.prevent="createHost">
       <label><span>{{ t('hosts.name') }}</span><input v-model="newHost.name" required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{1,119}" /></label>
-      <label><span>{{ t('hosts.address') }}</span><input v-model="newHost.address" required /></label>
       <div class="form-grid"><label><span>{{ t('hosts.region') }}</span><input v-model="newHost.location" /></label><label><span>{{ t('hosts.group') }}</span><input v-model="newHost.group_name" /></label></div>
+      <label><span>{{ t('hosts.tags') }}</span><input v-model="newHost.tags" :placeholder="t('hosts.tagsPlaceholder')" /></label>
+      <label><span>{{ t('hosts.osFamily') }}</span><select v-model="newHost.os_family"><option value="auto">{{ t('hosts.osAuto') }}</option><option value="debian">Debian / Ubuntu</option><option value="rhel">RHEL / Rocky / AlmaLinux</option><option value="fedora">Fedora</option><option value="alpine">Alpine Linux</option><option value="generic">{{ t('hosts.osGeneric') }}</option></select></label>
+      <label><span>{{ t('hosts.sourceCidr') }}</span><input v-model="newHost.source_cidr" inputmode="decimal" placeholder="203.0.113.10/32" /><small>{{ t('hosts.sourceCidrHelp') }}</small></label>
+      <label><span>{{ t('hosts.notes') }}</span><textarea v-model="newHost.notes" maxlength="500"></textarea></label>
+      <p class="muted">{{ t('hosts.installBoundary') }}</p>
       <p v-if="formError" class="form-error">{{ formError }}</p>
-      <div class="dialog-actions"><button class="secondary-button" type="button" @click="dialog?.close()">{{ t('common.cancel') }}</button><button class="primary-button" type="submit" :disabled="creating">{{ creating ? t('hosts.creating') : t('hosts.create') }}</button></div>
+      <div class="dialog-actions"><button class="secondary-button" type="button" @click="dialog?.close()">{{ t('common.cancel') }}</button><button class="primary-button" type="submit" :disabled="creating">{{ creating ? t('hosts.creating') : t('hosts.createAndEnroll') }}</button></div>
     </form>
   </dialog>
-  <dialog ref="tokenDialog" class="modal-dialog">
-    <form method="dialog" class="dialog-header"><div><h2>{{ t('hosts.enrollmentReady') }}</h2><p>{{ t('hosts.enrollmentExpires', { time: relativeTime(issuedToken?.expires_at || null) }) }}</p></div><button class="icon-button" :aria-label="t('common.close')"><X :size="18" /></button></form>
-    <div v-if="issuedToken" class="dialog-form"><label><span>{{ t('hosts.oneTimeToken') }}</span><textarea class="mono" readonly :value="issuedToken.token"></textarea></label><label><span>{{ t('hosts.installCommand') }}</span><textarea class="mono command-output" readonly :value="issuedToken.install_command"></textarea></label><div class="dialog-actions"><button class="secondary-button" type="button" @click="copyCommand"><Check v-if="copied" :size="15" /><Copy v-else :size="15" />{{ copied ? t('common.copied') : t('common.copy') }}</button><button class="primary-button" type="button" @click="tokenDialog?.close()">{{ t('common.done') }}</button></div></div>
+  <dialog ref="tokenDialog" class="modal-dialog" @close="destroyEnrollmentCommand">
+    <form method="dialog" class="dialog-header"><div><h2>{{ t('hosts.enrollmentReady') }}</h2><p v-if="issuedToken">{{ t('hosts.enrollmentCountdown', { seconds: enrollmentSecondsRemaining }) }}</p><p v-else>{{ enrollmentStatusLabel }}</p></div><button class="icon-button" :aria-label="t('common.close')"><X :size="18" /></button></form>
+    <div class="dialog-form">
+      <div class="rc5-fact-grid" aria-live="polite"><div><span>{{ t('hosts.enrollmentCurrentStatus') }}</span><strong>{{ enrollmentStatusLabel }}</strong></div><div v-if="enrollmentSession"><span>{{ t('hosts.enrollmentOs') }}</span><strong>{{ enrollmentSession.os_family }}</strong></div></div>
+      <template v-if="issuedToken">
+        <p class="muted">{{ t('hosts.commandDisclosure') }}</p>
+        <label><span>{{ t('hosts.installCommand') }}</span><textarea class="mono command-output" readonly :value="issuedToken.install_command"></textarea></label>
+      </template>
+      <p v-else-if="enrollmentSession?.status === 'revoked'" class="muted">{{ t('hosts.commandDestroyed') }}</p>
+      <ol v-if="enrollmentSession?.events.length" class="enrollment-timeline">
+        <li v-for="event in enrollmentSession.events" :key="`${event.sequence}-${event.status}`"><strong>{{ t(`hosts.enrollmentStatus.${event.status}`) }}</strong><small>{{ relativeTime(event.occurred_at) }}</small><span v-if="event.error_summary">{{ event.error_summary }}</span></li>
+      </ol>
+      <dl v-if="enrollmentSession?.error_code" class="metric-facts"><div><dt>{{ t('hosts.errorCategory') }}</dt><dd>{{ enrollmentSession.error_code }}</dd></div><div><dt>{{ t('hosts.errorStep') }}</dt><dd>{{ enrollmentSession.error_step || '—' }}</dd></div><div><dt>{{ t('hosts.rollbackStatus') }}</dt><dd>{{ enrollmentSession.rolled_back ? t('hosts.rollbackCompleted') : t('hosts.rollbackNotCompleted') }}</dd></div></dl>
+      <p v-if="enrollmentSession?.error_summary" class="form-error" role="alert">{{ enrollmentSession.error_summary }}<template v-if="enrollmentSession.rolled_back"> · {{ t('hosts.rollbackCompleted') }}</template></p>
+      <p v-if="enrollmentError" class="form-error" role="alert">{{ enrollmentError }}</p>
+      <div class="dialog-actions">
+        <button v-if="issuedToken" class="secondary-button" type="button" @click="copyCommand"><Check v-if="copied" :size="15" /><Copy v-else :size="15" />{{ copied ? t('common.copied') : t('common.copy') }}</button>
+        <button v-if="issuedToken && !isTerminalEnrollment(enrollmentSession?.status)" class="secondary-button danger" type="button" @click="revokeEnrollment">{{ t('hosts.revokeEnrollment') }}</button>
+        <button v-if="enrollmentSession && ['failed', 'expired', 'revoked'].includes(enrollmentSession.status)" class="secondary-button" type="button" @click="regenerateEnrollment">{{ t('hosts.regenerateEnrollment') }}</button>
+        <button class="primary-button" type="button" @click="tokenDialog?.close()">{{ t('common.done') }}</button>
+      </div>
+    </div>
+  </dialog>
+  <dialog ref="maintenanceDialog" class="modal-dialog" @close="destroyMaintenanceCommand">
+    <form method="dialog" class="dialog-header"><div><h2>{{ t(`hosts.maintenance.${maintenanceKind}`) }}</h2><p>{{ t('hosts.maintenanceBoundary') }}</p></div><button class="icon-button" :aria-label="t('common.close')"><X :size="18" /></button></form>
+    <div class="dialog-form">
+      <template v-if="maintenanceStatus">
+        <dl class="metric-facts"><div><dt>{{ t('hosts.maintenanceState') }}</dt><dd>{{ maintenanceStatus.status }}</dd></div><div><dt>{{ t('hosts.maintenanceMode') }}</dt><dd>{{ maintenanceStatus.kind }}</dd></div></dl>
+        <ol class="enrollment-timeline"><li v-for="event in maintenanceStatus.events" :key="`${event.status_sequence}-${event.status}`"><strong>{{ event.status }}</strong><small>{{ relativeTime(event.occurred_at) }}</small><span v-if="event.error_summary">{{ event.error_summary }}</span></li></ol>
+      </template>
+      <template v-else-if="maintenanceToken">
+        <p class="muted">{{ t('hosts.maintenanceOneTime') }}</p>
+        <label><span>{{ t('hosts.maintenanceCommand') }}</span><textarea class="mono command-output" readonly :value="maintenanceToken.command"></textarea></label>
+      </template>
+      <template v-else>
+        <template v-if="maintenanceKind === 'decommission'">
+          <p class="form-error">{{ t('hosts.decommissionWarning') }}</p>
+          <label><span>{{ t('hosts.approvalId') }}</span><input v-model="maintenanceApprovalId" autocomplete="off" /></label>
+          <label><input v-model="maintenanceConfirmed" type="checkbox" /> {{ t('hosts.decommissionCheck') }}</label>
+          <label><span>{{ t('hosts.typeHostName') }}</span><input v-model="maintenanceTypedConfirmation" autocomplete="off" /></label>
+          <label><input v-model="maintenancePurge" type="checkbox" /> {{ t('hosts.purgeLocalState') }}</label>
+        </template>
+        <button class="primary-button" type="button" @click="issueMaintenance">{{ t('hosts.generateMaintenanceCommand') }}</button>
+      </template>
+      <p v-if="maintenanceError" class="form-error" role="alert">{{ maintenanceError }}</p>
+      <div class="dialog-actions"><button v-if="maintenanceToken" class="secondary-button" type="button" @click="copyMaintenanceCommand"><Copy :size="15" />{{ t('common.copy') }}</button><button class="primary-button" type="button" @click="maintenanceDialog?.close()">{{ t('common.done') }}</button></div>
+    </div>
   </dialog>
 </template>

@@ -23,6 +23,13 @@ docker compose ps
 docker compose exec -it controller controller-entrypoint guardian-admin create-user
 ```
 
+Canonical Secret files stay `root:root` mode `0600`. Preparation uses temporary
+files, `fsync`, and atomic replacement to create service-isolated `0400` runtime
+copies owned by fixed non-root UIDs. Runtime copies are excluded from Git, images,
+build contexts, and backup inputs. Compose restarts retain them; explicit refresh
+rebuilds them, and formal decommission may remove only the runtime tree through
+the script's `--destroy-runtime` confirmation gate.
+
 The administrator command prompts for email, role, TOTP choice, and a hidden password. Never put passwords in argv, `.env`, Git, shell history, or logs. Wait until `database`, `controller`, `agent-gateway`, and `web` are healthy, then open `https://<GUARDIAN_DOMAIN>/overview`.
 
 For upgrades, verify a backup and restore first, inspect `CHANGELOG.md`, check out an explicit version, rebuild, and recreate only Guardian services. To uninstall while retaining data, run `docker compose down`; volume deletion is intentionally excluded.

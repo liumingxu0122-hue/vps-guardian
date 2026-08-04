@@ -54,7 +54,9 @@ def test_controller_image_uses_hashed_locks_and_separate_wheel_builder() -> None
     assert "go version -m /out/restic" in dockerfile
     assert "COPY --from=restic-build /out/restic /usr/local/bin/restic" in dockerfile
     assert "restic 0\\.19\\.1 compiled with go1\\.26\\.5" in dockerfile
-    assert "USER guardian:guardian" in dockerfile
+    assert "USER 10001:10001" in dockerfile
+    assert "org.vps-guardian.runtime.uid=10001" in dockerfile
+    assert "org.vps-guardian.runtime.gid=10001" in dockerfile
 
 
 def test_controller_runtime_uses_a_pinned_alpine_base_and_explicit_packages() -> None:

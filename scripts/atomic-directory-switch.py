@@ -28,8 +28,12 @@ def validate_directory(path: Path, *, must_exist: bool) -> None:
     metadata = path.lstat()
     if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
         fail("directory switch source is not a regular directory")
-    if metadata.st_uid != 0 or stat.S_IMODE(metadata.st_mode) != 0o700:
-        fail("directory switch source must be root-owned with mode 0700")
+    if (
+        metadata.st_uid != 0
+        or metadata.st_gid != 0
+        or stat.S_IMODE(metadata.st_mode) != 0o711
+    ):
+        fail("directory switch source must be root:root with mode 0711")
     if path.resolve(strict=True) != path:
         fail("directory switch source is not canonical")
 

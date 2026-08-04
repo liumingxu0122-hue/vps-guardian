@@ -35,6 +35,7 @@ from guardian.models import (
 Window = Literal["1h", "24h", "7d", "30d"]
 ROLE_ORDER = {
     Role.viewer.value: 0,
+    Role.auditor.value: 0,
     Role.operator.value: 1,
     Role.admin.value: 2,
     Role.owner.value: 3,

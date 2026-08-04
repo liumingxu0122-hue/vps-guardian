@@ -21,3 +21,14 @@ Run the regression matrix as root:
 ```sh
 sudo bash operations/scripts/tests/read-root-secret-file.test.sh
 ```
+
+`validate_compose_secret_files.py` renders (or reads) Compose JSON and fails closed
+unless every `secrets.*.file` resolves to a root-owned regular file with mode `0400`
+or `0600` below an explicitly approved Secret root. It rejects path escapes and a
+duplicated `runtime/runtime` segment, and prints only validated paths and metadata.
+
+Run its Compose integration regression as root:
+
+```sh
+sudo bash operations/scripts/tests/validate-compose-secret-files.test.sh
+```

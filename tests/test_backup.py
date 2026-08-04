@@ -307,25 +307,43 @@ def test_s3_credentials_only_enter_the_restic_child_environment(
     assert "ambient-access-key" not in child_environment.values()  # type: ignore[union-attr]
 
 
-def test_controlled_secret_metadata_requires_root_and_approved_mode() -> None:
+def test_controlled_secret_metadata_accepts_root_or_exact_service_owner() -> None:
     path = Path("/etc/vps-guardian-backup-secrets/aws-secret-access-key")
     _validate_controlled_secret_metadata(
         path=path,
         mode=0o640,
         owner_uid=0,
+        process_uid=10001,
         platform_name="posix",
     )
     _validate_controlled_secret_metadata(
         path=Path("/run/secrets/aws_secret_access_key"),
         mode=0o444,
         owner_uid=0,
+        process_uid=10001,
         platform_name="posix",
     )
-    with pytest.raises(BackupError, match="root-owned"):
+    _validate_controlled_secret_metadata(
+        path=Path("/run/vps-guardian/secrets/database-url"),
+        mode=0o400,
+        owner_uid=10001,
+        process_uid=10001,
+        platform_name="posix",
+    )
+    with pytest.raises(BackupError, match="root or the service UID"):
         _validate_controlled_secret_metadata(
             path=path,
-            mode=0o640,
-            owner_uid=1000,
+            mode=0o400,
+            owner_uid=10002,
+            process_uid=10001,
+            platform_name="posix",
+        )
+    with pytest.raises(BackupError, match="must be 0400"):
+        _validate_controlled_secret_metadata(
+            path=path,
+            mode=0o440,
+            owner_uid=10001,
+            process_uid=10001,
             platform_name="posix",
         )
     with pytest.raises(BackupError, match="mode must be one of"):
@@ -333,6 +351,7 @@ def test_controlled_secret_metadata_requires_root_and_approved_mode() -> None:
             path=path,
             mode=0o644,
             owner_uid=0,
+            process_uid=10001,
             platform_name="posix",
         )
 

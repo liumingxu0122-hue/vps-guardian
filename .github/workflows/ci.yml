@@ -38,6 +38,21 @@ jobs:
       - run: ruff check .
       - run: mypy controller
       - run: sudo "$(command -v pytest)"
+      - name: PostgreSQL 0013 to 0015 forward and rollback migration
+        env:
+          GUARDIAN_ENVIRONMENT: test
+          GUARDIAN_DATABASE_URL: postgresql+psycopg://guardian_test:guardian_test@127.0.0.1:5432/guardian_test
+          GUARDIAN_ONE_COMMAND_INSTALL_ENABLED: 'false'
+        run: |
+          alembic -c controller/alembic.ini upgrade 0015_agent_maintenance
+          alembic -c controller/alembic.ini current | grep -F 0015_agent_maintenance
+          alembic -c controller/alembic.ini downgrade 0014_agent_enrollment
+          alembic -c controller/alembic.ini current | grep -F 0014_agent_enrollment
+          alembic -c controller/alembic.ini downgrade 0013_port_traffic
+          alembic -c controller/alembic.ini current | grep -F 0013_port_traffic
+          alembic -c controller/alembic.ini upgrade 0014_agent_enrollment
+          alembic -c controller/alembic.ini upgrade 0015_agent_maintenance
+          alembic -c controller/alembic.ini current | grep -F 0015_agent_maintenance
       - run: pip-audit --requirement requirements.lock --disable-pip
       - run: python -m pip wheel --no-deps --wheel-dir /tmp/vps-guardian-wheel .
       - run: python -m venv /tmp/vps-guardian-wheel-test
@@ -48,6 +63,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Installer shell gate
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+          shellcheck \
+            scripts/install-agent.sh \
+            scripts/maintain-agent.sh \
+            scripts/uninstall-agent.sh \
+            scripts/prepare-compose-secrets.sh \
+            scripts/verify-runtime-secret-mounts.sh \
+            operations/scripts/tests/runtime-secret-materializer.test.sh \
+            operations/scripts/tests/runtime-secret-compose.test.sh
+          sh -n \
+            scripts/install-agent.sh \
+            scripts/maintain-agent.sh \
+            scripts/uninstall-agent.sh \
+            scripts/prepare-compose-secrets.sh \
+            scripts/verify-runtime-secret-mounts.sh
       - uses: actions/setup-go@v5
         with:
           go-version-file: agent/go.mod
@@ -78,6 +111,8 @@ jobs:
         working-directory: agent
         run: |
           install -d -m 0755 /tmp/vps-guardian-agent-release/sbom
+          install -m 0755 ../scripts/install-agent.sh /tmp/vps-guardian-agent-release/install-agent.sh
+          install -m 0755 ../scripts/maintain-agent.sh /tmp/vps-guardian-agent-release/maintain-agent.sh
           version=0.4.0-ci
           build_time=1970-01-01T00:00:00Z
           build_id_prefix="${version}+$(printf '%s' "$GITHUB_SHA" | cut -c1-12)"
@@ -110,6 +145,30 @@ jobs:
             --dirty false \
             --artifact linux amd64 /tmp/vps-guardian-agent-release/vps-guardian-agent-linux-amd64 \
             --artifact linux arm64 /tmp/vps-guardian-agent-release/vps-guardian-agent-linux-arm64
+          (
+            cd /tmp/vps-guardian-agent-release
+            sha256sum \
+              install-agent.sh \
+              maintain-agent.sh \
+              vps-guardian-agent-linux-amd64 \
+              vps-guardian-agent-linux-arm64 \
+              > checksums.sha256
+            printf 'version=v%s\n' "$version" > install-manifest.txt
+            printf 'sha256_install_agent=%s\n' "$(sha256sum install-agent.sh | awk '{print $1}')" >> install-manifest.txt
+            printf 'sha256_maintain_agent=%s\n' "$(sha256sum maintain-agent.sh | awk '{print $1}')" >> install-manifest.txt
+            printf 'sha256_linux_amd64=%s\n' "$(sha256sum vps-guardian-agent-linux-amd64 | awk '{print $1}')" >> install-manifest.txt
+            printf 'sha256_linux_arm64=%s\n' "$(sha256sum vps-guardian-agent-linux-arm64 | awk '{print $1}')" >> install-manifest.txt
+            signing_dir="$(mktemp -d)"
+            trap 'rm -rf -- "$signing_dir"' EXIT HUP INT TERM
+            openssl genpkey -algorithm ED25519 -out "$signing_dir/private.pem"
+            openssl pkey -in "$signing_dir/private.pem" -pubout -out release-signing-ed25519.pem
+            openssl pkeyutl -sign -inkey "$signing_dir/private.pem" -rawin \
+              -in install-manifest.txt -out install-manifest.txt.sig
+            openssl pkeyutl -verify -pubin -inkey release-signing-ed25519.pem -rawin \
+              -in install-manifest.txt -sigfile install-manifest.txt.sig
+            test ! -e private.pem
+            ! grep -R -l -- 'BEGIN PRIVATE KEY' ./
+          )
       - name: Agent release artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -117,6 +176,48 @@ jobs:
           path: /tmp/vps-guardian-agent-release
           if-no-files-found: error
           retention-days: 14
+
+  agent-install-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distribution: [ubuntu, debian, rocky, alpine]
+        architecture: [amd64, arm64]
+        include:
+          - distribution: ubuntu
+            image: ubuntu:24.04
+          - distribution: debian
+            image: debian:12
+          - distribution: rocky
+            image: rockylinux:9
+          - distribution: alpine
+            image: alpine:3.21
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - name: Installer filesystem and cryptographic contract
+        env:
+          DISTRO: ${{ matrix.distribution }}
+          IMAGE: ${{ matrix.image }}
+          ARCH: ${{ matrix.architecture }}
+        run: |
+          case "$DISTRO" in
+            ubuntu|debian)
+              packages='apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssl coreutils grep sed curl'
+              ;;
+            rocky)
+              packages='dnf install -y openssl grep sed'
+              ;;
+            alpine)
+              packages='apk add --no-cache openssl coreutils grep sed'
+              ;;
+          esac
+          docker run --rm --platform "linux/$ARCH" \
+            -e "EXPECTED_DISTRIBUTION=$DISTRO" \
+            -e "EXPECTED_ARCHITECTURE=$ARCH" \
+            -v "$PWD:/workspace:ro" -w /workspace "$IMAGE" \
+            sh -ec "$packages; sh tests/container/agent-installer-contract.sh"
 
   web:
     runs-on: ubuntu-latest
@@ -165,6 +266,11 @@ jobs:
           bash -n operations/scripts/read-root-secret-file.sh
           bash -n operations/scripts/tests/read-root-secret-file.test.sh
           sudo bash operations/scripts/tests/read-root-secret-file.test.sh
+      - name: Non-root runtime Secret materializer regression
+        run: |
+          bash -n scripts/prepare-compose-secrets.sh
+          bash -n operations/scripts/tests/runtime-secret-materializer.test.sh
+          sudo bash operations/scripts/tests/runtime-secret-materializer.test.sh
       - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -173,6 +279,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VPS_GUARDIAN_CONTROLLER_IMAGE: ci-vps-guardian-controller:${{ github.sha }}
+      VPS_GUARDIAN_GATEWAY_IMAGE: ci-vps-guardian-agent-gateway:${{ github.sha }}
       VPS_GUARDIAN_BACKUP_IMAGE: ci-vps-guardian-backup:${{ github.sha }}
       VPS_GUARDIAN_WEB_IMAGE: ci-vps-guardian-web:${{ github.sha }}
       VPS_GUARDIAN_DATABASE_IMAGE: ci-vps-guardian-postgres:${{ github.sha }}
@@ -185,25 +292,41 @@ jobs:
       - uses: actions/checkout@v4
       - run: cp .env.example .env
       - run: docker compose config --quiet
+      - name: Rendered Compose Secret path regression
+        run: |
+          bash -n operations/scripts/tests/validate-compose-secret-files.test.sh
+          sudo bash operations/scripts/tests/validate-compose-secret-files.test.sh
       - name: Gate-closure Secret overlay config
         run: |
           install -d -m 0700 /tmp/guardian-offsite-secrets /tmp/guardian-notification-secrets
           for name in restic-repository restic-password aws-access-key-id aws-secret-access-key aws-default-region; do
             install -m 0600 /dev/null "/tmp/guardian-offsite-secrets/$name"
           done
-          GUARDIAN_OFFSITE_SECRETS_DIR=/tmp/guardian-offsite-secrets \
+          GUARDIAN_OFFSITE_RUNTIME_SECRETS_DIR=/tmp/guardian-offsite-secrets \
           GUARDIAN_NOTIFICATION_SECRETS_DIR=/tmp/guardian-notification-secrets \
             docker compose \
               -f docker-compose.yml \
               -f deploy/offsite-backup.compose.yml \
               -f deploy/notification-secrets.compose.yml \
               config --quiet
-      - run: docker compose build database controller backup web
+      - run: docker compose build database controller agent-gateway backup web
+      - name: Fixed non-root image UID contract
+        run: |
+          test "$(docker image inspect "$VPS_GUARDIAN_DATABASE_IMAGE" --format '{{index .Config.Labels "org.vps-guardian.runtime.uid"}}:{{index .Config.Labels "org.vps-guardian.runtime.gid"}}:{{.Config.User}}')" = '70:70:70:70'
+          test "$(docker image inspect "$VPS_GUARDIAN_CONTROLLER_IMAGE" --format '{{index .Config.Labels "org.vps-guardian.runtime.uid"}}:{{index .Config.Labels "org.vps-guardian.runtime.gid"}}:{{.Config.User}}')" = '10001:10001:10001:10001'
+          test "$(docker image inspect "$VPS_GUARDIAN_CONTROLLER_IMAGE" --format '{{index .Config.Labels "org.vps-guardian.runtime.backup.uid"}}:{{index .Config.Labels "org.vps-guardian.runtime.backup.gid"}}')" = '10002:10002'
+          test "$(docker image inspect "$VPS_GUARDIAN_GATEWAY_IMAGE" --format '{{index .Config.Labels "org.vps-guardian.runtime.uid"}}:{{index .Config.Labels "org.vps-guardian.runtime.gid"}}:{{.Config.User}}')" = '99:99:99:99'
+      - name: Runtime Secret Compose lifecycle
+        run: |
+          bash -n operations/scripts/tests/runtime-secret-compose.test.sh
+          sudo --preserve-env=VPS_GUARDIAN_DATABASE_IMAGE,VPS_GUARDIAN_CONTROLLER_IMAGE,VPS_GUARDIAN_GATEWAY_IMAGE,VPS_GUARDIAN_BACKUP_IMAGE,VPS_GUARDIAN_WEB_IMAGE,VPS_GUARDIAN_SOURCE_COMMIT,VPS_GUARDIAN_RELEASE_VERSION,VPS_GUARDIAN_BUILD_TIME,VPS_GUARDIAN_SOURCE_URL,VPS_GUARDIAN_LICENSE \
+            bash operations/scripts/tests/runtime-secret-compose.test.sh
       - name: Immutable OCI label gate
         run: |
           for image in \
             "$VPS_GUARDIAN_DATABASE_IMAGE" \
             "$VPS_GUARDIAN_CONTROLLER_IMAGE" \
+            "$VPS_GUARDIAN_GATEWAY_IMAGE" \
             "$VPS_GUARDIAN_BACKUP_IMAGE" \
             "$VPS_GUARDIAN_WEB_IMAGE"; do
             test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$VPS_GUARDIAN_RELEASE_VERSION"

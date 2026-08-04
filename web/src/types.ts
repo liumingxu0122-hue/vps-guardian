@@ -1,7 +1,7 @@
 export interface User {
   id: string
   email: string
-  role: 'viewer' | 'operator' | 'admin' | 'owner'
+  role: 'viewer' | 'auditor' | 'operator' | 'admin' | 'owner'
   totp_enabled: boolean
   is_active: boolean
   scopes: string[]
@@ -47,6 +47,8 @@ export interface Host {
   address: string
   os_name: string | null
   location: string | null
+  notes: string | null
+  desired_os_family: string
   status: 'healthy' | 'degraded' | 'offline' | 'unknown'
   data_state: 'normal' | 'no_data' | 'stale' | 'offline' | 'agent_error'
   enabled: boolean
@@ -150,6 +152,44 @@ export interface HostPresentation {
   data_reason: 'available' | 'no_guardian_agent' | 'never_connected' | 'pending_enrollment' | 'disabled' | 'stale' | 'agent_error'
   resource_summary: Record<string, number> | null
   technical_evidence_available: boolean
+}
+
+export interface AgentMaintenanceToken {
+  id: string
+  host_id: string
+  kind: 'repair' | 'reinstall' | 'rotate_identity' | 'decommission'
+  expires_at: string
+  command: string
+  status: string
+}
+
+export interface AgentMaintenanceEvent {
+  status: string
+  status_sequence: number
+  occurred_at: string
+  error_code: string | null
+  error_summary: string | null
+  rolled_back: boolean
+}
+
+export interface AgentMaintenanceSession {
+  id: string
+  host_id: string
+  agent_id: string
+  kind: AgentMaintenanceToken['kind']
+  status: string
+  source_cidr: string | null
+  purge_local_state: boolean
+  expected_identity_version: number
+  old_identity_id: string | null
+  new_identity_id: string | null
+  approval_id: string | null
+  expires_at: string
+  completed_at: string | null
+  error_code: string | null
+  error_summary: string | null
+  rolled_back: boolean
+  events: AgentMaintenanceEvent[]
 }
 
 export interface Evidence {
@@ -285,9 +325,38 @@ export interface ApprovalEvidence {
 }
 
 export interface EnrollmentToken {
-  token: string
+  id: string
+  host_id: string
   expires_at: string
   install_command: string
+  status: string
+}
+
+export interface EnrollmentEvent {
+  status: string
+  sequence: number
+  occurred_at: string
+  error_code: string | null
+  error_summary: string | null
+  rolled_back: boolean
+}
+
+export interface EnrollmentSession {
+  id: string
+  host_id: string
+  status: string
+  sequence: number
+  expires_at: string
+  used_at: string | null
+  revoked_at: string | null
+  completed_at: string | null
+  source_cidr: string | null
+  os_family: string
+  error_code: string | null
+  error_step: string | null
+  error_summary: string | null
+  rolled_back: boolean
+  events: EnrollmentEvent[]
 }
 
 export interface Agent {

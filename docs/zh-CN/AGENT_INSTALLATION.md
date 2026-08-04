@@ -1,12 +1,22 @@
 # Agent 安装
 
+## HTTPS 与 Agent 身份 CA
+
+`enrollment_https_ca_bundle_file` 只用于验证 Enrollment HTTPS Gateway；`agent_mtls_ca_bundle_file` 只用于验证 Agent 客户端证书与身份轮换。两者必须使用不同字段和文件，不能互相覆盖。
+
+经认证的一条命令响应会内嵌公开且固定 SHA-256 的 `enrollment_https_ca_bundle`，在首次下载前写入权限为 `0600` 的临时文件；安装器、发布资产下载和 Enrollment Gateway 请求均使用该独立传输信任根。临时 HTTPS CA 文件会在成功、失败或信号中断后删除。Gateway 必须提供 leaf 和必要 intermediate，但不能发送 root。禁止关闭 TLS 或主机名校验。
+
+启用一条命令安装时，应将公开传输 CA 只读挂载到 `GUARDIAN_AGENT_ENROLLMENT_HTTPS_CA_BUNDLE_FILE`。文件内容必须与 `GUARDIAN_AGENT_ENROLLMENT_HTTPS_CA_BUNDLE_SHA256` 一致；缺失、符号链接、过大、格式错误或哈希不匹配都会失败关闭。CA 内容不得进入环境变量或日志。
+
 [English](../en/AGENT_INSTALLATION.md) | [简体中文](AGENT_INSTALLATION.md)
+
+Staging 首选流程为 [Agent 一条命令注册](ONE_COMMAND_AGENT_ENROLLMENT.md)。以下步骤继续作为受保护的手工兜底方案。
 
 先在 Dashboard 创建主机记录，再生成该主机的短期注册包。通过受保护通道传输固定版本的 Agent 二进制、校验和、Controller 公钥、服务器 CA，以及权限为 `0600` 的注册 Token 文件。禁止把 Token 放入命令参数或长期配置。
 
 以 root 身份执行生成的 `scripts/install-agent.sh` 命令。安装器会校验二进制和服务器 CA，在 Agent 主机本地生成 P-256 TLS 私钥、CSR 和 Ed25519 签名私钥，再通过 Agent Gateway 提交 CSR。私钥永远不会离开 Agent 主机。请求完成后 Token 文件会被删除，而且不能重复使用。
 
-身份文件按代际保存在 `/etc/vps-guardian-agent/identities` 下，`current` 符号链接选择当前生效代际。密钥不允许其他用户读取；续签后保留上一代身份用于受控回滚。公开 CA 文件单独保存在 trust 目录。
+身份文件按代际保存在 `/etc/vps-guardian/agent/identities` 下，`current` 符号链接选择当前生效代际。密钥不允许其他用户读取；续签后保留上一代身份用于受控回滚。公开 CA 文件单独保存在 `/etc/vps-guardian/agent/trust`。
 
 按端口流量统计默认关闭。仅按[端口流量运维](PORT_TRAFFIC_OPERATIONS.md)安装经过
 独立 SHA-256 校验的 socket 激活 helper；Agent 必须保持非 root，禁止授予

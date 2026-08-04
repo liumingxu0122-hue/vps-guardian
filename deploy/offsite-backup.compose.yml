@@ -8,21 +8,9 @@ services:
       AWS_ACCESS_KEY_ID_FILE: /run/secrets/offsite_aws_access_key_id
       AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/offsite_aws_secret_access_key
       AWS_DEFAULT_REGION_FILE: /run/secrets/offsite_aws_default_region
-    secrets:
-      - offsite_restic_repository
-      - offsite_restic_password
-      - offsite_aws_access_key_id
-      - offsite_aws_secret_access_key
-      - offsite_aws_default_region
-
-secrets:
-  offsite_restic_repository:
-    file: ${GUARDIAN_OFFSITE_SECRETS_DIR:?set GUARDIAN_OFFSITE_SECRETS_DIR}/restic-repository
-  offsite_restic_password:
-    file: ${GUARDIAN_OFFSITE_SECRETS_DIR:?set GUARDIAN_OFFSITE_SECRETS_DIR}/restic-password
-  offsite_aws_access_key_id:
-    file: ${GUARDIAN_OFFSITE_SECRETS_DIR:?set GUARDIAN_OFFSITE_SECRETS_DIR}/aws-access-key-id
-  offsite_aws_secret_access_key:
-    file: ${GUARDIAN_OFFSITE_SECRETS_DIR:?set GUARDIAN_OFFSITE_SECRETS_DIR}/aws-secret-access-key
-  offsite_aws_default_region:
-    file: ${GUARDIAN_OFFSITE_SECRETS_DIR:?set GUARDIAN_OFFSITE_SECRETS_DIR}/aws-default-region
+    volumes:
+      - ${GUARDIAN_OFFSITE_RUNTIME_SECRETS_DIR:?set GUARDIAN_OFFSITE_RUNTIME_SECRETS_DIR}/restic-repository:/run/secrets/offsite_restic_repository:ro
+      - ${GUARDIAN_OFFSITE_RUNTIME_SECRETS_DIR:?set GUARDIAN_OFFSITE_RUNTIME_SECRETS_DIR}/restic-password:/run/secrets/offsite_restic_password:ro
+      - ${GUARDIAN_OFFSITE_RUNTIME_SECRETS_DIR:?set GUARDIAN_OFFSITE_RUNTIME_SECRETS_DIR}/aws-access-key-id:/run/secrets/offsite_aws_access_key_id:ro
+      - ${GUARDIAN_OFFSITE_RUNTIME_SECRETS_DIR:?set GUARDIAN_OFFSITE_RUNTIME_SECRETS_DIR}/aws-secret-access-key:/run/secrets/offsite_aws_secret_access_key:ro
+      - ${GUARDIAN_OFFSITE_RUNTIME_SECRETS_DIR:?set GUARDIAN_OFFSITE_RUNTIME_SECRETS_DIR}/aws-default-region:/run/secrets/offsite_aws_default_region:ro

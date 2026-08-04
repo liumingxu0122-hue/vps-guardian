@@ -1,5 +1,9 @@
 # Agent installation
 
+Use the maintained [English one-command guide](en/ONE_COMMAND_AGENT_ENROLLMENT.md)
+or [简体中文一条命令指南](zh-CN/ONE_COMMAND_AGENT_ENROLLMENT.md). This file describes
+the protected manual fallback.
+
 The Agent is a Linux binary. Release assets are provided for `amd64` and `arm64`.
 
 ## 1. Verify the binary
@@ -24,7 +28,7 @@ Per-port accounting is optional and remains disabled in the example configuratio
 Install its independently checksummed helper and socket units only by following
 `docs/en/PORT_TRAFFIC_OPERATIONS.md`; never add `CAP_NET_ADMIN` to the Agent.
 
-The Controller URL must use the configured Agent gateway DNS name. `ca_file` must contain the CA that signed the gateway certificate. Set `tls_server_name` to the same DNS name. Pin the Controller public signing key and the Agent certificate fingerprint.
+The Controller URL must use the configured Agent Gateway DNS name. `enrollment_https_ca_bundle_file` contains only the CA roots used to authenticate that HTTPS transport. `agent_mtls_ca_bundle_file` separately contains the CA used to validate Agent client identities and rotations. Set `tls_server_name` to the Gateway DNS name, keep hostname verification enabled, and pin the Controller public signing key and Agent certificate fingerprint.
 
 ## 4. Install the service
 

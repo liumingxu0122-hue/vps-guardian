@@ -58,6 +58,10 @@ ARG GUARDIAN_BUILD_TIME=1970-01-01T00:00:00Z
 ARG GUARDIAN_SOURCE_URL=https://github.com/liumingxu0122-hue/vps-guardian
 ARG GUARDIAN_LICENSE=Apache-2.0
 LABEL org.opencontainers.image.version=$GUARDIAN_RELEASE_VERSION \
+      org.vps-guardian.runtime.uid=10001 \
+      org.vps-guardian.runtime.gid=10001 \
+      org.vps-guardian.runtime.backup.uid=10002 \
+      org.vps-guardian.runtime.backup.gid=10002 \
       org.opencontainers.image.revision=$GUARDIAN_SOURCE_COMMIT \
       org.opencontainers.image.created=$GUARDIAN_BUILD_TIME \
       org.opencontainers.image.source=$GUARDIAN_SOURCE_URL \
@@ -109,9 +113,11 @@ RUN install -d -o guardian -g guardian -m 0750 /var/lib/vps-guardian /var/lib/vp
     && install -d -o guardian-backup -g guardian-backup -m 0750 \
       /var/lib/vps-guardian-backup /var/lib/vps-guardian-backup/staging \
       /var/lib/vps-guardian-backup/restic /var/cache/vps-guardian-backup
+RUN test "$(id -u guardian):$(id -g guardian)" = '10001:10001' \
+    && test "$(id -u guardian-backup):$(id -g guardian-backup)" = '10002:10002'
 
 COPY --chmod=0555 deploy/controller-entrypoint.sh /usr/local/bin/controller-entrypoint
-USER guardian:guardian
+USER 10001:10001
 EXPOSE 8090
 ENTRYPOINT ["controller-entrypoint"]
 CMD ["uvicorn", "guardian.main:app", "--host", "0.0.0.0", "--port", "8090", "--no-server-header"]

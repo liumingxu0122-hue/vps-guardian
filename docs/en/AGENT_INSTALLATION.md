@@ -2,11 +2,15 @@
 
 [English](AGENT_INSTALLATION.md) | [简体中文](../zh-CN/AGENT_INSTALLATION.md)
 
-Create the host inventory entry in the Dashboard, then generate its short-lived enrollment bundle. Transfer the versioned Agent binary, checksum, Controller public key, server CA, and mode-0600 enrollment-token file over a protected channel. Never put the token in a command argument or long-lived configuration.
+The preferred staged workflow is [one-command Agent enrollment](ONE_COMMAND_AGENT_ENROLLMENT.md). The steps below remain the protected manual fallback.
 
-Run the generated `scripts/install-agent.sh` command as root. The installer verifies the binary checksum and server CA, generates a P-256 TLS key, CSR, and Ed25519 signing key on the Agent host, and submits the CSR through the Agent Gateway. Private keys never leave the host. The token file is deleted after the request and cannot be reused.
+Create the host inventory entry in the Dashboard, then generate its short-lived enrollment bundle. Transfer the versioned Agent binary, checksum, Controller public key, Enrollment HTTPS CA bundle, and mode-0600 enrollment-token file over a protected channel. Never put the token in a command argument or long-lived configuration.
 
-Identity files use generation directories under `/etc/vps-guardian-agent/identities`. The `current` symbolic link selects the active generation. Keys are protected from other users, and the previous generation remains available after renewal for controlled rollback. Public CA files live separately under the trust directory.
+Run the generated `scripts/install-agent.sh` command as root. The authenticated command response embeds the public, SHA-256-pinned `enrollment_https_ca_bundle`, writes it to a mode-`0600` temporary file before the first download, and uses it for the installer, release assets, and Enrollment Gateway. The installer then generates a P-256 TLS key, CSR, and Ed25519 signing key on the Agent host. The returned `agent_mtls_ca_bundle` verifies the later mTLS identity and is stored in a different file. Private keys never leave the host. The token and temporary HTTPS CA files are deleted after success, failure, or interruption.
+
+When one-command installation is enabled, mount the public transport CA read-only at `GUARDIAN_AGENT_ENROLLMENT_HTTPS_CA_BUNDLE_FILE`. Its bytes must match `GUARDIAN_AGENT_ENROLLMENT_HTTPS_CA_BUNDLE_SHA256`; startup command generation fails closed on a missing, symlinked, oversized, malformed, or mismatched bundle. The CA content is never placed in an environment variable or log.
+
+Identity files use generation directories under `/etc/vps-guardian/agent/identities`. The `current` symbolic link selects the active generation. Keys are protected from other users, and the previous generation remains available after renewal for controlled rollback. Public CA files live separately under `/etc/vps-guardian/agent/trust`.
 
 Per-port accounting is disabled by default. Follow
 [Port traffic operations](PORT_TRAFFIC_OPERATIONS.md) to install the independently

@@ -65,6 +65,36 @@ class Settings(BaseSettings):
     agent_ca_private_key_file: Path = Path("./secrets/pki/private/agent-ca.key")
     agent_gateway_url: str = "https://agents.guardian.example.com"
     enrollment_attempts_per_10m: int = Field(default=10, ge=2, le=100)
+    one_command_install_enabled: bool = False
+    agent_install_release_version: str = Field(
+        default="v0.4.0-phase4-preview", pattern=r"^v[A-Za-z0-9._-]{1,63}$"
+    )
+    agent_install_assets_base_url: str = (
+        "https://github.com/liumingxu0122-hue/vps-guardian/releases/download"
+    )
+    agent_installer_sha256: str = Field(default="", max_length=64)
+    agent_maintenance_script_sha256: str = Field(default="", max_length=64)
+    agent_binary_amd64_sha256: str = Field(default="", max_length=64)
+    agent_binary_arm64_sha256: str = Field(default="", max_length=64)
+    agent_release_manifest_url: str = "https://downloads.example.com/SHA256SUMS"
+    agent_release_manifest_signature_url: str = (
+        "https://downloads.example.com/SHA256SUMS.sig"
+    )
+    agent_release_signing_public_key_url: str = (
+        "https://downloads.example.com/release-signing-ed25519.pem"
+    )
+    agent_release_signing_public_key_sha256: str = Field(default="", max_length=64)
+    agent_enrollment_https_ca_bundle_url: str = (
+        "https://downloads.example.com/enrollment-https-ca-bundle.pem"
+    )
+    agent_enrollment_https_ca_bundle_file: Path = Path(
+        "/run/public/enrollment-https-ca-bundle.pem"
+    )
+    agent_enrollment_https_ca_bundle_sha256: str = Field(default="", max_length=64)
+    agent_controller_public_key_url: str = (
+        "https://downloads.example.com/controller-public-key.txt"
+    )
+    agent_controller_public_key_sha256: str = Field(default="", max_length=64)
     approval_ttl_minutes: int = Field(default=30, ge=5, le=1440)
     deployment_stage: Literal["development", "test", "staging", "production"] = "development"
     production_deployed: bool = False
@@ -105,6 +135,45 @@ class Settings(BaseSettings):
                 "GUARDIAN_SESSION_REMEMBER_ABSOLUTE_DAYS must not be shorter than "
                 "GUARDIAN_SESSION_DEFAULT_ABSOLUTE_DAYS"
             )
+        if self.one_command_install_enabled:
+            urls = (
+                self.agent_install_assets_base_url,
+                self.agent_enrollment_https_ca_bundle_url,
+                self.agent_controller_public_key_url,
+                self.agent_release_manifest_url,
+                self.agent_release_manifest_signature_url,
+                self.agent_release_signing_public_key_url,
+            )
+            for value in urls:
+                parsed = urlparse(value)
+                if (
+                    parsed.scheme != "https"
+                    or not parsed.hostname
+                    or parsed.username
+                    or parsed.password
+                    or parsed.query
+                    or parsed.fragment
+                ):
+                    raise ValueError(
+                        "one-command Agent installation URLs must be credential-free HTTPS URLs"
+                    )
+            hashes = (
+                self.agent_installer_sha256,
+                self.agent_maintenance_script_sha256,
+                self.agent_binary_amd64_sha256,
+                self.agent_binary_arm64_sha256,
+                self.agent_enrollment_https_ca_bundle_sha256,
+                self.agent_controller_public_key_sha256,
+                self.agent_release_signing_public_key_sha256,
+            )
+            if any(
+                not re.fullmatch(r"[a-f0-9]{64}", value)
+                or value in {"0" * 64, "a" * 64}
+                for value in hashes
+            ):
+                raise ValueError(
+                    "one-command Agent installation requires non-placeholder SHA-256 values"
+                )
         if self.production_deployed:
             if self.environment != "production" or self.deployment_stage != "production":
                 raise ValueError(

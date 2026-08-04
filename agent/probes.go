@@ -61,7 +61,7 @@ func collectProbes(ctx context.Context, config Config) []map[string]any {
 func probeTLS(ctx context.Context, config Config, target ProbeTarget, result map[string]any) {
 	started := time.Now()
 	certificate, certErr := tls.LoadX509KeyPair(config.CertificateFile, config.PrivateKeyFile)
-	caData, caErr := os.ReadFile(config.CAFile)
+	caData, caErr := os.ReadFile(config.EnrollmentHTTPSCABundleFile)
 	roots := x509.NewCertPool()
 	if certErr != nil || caErr != nil || !roots.AppendCertsFromPEM(caData) {
 		result["tls_ok"] = false

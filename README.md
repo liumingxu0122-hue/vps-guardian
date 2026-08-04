@@ -84,11 +84,34 @@ docker compose build && docker compose up -d
 docker compose exec -it controller controller-entrypoint guardian-admin create-user
 ```
 
+Canonical Secrets remain `root:root` mode `0600`. Preparation atomically creates
+per-service `0400` runtime copies for fixed PostgreSQL (`70:70`), Controller
+(`10001:10001`), Gateway (`99:99`), and backup (`10002:10002`) identities. Each
+container receives only its own read-only files. Compose restarts retain the
+runtime tree; explicit refresh safely rebuilds it. Formal decommission can remove
+only runtime copies with `--destroy-runtime --confirm 'DESTROY RUNTIME SECRETS'`.
+
 The final command securely prompts for the administrator email and hidden password. Never put a password in argv, `.env`, Git, or logs. Read the [complete quick start](docs/en/QUICKSTART.md) before exposing ports.
 
 ## Agent enrollment
 
-Create the host inventory entry, generate a short-lived enrollment bundle through an authorized Controller workflow, and install the architecture-specific Agent. The Agent generates its private keys and CSR locally. Verify heartbeat, certificate serial, metrics, and offline queue. See [Agent installation](docs/en/AGENT_INSTALLATION.md).
+From **Hosts → Add server**, an Admin or Owner can create a host-bound 10-minute enrollment session and copy one verified, fixed-release install command. The Agent generates its private keys and CSR locally; the Controller stores only credential hashes. The feature is disabled until immutable asset URLs and SHA-256 values are configured. See [one-command enrollment](docs/en/ONE_COMMAND_AGENT_ENROLLMENT.md) and [manual Agent installation](docs/en/AGENT_INSTALLATION.md).
+
+Existing Agents use separate, hash-only repair/reinstall/decommission sessions;
+initial enrollment credentials are never reused. Signed-manifest verification,
+identity-generation switching, CRL-gated decommission, rollback boundaries, and
+remaining two-node Staging gates are documented in
+[Agent maintenance and decommission](docs/en/AGENT_MAINTENANCE_AND_DECOMMISSION.md).
+
+The UI generates the complete command; this non-runnable shape intentionally uses placeholders:
+
+```sh
+umask 077; guardian_tmp="$(mktemp -d)" && \
+  curl --fail --show-error --location --proto '=https' \
+  https://downloads.example.invalid/v0.4.0/install-agent.sh
+```
+
+The real UI command also verifies the exact SHA-256 before execution and supplies a short-lived `<ONE_TIME_ENROLLMENT_TOKEN>` through a root-only temporary file.
 
 ## Dashboard access
 

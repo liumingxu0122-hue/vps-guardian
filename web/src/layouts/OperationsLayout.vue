@@ -49,7 +49,7 @@ const sidebarCollapsed = ref(false)
 const mobileSidebar = ref<HTMLElement | null>(null)
 const mobileMenuButton = ref<HTMLButtonElement | null>(null)
 const theme = ref<'light' | 'dark'>('light')
-const roleOrder = { viewer: 0, operator: 1, admin: 2, owner: 3 }
+const roleOrder = { viewer: 0, auditor: 0, operator: 1, admin: 2, owner: 3 }
 const navGroups = [
   {
     label: 'nav.groupOverview',

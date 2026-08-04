@@ -100,7 +100,7 @@ const router = createRouter({
   ],
 })
 
-const roleOrder = { viewer: 0, operator: 1, admin: 2, owner: 3 }
+const roleOrder = { viewer: 0, auditor: 0, operator: 1, admin: 2, owner: 3 }
 
 router.beforeEach(async (to) => {
   try {

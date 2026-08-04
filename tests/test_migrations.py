@@ -231,6 +231,83 @@ def test_phase4_completion_migration_round_trip(tmp_path: Path) -> None:
     connection.close()
 
 
+def test_enrollment_maintenance_migrations_preserve_port_traffic_chain(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "agent-enrollment-port-traffic-round-trip.db"
+    environment = os.environ.copy()
+    environment["GUARDIAN_DATABASE_URL"] = f"sqlite:///{database.as_posix()}"
+
+    def migrate(command: str, revision: str) -> None:
+        result = subprocess.run(  # noqa: S603 - fixed Python/Alembic argv, no shell
+            [
+                sys.executable,
+                "-m",
+                "alembic",
+                "-c",
+                "controller/alembic.ini",
+                command,
+                revision,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+
+    def schema_snapshot() -> list[tuple[str, str, str | None]]:
+        connection = sqlite3.connect(database)
+        try:
+            return connection.execute(
+                """
+                SELECT type, name, sql
+                FROM sqlite_master
+                WHERE name LIKE 'port_traffic_%'
+                   OR tbl_name LIKE 'port_traffic_%'
+                ORDER BY type, name
+                """
+            ).fetchall()
+        finally:
+            connection.close()
+
+    def current_revision() -> str:
+        connection = sqlite3.connect(database)
+        try:
+            return str(
+                connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+            )
+        finally:
+            connection.close()
+
+    migrate("upgrade", "0013_port_traffic")
+    port_traffic_schema = schema_snapshot()
+    assert port_traffic_schema
+    assert current_revision() == "0013_port_traffic"
+
+    migrate("upgrade", "0014_agent_enrollment")
+    assert current_revision() == "0014_agent_enrollment"
+    assert schema_snapshot() == port_traffic_schema
+
+    migrate("upgrade", "0015_agent_maintenance")
+    assert current_revision() == "0015_agent_maintenance"
+    assert schema_snapshot() == port_traffic_schema
+
+    migrate("downgrade", "0014_agent_enrollment")
+    assert current_revision() == "0014_agent_enrollment"
+    assert schema_snapshot() == port_traffic_schema
+
+    migrate("downgrade", "0013_port_traffic")
+    assert current_revision() == "0013_port_traffic"
+    assert schema_snapshot() == port_traffic_schema
+
+    migrate("upgrade", "0014_agent_enrollment")
+    migrate("upgrade", "0015_agent_maintenance")
+    assert current_revision() == "0015_agent_maintenance"
+    assert schema_snapshot() == port_traffic_schema
+
+
 def test_identity_recovery_migrates_isolated_legacy_copy_and_preserves_core_rows(
     tmp_path: Path,
 ) -> None:

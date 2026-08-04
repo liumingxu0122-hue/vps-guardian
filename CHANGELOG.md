@@ -4,8 +4,22 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ## [Unreleased]
 
+### Validation
+
+- PR #9 automated enrollment, maintenance, approval-separation, CRL, rollback,
+  and decommission-boundary checks passed. Real Staging also passed one-command
+  enrollment, CSR/mTLS bootstrap, repair, reinstall, identity rotation, CRL
+  publication, and old-certificate TLS rejection at fixed commit `2122fa7`.
+- Real two-person decommission preserve/purge is **PENDING HUMAN ACCEPTANCE**;
+  Agent B/OpenRC and KVM whole-machine reboot remain untested. These are explicit
+  acceptance gaps, not claimed code failures. Production remains **NO-GO**.
+
 ### Added
 
+- Added atomic per-service runtime Secret materialization: canonical files remain
+  `root:root` `0600`, while fixed non-root container UIDs receive only isolated
+  `0400` read-only bind mounts; Compose file-secret permission emulation is no
+  longer trusted for local deployments.
 - Added preview per-port TCP/UDP RX/TX accounting, explicit discontinuities, bounded
   raw/hour/day retention, quota alert thresholds, bilingual policy/history UI, and
   reversible migration `0013_port_traffic`.
@@ -13,6 +27,25 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
   dedicated nftables table and TC handle, while the Agent remains non-root with
   `NoNewPrivileges`; enforcement, reset, and egress shaping require independent
   high-risk approval and host-bound expiring signed tasks.
+- Added reversible migration `0015_agent_maintenance`, isolated hash-only repair,
+  reinstall, identity-rotation, and decommission sessions, host/group RBAC, one-time
+  Web disclosure, heartbeat/identity CAS gates, CRL-gated decommission, and
+  Controller-history preservation.
+- Added an explicit read-only Auditor role; it can inspect maintenance state and
+  audit evidence but cannot issue Agent maintenance or decommission commands.
+- Added detached Ed25519 release-manifest verification before checksum trust,
+  fail-closed version replay protection, ephemeral CI signing tests, and an
+  Ubuntu/Debian/Rocky/Alpine amd64/arm64 container contract matrix. Formal release
+  signing remains blocked until an offline production signing key is provisioned.
+- Added fail-closed, host-bound 10-minute Agent enrollment sessions, hash-only
+  bootstrap and progress credentials, optional source CIDR restriction, monotonic
+  installation timelines, immediate revoke/regenerate, and reversible migration
+  `0014_agent_enrollment`.
+- Added the bilingual **Add server** wizard and a fixed-version `amd64`/`arm64`
+  installer for Ubuntu, Debian, Rocky/Alma/RHEL, Fedora, and Alpine. The Agent
+  generates TLS/signing keys and its CSR locally, verifies returned identity
+  material, runs non-root under systemd/OpenRC, and performs Agent-scoped rollback.
+
 - Added RC6 opaque, hash-only browser sessions with independently enforced idle and
   absolute lifetimes, optional remembered-device lifetime, bounded activity touches,
   device/session management, current-session step-up, strict same-origin CSRF binding,

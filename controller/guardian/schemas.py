@@ -91,7 +91,7 @@ class UserView(ORMModel):
 class UserCreate(BaseModel):
     email: str = Field(min_length=3, max_length=255)
     password: str = Field(min_length=14, max_length=256)
-    role: Literal["viewer", "operator", "admin", "owner"] = "viewer"
+    role: Literal["viewer", "auditor", "operator", "admin", "owner"] = "viewer"
     scopes: list[str] = Field(default_factory=list, max_length=32)
 
     @field_validator("email")
@@ -117,7 +117,7 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    role: Literal["viewer", "operator", "admin", "owner"] | None = None
+    role: Literal["viewer", "auditor", "operator", "admin", "owner"] | None = None
     is_active: bool | None = None
     scopes: list[str] | None = Field(default=None, max_length=32)
     current_password: str = Field(min_length=12, max_length=256)
@@ -200,13 +200,17 @@ class UserSessionView(ORMModel):
 
 class HostCreate(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,119}$")
-    address: str = Field(min_length=1, max_length=255)
+    address: str = Field(default="pending-enrollment", min_length=1, max_length=255)
     os_name: str | None = Field(default=None, max_length=120)
     location: str | None = Field(default=None, max_length=120)
     enabled: bool = True
     group_name: str | None = Field(default=None, max_length=120)
     tags: list[str] = Field(default_factory=list, max_length=32)
     labels: dict[str, str] = Field(default_factory=dict)
+    notes: str | None = Field(default=None, max_length=500)
+    desired_os_family: Literal[
+        "auto", "debian", "rhel", "fedora", "alpine", "generic"
+    ] = "auto"
 
     @field_validator("labels")
     @classmethod
@@ -232,6 +236,10 @@ class HostUpdate(BaseModel):
     group_name: str | None = Field(default=None, max_length=120)
     tags: list[str] | None = Field(default=None, max_length=32)
     labels: dict[str, str] | None = None
+    notes: str | None = Field(default=None, max_length=500)
+    desired_os_family: Literal[
+        "auto", "debian", "rhel", "fedora", "alpine", "generic"
+    ] | None = None
 
     @field_validator("tags")
     @classmethod
@@ -278,6 +286,8 @@ class HostView(ORMModel):
     group_name: str | None
     tags: list[str]
     labels: dict[str, str]
+    notes: str | None
+    desired_os_family: str
     last_seen_at: datetime | None
     enrolled_at: datetime | None
     disabled_at: datetime | None
@@ -323,14 +333,154 @@ class HostPresentationView(BaseModel):
 
 
 class EnrollmentTokenIssue(BaseModel):
-    expires_in_minutes: int = Field(default=15, ge=1, le=1440)
+    expires_in_minutes: int = Field(default=10, ge=1, le=1440)
+    source_cidr: str | None = Field(default=None, max_length=64)
+    os_family: Literal[
+        "auto", "debian", "rhel", "fedora", "alpine", "generic"
+    ] = "auto"
 
 
 class EnrollmentTokenView(BaseModel):
     id: str
-    token: str
+    host_id: str
     expires_at: datetime
     install_command: str
+    status: str
+
+
+class EnrollmentEventView(BaseModel):
+    status: str
+    sequence: int
+    occurred_at: datetime
+    error_code: str | None = None
+    error_summary: str | None = None
+    rolled_back: bool = False
+
+
+class EnrollmentSessionView(BaseModel):
+    id: str
+    host_id: str
+    status: str
+    sequence: int
+    expires_at: datetime
+    used_at: datetime | None
+    revoked_at: datetime | None
+    completed_at: datetime | None
+    source_cidr: str | None
+    os_family: str
+    error_code: str | None
+    error_step: str | None
+    error_summary: str | None
+    rolled_back: bool
+    events: list[EnrollmentEventView]
+
+
+class AgentMaintenanceIssue(BaseModel):
+    kind: Literal["repair", "reinstall", "rotate_identity", "decommission"]
+    source_cidr: str | None = Field(default=None, max_length=64)
+    purge_local_state: bool = False
+    approval_id: str | None = Field(default=None, max_length=36)
+    confirmation: str | None = Field(default=None, max_length=160)
+
+
+class AgentMaintenanceTokenView(BaseModel):
+    id: str
+    host_id: str
+    kind: Literal["repair", "reinstall", "rotate_identity", "decommission"]
+    expires_at: datetime
+    command: str
+    status: str
+
+
+class AgentMaintenanceStart(BaseModel):
+    kind: Literal["repair", "reinstall", "rotate_identity", "decommission"]
+
+
+class AgentMaintenanceStartView(BaseModel):
+    session_id: str
+    host_id: str
+    agent_id: str
+    kind: str
+    progress_token: str
+    expected_identity_version: int
+    purge_local_state: bool
+
+
+class AgentMaintenanceProgress(BaseModel):
+    kind: Literal["repair", "reinstall", "rotate_identity", "decommission"]
+    status: Literal[
+        "artifact_verified",
+        "service_stopped",
+        "identity_rotated",
+        "service_started",
+        "heartbeat_verified",
+        "confirmation_pending",
+        "completed",
+        "failed",
+        "rolled_back",
+    ]
+    error_code: str | None = Field(default=None, max_length=64)
+    error_summary: str | None = Field(default=None, max_length=240)
+    rolled_back: bool = False
+
+
+class AgentMaintenanceEventView(ORMModel):
+    status: str
+    status_sequence: int
+    occurred_at: datetime
+    error_code: str | None
+    error_summary: str | None
+    rolled_back: bool
+
+
+class AgentMaintenanceSessionView(ORMModel):
+    id: str
+    host_id: str
+    agent_id: str
+    kind: str
+    status: str
+    status_sequence: int
+    source_cidr: str | None
+    purge_local_state: bool
+    expected_identity_version: int
+    old_identity_id: str | None
+    new_identity_id: str | None
+    approval_id: str | None
+    expires_at: datetime
+    used_at: datetime | None
+    revoked_at: datetime | None
+    completed_at: datetime | None
+    error_code: str | None
+    error_summary: str | None
+    rolled_back: bool
+    created_at: datetime
+    status_updated_at: datetime
+    events: list[AgentMaintenanceEventView]
+
+
+class AgentMaintenanceFinalize(BaseModel):
+    confirmation: str = Field(min_length=1, max_length=160)
+    expected_identity_version: int = Field(ge=1)
+    crl_number: int | None = Field(default=None, ge=1)
+    crl_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+class EnrollmentProgressReport(BaseModel):
+    status: Literal[
+        "installer_downloaded",
+        "installer_verified",
+        "prerequisites_checked",
+        "agent_downloaded",
+        "agent_verified",
+        "local_key_generated",
+        "csr_submitted",
+        "service_installed",
+        "service_started",
+        "failed",
+    ]
+    error_code: str | None = Field(default=None, pattern=r"^[a-z0-9_]{1,64}$")
+    error_summary: str | None = Field(default=None, max_length=240)
+    rolled_back: bool = False
 
 
 class ServiceCheckCreate(BaseModel):
@@ -787,6 +937,7 @@ class AgentBootstrapRequest(BaseModel):
     host_id: str = Field(min_length=36, max_length=36)
     csr_pem: str = Field(min_length=200, max_length=32768)
     signing_public_key: str = Field(min_length=40, max_length=512)
+    signing_key_proof: str = Field(min_length=80, max_length=128)
     version: str = Field(min_length=1, max_length=64)
 
     @field_validator("signing_public_key")
@@ -799,10 +950,11 @@ class AgentBootstrapResponse(BaseModel):
     agent_id: str
     host_id: str
     certificate_pem: str
-    ca_bundle_pem: str
+    agent_mtls_ca_bundle_pem: str
     certificate_serial: str
     certificate_expires_at: datetime
     agent_gateway_endpoint: str
+    enrollment_progress_token: str = Field(min_length=32, max_length=512)
     heartbeat_interval_seconds: int = 30
 
 
@@ -824,7 +976,7 @@ class AgentRenewRequest(BaseModel):
 class AgentRenewResponse(BaseModel):
     identity: AgentIdentityView
     certificate_pem: str
-    ca_bundle_pem: str
+    agent_mtls_ca_bundle_pem: str
     certificate_expires_at: datetime
 
 

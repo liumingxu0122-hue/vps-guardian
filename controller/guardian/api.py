@@ -4,7 +4,6 @@ import csv
 import io
 import json
 import secrets
-import shlex
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -20,6 +19,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from guardian import __version__
+from guardian.agent_installation import (
+    AgentInstallationConfigurationError,
+    build_agent_maintenance_command,
+    build_one_command_install,
+)
 from guardian.agent_pki import (
     AgentCertificateError,
     issue_agent_certificate,
@@ -52,11 +56,20 @@ from guardian.dashboard import (
 )
 from guardian.database import get_db
 from guardian.enrollment import (
+    INSTALLER_PROGRESS_STEPS,
+    POST_BOOTSTRAP_PROGRESS_STEPS,
     EnrollmentRateLimitError,
     EnrollmentTokenError,
+    advance_enrollment,
+    authenticate_enrollment_token,
+    authenticate_progress_token,
+    complete_host_enrollment,
     consume_enrollment_token,
     enrollment_limiter,
+    fail_enrollment,
     issue_enrollment_token,
+    issue_progress_token,
+    latest_host_enrollment,
     revoke_enrollment_token,
     token_digest,
 )
@@ -70,10 +83,22 @@ from guardian.identity import (
     generate_recovery_code_batch,
     revoke_sessions,
 )
+from guardian.maintenance import (
+    MaintenanceSessionError,
+    advance_maintenance,
+    consume_maintenance_session,
+    issue_maintenance_session,
+)
+from guardian.maintenance import (
+    authenticate_progress as authenticate_maintenance_progress,
+)
 from guardian.models import (
     Agent,
     AgentIdentity,
     AgentIdentityState,
+    AgentMaintenanceEvent,
+    AgentMaintenanceKind,
+    AgentMaintenanceSession,
     AgentTask,
     AlertInstance,
     AlertRule,
@@ -81,6 +106,9 @@ from guardian.models import (
     Approval,
     ApprovalStatus,
     AuditLog,
+    EnrollmentEvent,
+    EnrollmentStatus,
+    EnrollmentToken,
     Host,
     Incident,
     IncidentStatus,
@@ -129,6 +157,13 @@ from guardian.schemas import (
     AgentIdentityRevokeRequest,
     AgentIdentityValidateRequest,
     AgentIdentityView,
+    AgentMaintenanceFinalize,
+    AgentMaintenanceIssue,
+    AgentMaintenanceProgress,
+    AgentMaintenanceSessionView,
+    AgentMaintenanceStart,
+    AgentMaintenanceStartView,
+    AgentMaintenanceTokenView,
     AgentRenewRequest,
     AgentRenewResponse,
     AgentRotateRequest,
@@ -153,6 +188,9 @@ from guardian.schemas import (
     AuditView,
     BrowserLoginRequest,
     BrowserLoginResponse,
+    EnrollmentEventView,
+    EnrollmentProgressReport,
+    EnrollmentSessionView,
     EnrollmentTokenIssue,
     EnrollmentTokenView,
     HealthResponse,
@@ -2631,21 +2669,43 @@ def create_enrollment_token(
     request: Request,
     db: DB,
     settings: Config,
-    user: Annotated[User, Depends(require_role(Role.admin))],
+    user: Annotated[User, Depends(require_role(Role.operator))],
 ) -> EnrollmentTokenView:
     _require_step_up(request)
+    try:
+        enrollment_limiter.check(
+            f"management:issue:{user.id}",
+            settings.enrollment_attempts_per_10m * 10,
+        )
+    except EnrollmentRateLimitError as exc:
+        raise HTTPException(status_code=429, detail="enrollment rate limit exceeded") from exc
     host = db.get(Host, host_id)
     if host is None:
         raise HTTPException(status_code=404, detail="host not found")
+    _require_enrollment_management(user, host=host, action="create")
     try:
         issued = issue_enrollment_token(
             db,
             host=host,
             actor=user,
             ttl=timedelta(minutes=payload.expires_in_minutes),
+            source_cidr=payload.source_cidr,
+            os_family=payload.os_family,
+            installer_version=settings.agent_install_release_version,
+            agent_version=settings.agent_install_release_version.removeprefix("v"),
+        )
+        command = build_one_command_install(
+            settings=settings,
+            host_id=host.id,
+            enrollment_token=issued.value,
+            os_family=payload.os_family,
         )
     except EnrollmentTokenError as exc:
+        db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AgentInstallationConfigurationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     write_audit(
         db,
         actor=user,
@@ -2657,22 +2717,12 @@ def create_enrollment_token(
         source_ip=request.client.host if request.client else None,
     )
     db.commit()
-    controller_url = validate_agent_gateway_url(settings.agent_gateway_url)
-    command = (
-        "sudo ./scripts/install-agent.sh "
-        "--binary ./agent-bundle/vps-guardian-agent "
-        ' --sha256 "$(cat ./agent-bundle/vps-guardian-agent.sha256)" '
-        f"--controller-url {shlex.quote(controller_url)} "
-        f"--host-id {shlex.quote(host.id)} "
-        "--server-ca ./agent-bundle/controller-ca.crt "
-        ' --controller-public-key "$(cat ./agent-bundle/controller-public-key.txt)" '
-        "--enrollment-token-file ./agent-bundle/enrollment-token"
-    )
     return EnrollmentTokenView(
         id=issued.id,
-        token=issued.value,
+        host_id=host.id,
         expires_at=issued.expires_at,
         install_command=command,
+        status=EnrollmentStatus.waiting.value,
     )
 
 
@@ -2686,9 +2736,21 @@ def revoke_host_enrollment_token(
     token_id: str,
     request: Request,
     db: DB,
+    settings: Config,
     user: Annotated[User, Depends(require_role(Role.admin))],
 ) -> None:
     _require_step_up(request)
+    try:
+        enrollment_limiter.check(
+            f"management:revoke:{user.id}",
+            settings.enrollment_attempts_per_10m * 10,
+        )
+    except EnrollmentRateLimitError as exc:
+        raise HTTPException(status_code=429, detail="enrollment rate limit exceeded") from exc
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    _require_enrollment_management(user, host=host, action="revoke")
     try:
         token = revoke_enrollment_token(db, token_id=token_id, host_id=host_id)
     except EnrollmentTokenError as exc:
@@ -2704,6 +2766,198 @@ def revoke_host_enrollment_token(
         source_ip=request.client.host if request.client else None,
     )
     db.commit()
+
+
+def _require_enrollment_management(
+    user: User,
+    *,
+    host: Host,
+    action: Literal["create", "revoke"],
+) -> None:
+    _require_enrollment_host_scope(user, host)
+    if user.role in {Role.owner.value, Role.admin.value}:
+        return
+    if user.role == Role.operator.value and action == "create":
+        return
+    raise HTTPException(status_code=403, detail="enrollment permission denied")
+
+
+def _require_enrollment_host_scope(user: User, host: Host) -> None:
+    if user.role not in {Role.owner.value, Role.admin.value}:
+        return
+    group_scopes = {
+        scope.removeprefix("group:").removesuffix(":enroll")
+        for scope in user.scopes
+        if scope.startswith("group:") and scope.endswith(":enroll")
+    }
+    if group_scopes and (host.group_name or "") not in group_scopes:
+        raise HTTPException(status_code=403, detail="group enrollment scope denied")
+
+
+def _enrollment_session_view(db: Session, token: EnrollmentToken) -> EnrollmentSessionView:
+    status_value = token.status
+    if (
+        token.used_at is None
+        and token.revoked_at is None
+        and status_value not in {
+            EnrollmentStatus.failed.value,
+            EnrollmentStatus.completed.value,
+        }
+        and as_utc(token.expires_at) <= datetime.now(UTC)
+    ):
+        status_value = EnrollmentStatus.expired.value
+    events = list(
+        db.scalars(
+            select(EnrollmentEvent)
+            .where(EnrollmentEvent.enrollment_id == token.id)
+            .order_by(EnrollmentEvent.occurred_at, EnrollmentEvent.id)
+        ).all()
+    )
+    return EnrollmentSessionView(
+        id=token.id,
+        host_id=token.host_id,
+        status=status_value,
+        sequence=token.status_sequence,
+        expires_at=token.expires_at,
+        used_at=token.used_at,
+        revoked_at=token.revoked_at,
+        completed_at=token.completed_at,
+        source_cidr=token.source_cidr,
+        os_family=token.os_family,
+        error_code=token.error_code,
+        error_step=token.error_step,
+        error_summary=token.error_summary,
+        rolled_back=token.rolled_back,
+        events=[
+            EnrollmentEventView(
+                status=event.status,
+                sequence=event.status_sequence,
+                occurred_at=event.occurred_at,
+                error_code=event.error_code,
+                error_summary=event.error_summary,
+                rolled_back=event.rolled_back,
+            )
+            for event in events
+        ],
+    )
+
+
+@router.get(
+    "/api/v1/hosts/{host_id}/enrollment-sessions/latest",
+    response_model=EnrollmentSessionView,
+    tags=["agent"],
+)
+def latest_enrollment_session(
+    host_id: str,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> EnrollmentSessionView:
+    try:
+        enrollment_limiter.check(
+            f"management:status:{user.id}",
+            settings.enrollment_attempts_per_10m * 60,
+        )
+    except EnrollmentRateLimitError as exc:
+        raise HTTPException(status_code=429, detail="enrollment rate limit exceeded") from exc
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    _require_enrollment_host_scope(user, host)
+    token = latest_host_enrollment(db, host_id)
+    if token is None:
+        raise HTTPException(status_code=404, detail="enrollment session not found")
+    return _enrollment_session_view(db, token)
+
+
+def _enrollment_source_ip(request: Request, settings: Settings) -> str:
+    direct = request.client.host if request.client else "unknown"
+    expected = settings.trusted_proxy_cert_header_secret.get_secret_value()
+    presented = request.headers.get("x-guardian-proxy-auth", "")
+    forwarded = request.headers.get("x-forwarded-for", "").strip()
+    if expected and secrets.compare_digest(presented, expected) and forwarded:
+        try:
+            return str(ip_address(forwarded))
+        except ValueError:
+            return "invalid-forwarded-source"
+    return direct
+
+
+@router.post(
+    "/api/v1/agents/enrollment-progress",
+    status_code=202,
+    tags=["agent"],
+)
+def report_enrollment_progress(
+    payload: EnrollmentProgressReport,
+    request: Request,
+    db: DB,
+    settings: Config,
+    enrollment_token: Annotated[str | None, Header(alias="X-Enrollment-Token")] = None,
+    progress_token: Annotated[
+        str | None, Header(alias="X-Enrollment-Progress-Token")
+    ] = None,
+) -> dict[str, bool]:
+    if bool(enrollment_token) == bool(progress_token):
+        raise HTTPException(status_code=401, detail="invalid enrollment credential")
+    if settings.environment == "production":
+        require_trusted_agent_gateway(request, settings)
+    source = _enrollment_source_ip(request, settings)
+    credential = enrollment_token or progress_token or ""
+    limiter_key = f"progress:{source}:{token_digest(credential)[:16]}"
+    try:
+        enrollment_limiter.check(limiter_key, settings.enrollment_attempts_per_10m * 4)
+        if progress_token:
+            token, _ = authenticate_progress_token(
+                db,
+                value=progress_token,
+                source_ip=source,
+            )
+            allowed_steps = POST_BOOTSTRAP_PROGRESS_STEPS
+        else:
+            token, _ = authenticate_enrollment_token(
+                db,
+                value=credential,
+                source_ip=source,
+                lock=True,
+            )
+            allowed_steps = INSTALLER_PROGRESS_STEPS
+        if payload.status == EnrollmentStatus.failed.value:
+            if not payload.error_code or not payload.error_summary:
+                raise EnrollmentTokenError("failed progress requires a safe error summary")
+            fail_enrollment(
+                db,
+                token=token,
+                error_code=payload.error_code,
+                error_step=token.status,
+                error_summary=payload.error_summary,
+                rolled_back=payload.rolled_back,
+            )
+        elif payload.status in allowed_steps:
+            advance_enrollment(db, token=token, status=payload.status)
+        else:
+            raise EnrollmentTokenError("installer cannot report this progress state")
+    except EnrollmentRateLimitError as exc:
+        raise HTTPException(status_code=429, detail="enrollment rate limit exceeded") from exc
+    except EnrollmentTokenError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    write_audit(
+        db,
+        actor=None,
+        action="agent.enrollment_progress",
+        resource_type="enrollment_token",
+        resource_id=token.id,
+        outcome="failed" if payload.status == EnrollmentStatus.failed.value else "success",
+        details={
+            "status": payload.status,
+            "rolled_back": payload.rolled_back,
+            "error_code": payload.error_code,
+        },
+        source_ip=source,
+    )
+    db.commit()
+    return {"accepted": True}
 
 
 def _record_bootstrap_failure(
@@ -2739,6 +2993,12 @@ def bootstrap_agent(
     settings: Config,
     enrollment_token: Annotated[str | None, Header(alias="X-Enrollment-Token")] = None,
 ) -> AgentBootstrapResponse:
+    source = _enrollment_source_ip(request, settings)
+    limiter_key = f"{source}:{token_digest(enrollment_token or 'missing')[:16]}"
+    try:
+        enrollment_limiter.check(limiter_key, settings.enrollment_attempts_per_10m)
+    except EnrollmentRateLimitError as exc:
+        raise HTTPException(status_code=429, detail="enrollment rate limit exceeded") from exc
     if settings.environment == "production":
         try:
             require_trusted_agent_gateway(request, settings)
@@ -2755,17 +3015,13 @@ def bootstrap_agent(
             db, request=request, host_id=payload.host_id, reason_code="token_missing"
         )
         raise HTTPException(status_code=401, detail="invalid enrollment token")
-    source = request.client.host if request.client else "unknown"
-    limiter_key = f"{source}:{token_digest(enrollment_token)[:16]}"
-    try:
-        enrollment_limiter.check(limiter_key, settings.enrollment_attempts_per_10m)
-    except EnrollmentRateLimitError as exc:
-        _record_bootstrap_failure(
-            db, request=request, host_id=payload.host_id, reason_code="rate_limited"
-        )
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
     try:
         validate_agent_csr(payload.csr_pem)
+        verify_signing_key_proof(
+            csr_pem=payload.csr_pem,
+            signing_public_key=payload.signing_public_key,
+            signing_key_proof=payload.signing_key_proof,
+        )
     except AgentCertificateError as exc:
         _record_bootstrap_failure(
             db, request=request, host_id=payload.host_id, reason_code="csr_rejected"
@@ -2776,6 +3032,7 @@ def bootstrap_agent(
             db,
             value=enrollment_token,
             expected_host_id=payload.host_id,
+            source_ip=source,
         )
     except EnrollmentTokenError as exc:
         _record_bootstrap_failure(
@@ -2838,6 +3095,13 @@ def bootstrap_agent(
         )
         db.add(identity)
         host.enrolled_at = enrolled_at
+        advance_enrollment(
+            db,
+            token=token,
+            status=EnrollmentStatus.certificate_issued.value,
+            now=enrolled_at,
+        )
+        progress_credential = issue_progress_token(token)
         write_audit(
             db,
             actor=None,
@@ -2865,10 +3129,11 @@ def bootstrap_agent(
         agent_id=agent.id,
         host_id=host.id,
         certificate_pem=issued.certificate_pem,
-        ca_bundle_pem=issued.ca_bundle_pem,
+        agent_mtls_ca_bundle_pem=issued.agent_mtls_ca_bundle_pem,
         certificate_serial=issued.serial,
         certificate_expires_at=issued.expires_at,
         agent_gateway_endpoint=gateway_endpoint,
+        enrollment_progress_token=progress_credential,
     )
 
 
@@ -4586,6 +4851,20 @@ def public_settings(
             "risk": "medium",
         },
         {
+            "key": "one_command_install_enabled",
+            "value": settings.one_command_install_enabled,
+            "source": "GUARDIAN_ONE_COMMAND_INSTALL_ENABLED",
+            "restart_required": True,
+            "risk": "high",
+        },
+        {
+            "key": "agent_install_release_version",
+            "value": settings.agent_install_release_version,
+            "source": "GUARDIAN_AGENT_INSTALL_RELEASE_VERSION",
+            "restart_required": True,
+            "risk": "high",
+        },
+        {
             "key": "metric_retention_days",
             "value": settings.metric_retention_days,
             "source": "GUARDIAN_METRIC_RETENTION_DAYS",
@@ -4647,6 +4926,7 @@ def public_settings(
             "level3_requires_approval": True,
             "arbitrary_shell": False,
             "multi_vps_enrollment": True,
+            "one_command_agent_install": settings.one_command_install_enabled,
             "persistent_alerts": True,
             "notification_retry": True,
         },
@@ -4987,7 +5267,7 @@ async def renew_agent_certificate(
     return AgentRenewResponse(
         identity=identity,
         certificate_pem=issued.certificate_pem,
-        ca_bundle_pem=issued.ca_bundle_pem,
+        agent_mtls_ca_bundle_pem=issued.agent_mtls_ca_bundle_pem,
         certificate_expires_at=issued.expires_at,
     )
 
@@ -5316,6 +5596,427 @@ def revoke_agent(
     db.commit()
 
 
+def _require_maintenance_scope(user: User, host: Host, kind: str) -> None:
+    group_scopes = {
+        scope.removeprefix("group:").removesuffix(":maintain")
+        for scope in user.scopes
+        if scope.startswith("group:") and scope.endswith(":maintain")
+    }
+    if group_scopes and (host.group_name or "") not in group_scopes:
+        raise HTTPException(status_code=403, detail="group maintenance scope denied")
+    if user.role == Role.operator.value and kind == AgentMaintenanceKind.repair.value:
+        return
+    if user.role in {Role.admin.value, Role.owner.value}:
+        return
+    raise HTTPException(status_code=403, detail="Agent maintenance permission denied")
+
+
+def _require_maintenance_read_scope(user: User, host: Host) -> None:
+    group_scopes = {
+        scope.removeprefix("group:").removesuffix(":maintain")
+        for scope in user.scopes
+        if scope.startswith("group:") and scope.endswith(":maintain")
+    }
+    if group_scopes and (host.group_name or "") not in group_scopes:
+        raise HTTPException(status_code=403, detail="group maintenance scope denied")
+    if user.role not in {
+        Role.auditor.value,
+        Role.operator.value,
+        Role.admin.value,
+        Role.owner.value,
+    }:
+        raise HTTPException(status_code=403, detail="Agent maintenance read permission denied")
+
+
+def _maintenance_view(
+    db: Session, session: AgentMaintenanceSession
+) -> AgentMaintenanceSessionView:
+    events = list(
+        db.scalars(
+            select(AgentMaintenanceEvent)
+            .where(AgentMaintenanceEvent.session_id == session.id)
+            .order_by(AgentMaintenanceEvent.id)
+        ).all()
+    )
+    return AgentMaintenanceSessionView(
+        id=session.id,
+        host_id=session.host_id,
+        agent_id=session.agent_id,
+        kind=session.kind,
+        status=session.status,
+        status_sequence=session.status_sequence,
+        source_cidr=session.source_cidr,
+        purge_local_state=session.purge_local_state,
+        expected_identity_version=session.expected_identity_version,
+        old_identity_id=session.old_identity_id,
+        new_identity_id=session.new_identity_id,
+        approval_id=session.approval_id,
+        expires_at=session.expires_at,
+        used_at=session.used_at,
+        revoked_at=session.revoked_at,
+        completed_at=session.completed_at,
+        error_code=session.error_code,
+        error_summary=session.error_summary,
+        rolled_back=session.rolled_back,
+        created_at=session.created_at,
+        status_updated_at=session.status_updated_at,
+        events=events,
+    )
+
+
+@router.post(
+    "/api/v1/hosts/{host_id}/maintenance-sessions",
+    response_model=AgentMaintenanceTokenView,
+    status_code=201,
+    tags=["agent"],
+)
+def create_agent_maintenance_session(
+    host_id: str,
+    payload: AgentMaintenanceIssue,
+    request: Request,
+    db: DB,
+    settings: Config,
+    user: Annotated[User, Depends(require_role(Role.operator))],
+) -> AgentMaintenanceTokenView:
+    _require_step_up(request)
+    host = db.get(Host, host_id)
+    if host is None or host.agent is None:
+        raise HTTPException(status_code=404, detail="managed Agent not found")
+    _require_maintenance_scope(user, host, payload.kind)
+    if payload.kind == AgentMaintenanceKind.decommission.value:
+        if payload.confirmation != f"DECOMMISSION {host.name}":
+            raise HTTPException(status_code=409, detail="decommission confirmation mismatch")
+        approval = db.get(Approval, payload.approval_id or "")
+        if (
+            approval is None
+            or approval.status
+            not in {
+                ApprovalStatus.approved.value,
+                ApprovalStatus.approved_with_conditions.value,
+            }
+            or approval.action_name != "agent.decommission"
+            or approval.target_host_id != host.id
+            or approval.requested_by is None
+            or approval.decided_by is None
+            or approval.requested_by == approval.decided_by
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="independently approved host-bound decommission is required",
+            )
+    try:
+        issued = issue_maintenance_session(
+            db,
+            host=host,
+            agent=host.agent,
+            actor=user,
+            kind=payload.kind,
+            source_cidr=payload.source_cidr,
+            purge_local_state=payload.purge_local_state,
+            approval_id=payload.approval_id,
+        )
+        command = build_agent_maintenance_command(
+            settings=settings,
+            host_id=host.id,
+            token=issued.value,
+            kind=payload.kind,
+            expected_identity_version=host.agent.identity_version,
+            purge_local_state=payload.purge_local_state,
+        )
+    except (MaintenanceSessionError, AgentInstallationConfigurationError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    write_audit(
+        db,
+        actor=user,
+        action=f"agent.maintenance.{payload.kind}.issue",
+        resource_type="agent_maintenance_session",
+        resource_id=issued.session.id,
+        outcome="success",
+        details={
+            "host_id": host.id,
+            "expires_at": issued.session.expires_at.isoformat(),
+            "purge_local_state": payload.purge_local_state,
+            "approval_id": payload.approval_id,
+        },
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return AgentMaintenanceTokenView(
+        id=issued.session.id,
+        host_id=host.id,
+        kind=cast(Any, payload.kind),
+        expires_at=issued.session.expires_at,
+        command=command,
+        status="waiting",
+    )
+
+
+@router.get(
+    "/api/v1/hosts/{host_id}/maintenance-sessions",
+    response_model=list[AgentMaintenanceSessionView],
+    tags=["agent"],
+)
+def list_agent_maintenance_sessions(
+    host_id: str,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[AgentMaintenanceSessionView]:
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    _require_maintenance_read_scope(user, host)
+    sessions = db.scalars(
+        select(AgentMaintenanceSession)
+        .where(AgentMaintenanceSession.host_id == host_id)
+        .order_by(desc(AgentMaintenanceSession.created_at))
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return [_maintenance_view(db, item) for item in sessions]
+
+
+@router.get(
+    "/api/v1/hosts/{host_id}/maintenance-sessions/latest",
+    response_model=AgentMaintenanceSessionView,
+    tags=["agent"],
+)
+def latest_agent_maintenance_session(
+    host_id: str,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.viewer))],
+) -> AgentMaintenanceSessionView:
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    _require_maintenance_read_scope(user, host)
+    session = db.scalar(
+        select(AgentMaintenanceSession)
+        .where(AgentMaintenanceSession.host_id == host_id)
+        .order_by(desc(AgentMaintenanceSession.created_at))
+        .limit(1)
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="maintenance session not found")
+    return _maintenance_view(db, session)
+
+
+@router.post(
+    "/api/v1/agents/maintenance/start",
+    response_model=AgentMaintenanceStartView,
+    tags=["agent"],
+)
+def start_agent_maintenance(
+    payload: AgentMaintenanceStart,
+    request: Request,
+    db: DB,
+    settings: Config,
+    credential: Annotated[str | None, Header(alias="X-Maintenance-Token")] = None,
+) -> AgentMaintenanceStartView:
+    if not credential:
+        raise HTTPException(status_code=401, detail="invalid maintenance credential")
+    source = _enrollment_source_ip(request, settings)
+    try:
+        session, progress = consume_maintenance_session(
+            db, value=credential, kind=payload.kind, source_ip=source
+        )
+    except MaintenanceSessionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    agent = db.get(Agent, session.agent_id)
+    identity = db.get(AgentIdentity, session.old_identity_id or "")
+    if agent is None or identity is None:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="maintenance identity is unavailable")
+    if settings.environment == "production":
+        fingerprint, serial = trusted_client_certificate_identity(request, settings)
+    else:
+        fingerprint = normalize_certificate_fingerprint(
+            request.headers.get("x-client-cert-fingerprint", identity.certificate_fingerprint)
+        )
+        serial = normalize_certificate_serial(
+            request.headers.get("x-client-cert-serial", identity.certificate_serial or "0")
+        )
+    if (
+        fingerprint != identity.certificate_fingerprint
+        or (identity.certificate_serial and serial != identity.certificate_serial)
+    ):
+        db.rollback()
+        raise HTTPException(status_code=401, detail="maintenance certificate mismatch")
+    write_audit(
+        db,
+        actor=None,
+        action=f"agent.maintenance.{session.kind}.start",
+        resource_type="agent_maintenance_session",
+        resource_id=session.id,
+        outcome="success",
+        details={"host_id": session.host_id, "agent_id": session.agent_id},
+        source_ip=source,
+    )
+    db.commit()
+    return AgentMaintenanceStartView(
+        session_id=session.id,
+        host_id=session.host_id,
+        agent_id=session.agent_id,
+        kind=session.kind,
+        progress_token=progress,
+        expected_identity_version=session.expected_identity_version,
+        purge_local_state=session.purge_local_state,
+    )
+
+
+@router.post("/api/v1/agents/maintenance/progress", status_code=202, tags=["agent"])
+def report_agent_maintenance_progress(
+    payload: AgentMaintenanceProgress,
+    request: Request,
+    db: DB,
+    credential: Annotated[str | None, Header(alias="X-Maintenance-Progress")] = None,
+) -> None:
+    if not credential:
+        raise HTTPException(status_code=401, detail="invalid maintenance progress credential")
+    try:
+        session = authenticate_maintenance_progress(
+            db, value=credential, kind=payload.kind
+        )
+        agent = db.get(Agent, session.agent_id)
+        if payload.status == "heartbeat_verified":
+            if agent is None or agent.last_heartbeat_at is None:
+                raise MaintenanceSessionError("Controller has not observed a post-change heartbeat")
+            heartbeat = agent.last_heartbeat_at
+            if heartbeat.tzinfo is None:
+                heartbeat = heartbeat.replace(tzinfo=UTC)
+            session_started = session.used_at
+            if session_started is None:
+                raise MaintenanceSessionError("maintenance session has not started")
+            if session_started.tzinfo is None:
+                session_started = session_started.replace(tzinfo=UTC)
+            if heartbeat <= session_started:
+                raise MaintenanceSessionError(
+                    "post-change heartbeat is not newer than session start"
+                )
+            if payload.kind in {"reinstall", "rotate_identity"}:
+                if agent.identity_version <= session.expected_identity_version:
+                    raise MaintenanceSessionError("new identity generation has not been observed")
+                active = db.scalar(
+                    select(AgentIdentity).where(
+                        AgentIdentity.agent_id == agent.id,
+                        AgentIdentity.state == AgentIdentityState.active.value,
+                    )
+                )
+                if active is None or active.id == session.old_identity_id:
+                    raise MaintenanceSessionError("new active identity is not verified")
+                session.new_identity_id = active.id
+        if payload.status == "completed" and payload.kind != "repair":
+            raise MaintenanceSessionError("this maintenance kind requires Controller finalization")
+        advance_maintenance(
+            db,
+            session=session,
+            status=payload.status,
+            error_code=payload.error_code,
+            error_summary=payload.error_summary,
+            rolled_back=payload.rolled_back,
+        )
+    except MaintenanceSessionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    write_audit(
+        db,
+        actor=None,
+        action=f"agent.maintenance.{session.kind}.progress",
+        resource_type="agent_maintenance_session",
+        resource_id=session.id,
+        outcome="success",
+        details={"status": payload.status, "rolled_back": payload.rolled_back},
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+
+
+@router.post(
+    "/api/v1/hosts/{host_id}/maintenance-sessions/{session_id}/finalize",
+    response_model=AgentMaintenanceSessionView,
+    tags=["agent"],
+)
+def finalize_agent_maintenance(
+    host_id: str,
+    session_id: str,
+    payload: AgentMaintenanceFinalize,
+    request: Request,
+    db: DB,
+    user: Annotated[User, Depends(require_role(Role.admin))],
+) -> AgentMaintenanceSessionView:
+    _require_step_up(request)
+    host = db.get(Host, host_id)
+    session = db.get(AgentMaintenanceSession, session_id)
+    if host is None or session is None or session.host_id != host.id:
+        raise HTTPException(status_code=404, detail="maintenance session not found")
+    _require_maintenance_scope(user, host, session.kind)
+    if session.status != "confirmation_pending":
+        raise HTTPException(status_code=409, detail="maintenance is not ready for finalization")
+    if payload.confirmation != f"FINALIZE {host.name}":
+        raise HTTPException(status_code=409, detail="finalization confirmation mismatch")
+    agent = db.get(Agent, session.agent_id)
+    if agent is None:
+        raise HTTPException(status_code=409, detail="Agent not found")
+    if agent.identity_version != payload.expected_identity_version:
+        raise HTTPException(status_code=409, detail="stale Agent identity version")
+    if session.kind == AgentMaintenanceKind.decommission.value:
+        identity = db.get(AgentIdentity, session.old_identity_id or "")
+        if identity is None or payload.crl_number is None or payload.crl_sha256 is None:
+            raise HTTPException(status_code=409, detail="decommission requires CRL evidence")
+        require_matching_crl_publication(
+            db,
+            AgentIdentityRevokeRequest(
+                expected_version=payload.expected_identity_version,
+                crl_number=payload.crl_number,
+                crl_sha256=payload.crl_sha256,
+            ),
+            identity.certificate_serial,
+        )
+        now = datetime.now(UTC)
+        identity.state = AgentIdentityState.revoked.value
+        identity.revoked_at = now
+        agent.revoked_at = now
+        host.enabled = False
+        host.disabled_at = now
+        db.execute(
+            update(AgentTask)
+            .where(AgentTask.agent_id == agent.id, AgentTask.status == "pending")
+            .values(status="cancelled", completed_at=now)
+        )
+    elif session.kind in {"reinstall", "rotate_identity"}:
+        old = db.get(AgentIdentity, session.old_identity_id or "")
+        if old is None or old.state not in {
+            AgentIdentityState.retiring.value,
+            AgentIdentityState.revoked.value,
+        }:
+            raise HTTPException(status_code=409, detail="old identity has not entered retirement")
+        if old.state != AgentIdentityState.revoked.value:
+            raise HTTPException(
+                status_code=409,
+                detail="old identity must be CRL-published and revoked before finalization",
+            )
+    advance_maintenance(db, session=session, status="completed")
+    write_audit(
+        db,
+        actor=user,
+        action=f"agent.maintenance.{session.kind}.finalize",
+        resource_type="agent_maintenance_session",
+        resource_id=session.id,
+        outcome="success",
+        details={
+            "host_id": host.id,
+            "purge_local_state": session.purge_local_state,
+            "history_preserved": True,
+        },
+        source_ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return _maintenance_view(db, session)
+
+
 @router.get("/api/v1/events", tags=["events"])
 def events(_: Annotated[User, Depends(require_role(Role.viewer))]) -> StreamingResponse:
     return StreamingResponse(event_broker.stream(), media_type="text/event-stream")
@@ -5510,6 +6211,22 @@ async def agent_heartbeat(
     agent.host.last_seen_at = now
     agent.host.status = "healthy"
     agent.host.data_state = "agent_error" if payload.metrics.get("collection_error") else "normal"
+    completed_enrollment = complete_host_enrollment(
+        db,
+        host_id=agent.host_id,
+        now=now,
+    )
+    if completed_enrollment is not None:
+        write_audit(
+            db,
+            actor=None,
+            action="agent.enrollment_completed",
+            resource_type="enrollment_token",
+            resource_id=completed_enrollment.id,
+            outcome="success",
+            details={"host_id": agent.host_id, "source": "authenticated_heartbeat"},
+            source_ip=request.client.host if request.client else None,
+        )
     if was_offline:
         write_audit(
             db,

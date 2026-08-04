@@ -1868,6 +1868,33 @@ select:focus-visible {
   min-height: 140px;
 }
 
+.enrollment-timeline {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.enrollment-timeline li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.2rem 1rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--rc5-border);
+  border-radius: 10px;
+  background: var(--rc5-surface);
+}
+
+.enrollment-timeline li small,
+.enrollment-timeline li span {
+  color: var(--rc5-text-secondary);
+}
+
+.enrollment-timeline li span {
+  grid-column: 1 / -1;
+}
+
 .login-panel input:focus,
 .dialog-form input:focus,
 .dialog-form textarea:focus {
