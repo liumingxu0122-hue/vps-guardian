@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	agentVersion = "0.3.0-alpha.1"
+	agentVersion = "0.4.0-alpha.1"
 	buildCommit  = "unknown"
 	buildTime    = "unknown"
 	buildID      = "development"

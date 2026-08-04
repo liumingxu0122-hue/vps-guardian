@@ -73,6 +73,7 @@ def test_generated_command_uses_token_file_and_complete_installer_contract() -> 
         "--release-manifest-signature-url",
         "--release-signing-public-key-url",
         "--release-signing-public-key-sha256",
+        "--release-signing-key-id",
     ):
         assert option in command_builder
         assert option in installer

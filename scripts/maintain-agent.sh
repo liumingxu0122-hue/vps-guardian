@@ -16,6 +16,7 @@ manifest_url=''
 manifest_signature_url=''
 signing_key_url=''
 signing_key_sha256=''
+signing_key_id=''
 purge_local_state=false
 
 while [ "$#" -gt 0 ]; do
@@ -34,6 +35,7 @@ while [ "$#" -gt 0 ]; do
     --release-manifest-signature-url) manifest_signature_url="$2"; shift 2 ;;
     --release-signing-public-key-url) signing_key_url="$2"; shift 2 ;;
     --release-signing-public-key-sha256) signing_key_sha256="$2"; shift 2 ;;
+    --release-signing-key-id) signing_key_id="$2"; shift 2 ;;
     --purge-local-state) purge_local_state=true; shift ;;
     *) echo "unknown maintenance option" >&2; exit 64 ;;
   esac
@@ -199,6 +201,8 @@ openssl pkeyutl -verify -pubin -inkey "$work_directory/release-key.pem" -rawin \
   -in "$work_directory/manifest" -sigfile "$work_directory/manifest.sig" >/dev/null 2>&1 || exit 65
 failure_step=manifest_version
 [ "$(sed -n 's/^version=//p' "$work_directory/manifest")" = "$release_version" ] || exit 65
+failure_step=manifest_key_id
+[ "$(sed -n 's/^key_id=//p' "$work_directory/manifest")" = "$signing_key_id" ] || exit 65
 failure_step=maintainer_integrity
 [ -f "$0" ] && [ ! -L "$0" ] || exit 65
 [ "$(sed -n 's/^sha256_maintain_agent=//p' "$work_directory/manifest")" = \

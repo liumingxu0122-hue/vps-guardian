@@ -20,7 +20,7 @@ CSR/mTLS Bootstrap、Repair、Reinstall、身份轮换、CRL 发布和旧证书�
 Agent B/OpenRC 和 KVM 整机重启尚未覆盖。本说明不代表 Production 发布或
 Production Ready；Production 继续为 **NO-GO**。
 
-Current release: [v0.3.0-alpha.1](RELEASE_NOTES_v0.3.0-alpha.1.md) | [简体中文](RELEASE_NOTES_v0.3.0-alpha.1.zh-CN.md)
+Current release: [v0.4.0-alpha.1](RELEASE_NOTES_v0.4.0-alpha.1.md) | [简体中文](RELEASE_NOTES_v0.4.0-alpha.1.zh-CN.md)
 
 # v0.1.0-alpha.1 / Public Alpha
 

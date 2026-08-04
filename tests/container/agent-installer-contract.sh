@@ -42,6 +42,7 @@ if [ -L /etc/os-release ]; then
     --release-manifest-signature-url https://downloads.example.test/install-manifest.txt.sig \
     --release-signing-public-key-url https://downloads.example.test/release-key.pem \
     --release-signing-public-key-sha256 "$zeros" \
+    --release-signing-key-id "ed25519-sha256:$zeros" \
     >"$os_release_output" 2>&1; then
     echo "installer unexpectedly accepted a missing enrollment token" >&2
     exit 1
@@ -57,8 +58,8 @@ grep -F 'rm -rf /var/lib/vps-guardian-agent' scripts/maintain-agent.sh >/dev/nul
 
 temporary="$(mktemp -d)"
 trap 'rm -rf -- "$temporary"' EXIT HUP INT TERM
-printf 'version=v0.4.0-test\nsha256_linux_amd64=%064d\nsha256_linux_arm64=%064d\n' \
-  1 2 > "$temporary/manifest"
+printf 'version=v0.4.0-test\nkey_id=ed25519-sha256:%064d\nsha256_linux_amd64=%064d\nsha256_linux_arm64=%064d\n' \
+  0 1 2 > "$temporary/manifest"
 openssl genpkey -algorithm ED25519 -out "$temporary/private.pem"
 openssl pkey -in "$temporary/private.pem" -pubout -out "$temporary/public.pem"
 openssl pkeyutl -sign -inkey "$temporary/private.pem" -rawin \
@@ -73,7 +74,12 @@ if openssl pkeyutl -verify -pubin -inkey "$temporary/wrong-public.pem" -rawin \
   exit 1
 fi
 cp "$temporary/manifest.sig" "$temporary/bad.sig"
-printf x | dd of="$temporary/bad.sig" bs=1 seek=0 conv=notrunc 2>/dev/null
+first_signature_byte="$(od -An -tu1 -N1 "$temporary/bad.sig" | tr -d ' ')"
+if [ "$first_signature_byte" -eq 0 ]; then
+  printf '\001'
+else
+  printf '\000'
+fi | dd of="$temporary/bad.sig" bs=1 seek=0 conv=notrunc 2>/dev/null
 if openssl pkeyutl -verify -pubin -inkey "$temporary/public.pem" -rawin \
   -in "$temporary/manifest" -sigfile "$temporary/bad.sig" >/dev/null 2>&1; then
   echo "wrong detached signature was accepted" >&2

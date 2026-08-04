@@ -20,6 +20,12 @@ def _sha256(value: str, label: str) -> str:
     return value
 
 
+def _release_asset(version: str, component: str, suffix: str = "") -> str:
+    if not re.fullmatch(r"v[A-Za-z0-9._-]{1,63}", version):
+        raise AgentInstallationConfigurationError("invalid fixed release version")
+    return f"vps-guardian-{component}-{version}{suffix}"
+
+
 def _embedded_https_ca_bundle(settings: Settings) -> str:
     path = Path(settings.agent_enrollment_https_ca_bundle_file)
     if path.is_symlink() or not path.is_file():
@@ -56,9 +62,9 @@ def build_one_command_install(
     version = settings.agent_install_release_version
     base = settings.agent_install_assets_base_url.rstrip("/") + "/"
     release_base = urljoin(base, f"{version}/")
-    installer_url = urljoin(release_base, "install-agent.sh")
-    agent_amd64_url = urljoin(release_base, "vps-guardian-agent-linux-amd64")
-    agent_arm64_url = urljoin(release_base, "vps-guardian-agent-linux-arm64")
+    installer_url = urljoin(release_base, _release_asset(version, "install-agent", ".sh"))
+    agent_amd64_url = urljoin(release_base, _release_asset(version, "agent", "-linux-amd64"))
+    agent_arm64_url = urljoin(release_base, _release_asset(version, "agent", "-linux-arm64"))
     values = {
         "installer_sha": _sha256(
             settings.agent_installer_sha256, "installer"
@@ -162,6 +168,8 @@ def build_one_command_install(
             q(settings.agent_release_signing_public_key_url),
             "--release-signing-public-key-sha256",
             quoted["release_signing_key_sha"],
+            "--release-signing-key-id",
+            q(settings.agent_release_signing_key_id),
         )
     )
 
@@ -207,7 +215,7 @@ def build_agent_maintenance_command(
         "&&", "curl --config", '"$guardian_tmp/curl.conf"',
         "--fail --show-error --location --proto '=https'",
         "--connect-timeout 10 --max-time 120 -o", '"$guardian_tmp/maintain-agent.sh"',
-        q(urljoin(release_base, "maintain-agent.sh")),
+        q(urljoin(release_base, _release_asset(version, "maintain-agent", ".sh"))),
         "&&", "printf", q("%s  %s\\n"), q(values["script_sha"]),
         '"$guardian_tmp/maintain-agent.sh"', "| sha256sum --check --status",
         "&& sudo sh", '"$guardian_tmp/maintain-agent.sh"',
@@ -217,14 +225,17 @@ def build_agent_maintenance_command(
         "--mode", q(kind),
         "--release-version", q(version),
         "--expected-identity-version", str(expected_identity_version),
-        "--agent-url-amd64", q(urljoin(release_base, "vps-guardian-agent-linux-amd64")),
+        "--agent-url-amd64",
+        q(urljoin(release_base, _release_asset(version, "agent", "-linux-amd64"))),
         "--agent-sha256-amd64", q(values["amd64_sha"]),
-        "--agent-url-arm64", q(urljoin(release_base, "vps-guardian-agent-linux-arm64")),
+        "--agent-url-arm64",
+        q(urljoin(release_base, _release_asset(version, "agent", "-linux-arm64"))),
         "--agent-sha256-arm64", q(values["arm64_sha"]),
         "--release-manifest-url", q(settings.agent_release_manifest_url),
         "--release-manifest-signature-url", q(settings.agent_release_manifest_signature_url),
         "--release-signing-public-key-url", q(settings.agent_release_signing_public_key_url),
         "--release-signing-public-key-sha256", q(values["signing_key_sha"]),
+        "--release-signing-key-id", q(settings.agent_release_signing_key_id),
     ]
     if purge_local_state:
         arguments.append("--purge-local-state")

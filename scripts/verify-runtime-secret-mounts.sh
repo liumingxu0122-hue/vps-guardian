@@ -19,9 +19,9 @@ if [ ! -d "$runtime_dir" ] || [ -L "$runtime_dir" ] || \
 fi
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 69; }
 
-database_image="${VPS_GUARDIAN_DATABASE_IMAGE:-vps-guardian-postgres:0.3.0-alpha.1}"
-controller_image="${VPS_GUARDIAN_CONTROLLER_IMAGE:-vps-guardian-controller:0.3.0-alpha.1}"
-gateway_image="${VPS_GUARDIAN_GATEWAY_IMAGE:-vps-guardian-agent-gateway:0.3.0-alpha.1}"
+database_image="${VPS_GUARDIAN_DATABASE_IMAGE:-vps-guardian-postgres:0.4.0-alpha.1}"
+controller_image="${VPS_GUARDIAN_CONTROLLER_IMAGE:-vps-guardian-controller:0.4.0-alpha.1}"
+gateway_image="${VPS_GUARDIAN_GATEWAY_IMAGE:-vps-guardian-agent-gateway:0.4.0-alpha.1}"
 contracts="postgresql/postgres-password|70|70|$database_image|primary
 controller/database-url|10001|10001|$controller_image|primary
 controller/jwt-secret|10001|10001|$controller_image|primary

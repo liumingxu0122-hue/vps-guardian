@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     enrollment_attempts_per_10m: int = Field(default=10, ge=2, le=100)
     one_command_install_enabled: bool = False
     agent_install_release_version: str = Field(
-        default="v0.4.0-phase4-preview", pattern=r"^v[A-Za-z0-9._-]{1,63}$"
+        default="v0.4.0-alpha.1", pattern=r"^v[A-Za-z0-9._-]{1,63}$"
     )
     agent_install_assets_base_url: str = (
         "https://github.com/liumingxu0122-hue/vps-guardian/releases/download"
@@ -76,14 +76,29 @@ class Settings(BaseSettings):
     agent_maintenance_script_sha256: str = Field(default="", max_length=64)
     agent_binary_amd64_sha256: str = Field(default="", max_length=64)
     agent_binary_arm64_sha256: str = Field(default="", max_length=64)
-    agent_release_manifest_url: str = "https://downloads.example.com/SHA256SUMS"
+    agent_release_manifest_url: str = (
+        "https://github.com/liumingxu0122-hue/vps-guardian/releases/download/"
+        "v0.4.0-alpha.1/vps-guardian-install-manifest-v0.4.0-alpha.1.txt"
+    )
     agent_release_manifest_signature_url: str = (
-        "https://downloads.example.com/SHA256SUMS.sig"
+        "https://github.com/liumingxu0122-hue/vps-guardian/releases/download/"
+        "v0.4.0-alpha.1/vps-guardian-install-manifest-v0.4.0-alpha.1.txt.sig"
     )
     agent_release_signing_public_key_url: str = (
-        "https://downloads.example.com/release-signing-ed25519.pem"
+        "https://github.com/liumingxu0122-hue/vps-guardian/releases/download/"
+        "v0.4.0-alpha.1/vps-guardian-release-signing-key-v0.4.0-alpha.1.pem"
     )
-    agent_release_signing_public_key_sha256: str = Field(default="", max_length=64)
+    agent_release_signing_public_key_sha256: str = Field(
+        default="c9fe05398821dc580aaebcda4cea64f7bf9c998dc59c898b4fcdf79aacec37b4",
+        max_length=64,
+    )
+    agent_release_signing_key_id: str = Field(
+        default=(
+            "ed25519-sha256:"
+            "3e3d878e37f3ababd96827441be8dae17bb397b8012e8f7de65331f2356e524a"
+        ),
+        pattern=r"^ed25519-sha256:[a-f0-9]{64}$",
+    )
     agent_enrollment_https_ca_bundle_url: str = (
         "https://downloads.example.com/enrollment-https-ca-bundle.pem"
     )
@@ -110,7 +125,7 @@ class Settings(BaseSettings):
     operations_security_scan_at: datetime | None = None
     operations_uncovered_critical: int | None = Field(default=None, ge=0, le=1_000_000)
     operations_uncovered_high: int | None = Field(default=None, ge=0, le=1_000_000)
-    release_version: str = Field(default="0.3.0-alpha.1", max_length=64)
+    release_version: str = Field(default="0.4.0-alpha.1", max_length=64)
     deployment_commit: str = Field(default="unknown", max_length=64)
     deployed_at: datetime | None = None
 

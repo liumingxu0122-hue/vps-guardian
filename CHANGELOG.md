@@ -4,6 +4,8 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
 
 ## [Unreleased]
 
+## [0.4.0-alpha.1] - 2026-08-04
+
 ### Validation
 
 - PR #9 automated enrollment, maintenance, approval-separation, CRL, rollback,
@@ -35,8 +37,8 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and S
   audit evidence but cannot issue Agent maintenance or decommission commands.
 - Added detached Ed25519 release-manifest verification before checksum trust,
   fail-closed version replay protection, ephemeral CI signing tests, and an
-  Ubuntu/Debian/Rocky/Alpine amd64/arm64 container contract matrix. Formal release
-  signing remains blocked until an offline production signing key is provisioned.
+  Ubuntu/Debian/Rocky/Alpine amd64/arm64 container contract matrix. The reviewed
+  v0.4 Alpha trust anchor is distinct from CI keys and is not a Production key.
 - Added fail-closed, host-bound 10-minute Agent enrollment sessions, hash-only
   bootstrap and progress credentials, optional source CIDR restriction, monotonic
   installation timelines, immediate revoke/regenerate, and reversible migration

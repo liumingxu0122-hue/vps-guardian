@@ -163,6 +163,30 @@ def test_release_builder_emits_checksums_and_available_sbom_or_blocker() -> None
     assert "images.BLOCKED.txt" in script
     assert "sha256sum" in script
     assert "git status --short" in script
+    assert "VPS_GUARDIAN_RELEASE_SIGNING_PRIVATE_KEY_FILE" in script
+    assert "release signing private key must remain outside the repository" in script
+    assert "v0.4-alpha-release-ed25519.pem" in script
+    assert "openssl pkeyutl -sign" in script
+    assert "openssl pkeyutl -verify" in script
+    assert "key_id=" in script
+    assert "sha256sum --check --strict checksums.sha256" in script
+    assert "BEGIN .*PRIVATE KEY" in script
+
+
+def test_alpha_release_public_key_and_key_id_are_fixed_without_private_material() -> None:
+    public_key = ROOT / "release/keys/v0.4-alpha-release-ed25519.pem"
+    key_id = ROOT / "release/keys/v0.4-alpha-release-key-id.txt"
+    assert public_key.read_text(encoding="utf-8").startswith("-----BEGIN PUBLIC KEY-----")
+    assert key_id.read_text(encoding="utf-8").strip() == (
+        "ed25519-sha256:"
+        "3e3d878e37f3ababd96827441be8dae17bb397b8012e8f7de65331f2356e524a"
+    )
+    assert not list((ROOT / "release").rglob("*private*"))
+    assert "BEGIN PRIVATE KEY" not in "\n".join(
+        path.read_text(encoding="utf-8", errors="ignore")
+        for path in (ROOT / "release").rglob("*")
+        if path.is_file()
+    )
 
 
 def test_systemd_release_sources_are_exported_from_an_exact_clean_commit() -> None:
