@@ -950,7 +950,7 @@ class AgentBootstrapResponse(BaseModel):
     agent_id: str
     host_id: str
     certificate_pem: str
-    ca_bundle_pem: str
+    agent_mtls_ca_bundle_pem: str
     certificate_serial: str
     certificate_expires_at: datetime
     agent_gateway_endpoint: str
@@ -976,7 +976,7 @@ class AgentRenewRequest(BaseModel):
 class AgentRenewResponse(BaseModel):
     identity: AgentIdentityView
     certificate_pem: str
-    ca_bundle_pem: str
+    agent_mtls_ca_bundle_pem: str
     certificate_expires_at: datetime
 
 

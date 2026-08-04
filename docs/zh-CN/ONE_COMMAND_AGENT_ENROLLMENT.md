@@ -1,5 +1,14 @@
 # Agent 一条命令注册
 
+## HTTPS 与 mTLS 信任边界
+
+注册流程使用两套含义明确、互不覆盖的信任材料：
+
+- `enrollment_https_ca_bundle` 只验证 Enrollment HTTPS Gateway，包括 SNI/SAN、有效期、`serverAuth` 和完整的 leaf/intermediate 链。首次携带 Token 前必须完成固定 SHA-256 校验。
+- `agent_mtls_ca_bundle` 只验证 CSR 签发后的 Agent 客户端身份。它在已认证的 Enrollment 响应中返回，单独校验并保存，不能覆盖 HTTPS transport CA。
+
+Gateway 只发送 leaf 和必要 intermediate，不发送 root。私有 Staging CA 可以与 Agent mTLS CA 完全不同；轮换期间允许经过批准的双根 bundle。严禁使用 `curl -k`、`--insecure`、关闭主机名校验，或让携带 Token 的请求跟随 301、302、307、308 重定向。临时 CA 文件必须为 `0600`，并在成功、失败或信号中断后删除。
+
 [English](../en/ONE_COMMAND_AGENT_ENROLLMENT.md) | [简体中文](ONE_COMMAND_AGENT_ENROLLMENT.md)
 
 ## 范围与发布门禁

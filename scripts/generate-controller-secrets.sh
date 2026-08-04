@@ -29,21 +29,52 @@ openssl rand -base64 48 > "$target/restic-password"
 openssl genpkey -algorithm ED25519 -out "$target/controller-ed25519.pem"
 chmod 0600 "$target"/*
 
-script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+script_dir="$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd)"
 sh "$script_dir/pki-init.sh" "$target/pki"
 chmod 0600 "$target/pki/agent-ca.crt" "$target/pki/private/agent-ca.key"
+
+mkdir -p "$target/enrollment-https-pki/private"
+chmod 0700 "$target/enrollment-https-pki" "$target/enrollment-https-pki/private"
+openssl genpkey -algorithm ED25519 \
+  -out "$target/enrollment-https-pki/private/enrollment-https-ca.key"
+openssl req -new -x509 \
+  -key "$target/enrollment-https-pki/private/enrollment-https-ca.key" \
+  -days 3650 \
+  -subj "/CN=VPS Guardian Enrollment HTTPS CA" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -out "$target/enrollment-https-pki/enrollment-https-ca-bundle.pem"
 openssl genpkey -algorithm ED25519 -out "$target/server.key"
 openssl req -new -key "$target/server.key" -subj "/CN=$gateway_name" \
   -addext "subjectAltName=DNS:$gateway_name" -out "$target/server.csr"
-openssl ca -batch -config "$target/pki/openssl.cnf" -extensions server_cert -days 90 \
-  -in "$target/server.csr" -out "$target/server.crt"
-rm -f "$target/server.csr"
-openssl verify -CAfile "$target/pki/agent-ca.crt" "$target/server.crt"
+cat > "$target/enrollment-https-pki/server.ext" <<EOF
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:$gateway_name
+EOF
+openssl x509 -req -in "$target/server.csr" \
+  -CA "$target/enrollment-https-pki/enrollment-https-ca-bundle.pem" \
+  -CAkey "$target/enrollment-https-pki/private/enrollment-https-ca.key" \
+  -CAcreateserial -days 90 -extfile "$target/enrollment-https-pki/server.ext" \
+  -out "$target/server.crt"
+rm -f "$target/server.csr" "$target/enrollment-https-pki/server.ext" \
+  "$target/enrollment-https-pki/enrollment-https-ca-bundle.srl"
+chmod 0600 "$target/enrollment-https-pki/private/enrollment-https-ca.key" \
+  "$target/enrollment-https-pki/enrollment-https-ca-bundle.pem"
+openssl verify -purpose sslserver -verify_hostname "$gateway_name" \
+  -CAfile "$target/enrollment-https-pki/enrollment-https-ca-bundle.pem" \
+  "$target/server.crt"
 openssl x509 -in "$target/server.crt" -noout -checkhost "$gateway_name" >/dev/null
 mkdir -p "$target/gateway-pki"
 chmod 0755 "$target/gateway-pki"
 install -m 0644 "$target/pki/agent-ca.crt" "$target/gateway-pki/agent-ca.crt"
 install -m 0644 "$target/pki/agent-ca.crl" "$target/gateway-pki/agent-ca.crl"
-(cd "$target" && find . -type f ! -name SHA256SUMS -exec sha256sum {} \; | sort > SHA256SUMS)
+checksum_file="$(mktemp)"
+trap 'rm -f -- "$checksum_file"' EXIT HUP INT TERM
+(cd "$target" && find . -type f ! -name SHA256SUMS \
+  -exec sha256sum {} \; | sort) > "$checksum_file"
+mv "$checksum_file" "$target/SHA256SUMS"
+trap - EXIT HUP INT TERM
 chmod 0600 "$target/SHA256SUMS"
 printf 'created controller secrets in %s; store protected off-host copies of the CA, Restic password, and field key\n' "$target"

@@ -10,8 +10,8 @@ agent_url_amd64=''
 agent_sha256_amd64=''
 agent_url_arm64=''
 agent_sha256_arm64=''
-server_ca_url=''
-server_ca_sha256=''
+enrollment_https_ca_bundle_url=''
+enrollment_https_ca_bundle_sha256=''
 controller_public_key_url=''
 controller_public_key_sha256=''
 release_manifest_url=''
@@ -30,8 +30,8 @@ while [ "$#" -gt 0 ]; do
     --agent-sha256-amd64) agent_sha256_amd64="$2"; shift 2 ;;
     --agent-url-arm64) agent_url_arm64="$2"; shift 2 ;;
     --agent-sha256-arm64) agent_sha256_arm64="$2"; shift 2 ;;
-    --server-ca-url) server_ca_url="$2"; shift 2 ;;
-    --server-ca-sha256) server_ca_sha256="$2"; shift 2 ;;
+    --enrollment-https-ca-bundle-url) enrollment_https_ca_bundle_url="$2"; shift 2 ;;
+    --enrollment-https-ca-bundle-sha256) enrollment_https_ca_bundle_sha256="$2"; shift 2 ;;
     --controller-public-key-url) controller_public_key_url="$2"; shift 2 ;;
     --controller-public-key-sha256) controller_public_key_sha256="$2"; shift 2 ;;
     --release-manifest-url) release_manifest_url="$2"; shift 2 ;;
@@ -44,7 +44,8 @@ done
 
 for value in "$controller_url" "$host_id" "$enrollment_token_file" "$release_version" "$os_family" \
   "$agent_url_amd64" "$agent_sha256_amd64" "$agent_url_arm64" "$agent_sha256_arm64" \
-  "$server_ca_url" "$server_ca_sha256" "$controller_public_key_url" \
+  "$enrollment_https_ca_bundle_url" "$enrollment_https_ca_bundle_sha256" \
+  "$controller_public_key_url" \
   "$controller_public_key_sha256" "$release_manifest_url" \
   "$release_manifest_signature_url" "$release_signing_public_key_url" \
   "$release_signing_public_key_sha256"; do
@@ -57,7 +58,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 case "$controller_url" in https://*) ;; *) echo "Controller URL must use HTTPS" >&2; exit 64 ;; esac
-for url in "$agent_url_amd64" "$agent_url_arm64" "$server_ca_url" \
+for url in "$agent_url_amd64" "$agent_url_arm64" "$enrollment_https_ca_bundle_url" \
   "$controller_public_key_url" "$release_manifest_url" \
   "$release_manifest_signature_url" "$release_signing_public_key_url"; do
   case "$url" in
@@ -90,7 +91,8 @@ for existing_config_directory in /etc/vps-guardian/agent /etc/vps-guardian-agent
     fi
   fi
 done
-for digest in "$agent_sha256_amd64" "$agent_sha256_arm64" "$server_ca_sha256" \
+for digest in "$agent_sha256_amd64" "$agent_sha256_arm64" \
+  "$enrollment_https_ca_bundle_sha256" \
   "$controller_public_key_sha256" "$release_signing_public_key_sha256"; do
   case "$digest" in
     *[!a-f0-9]*|'') echo "SHA-256 value is invalid" >&2; exit 64 ;;
@@ -275,6 +277,21 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# The Enrollment HTTPS trust bundle is public material, but its exact digest is
+# pinned in the authenticated one-command response. It must be available before
+# any request carries the short-lived enrollment credential.
+failure_step="Enrollment HTTPS trust download"
+curl --fail --show-error --silent --location --proto '=https' \
+  --connect-timeout 10 --max-time 60 \
+  -o "$work_directory/enrollment-https-ca-bundle.pem" \
+  "$enrollment_https_ca_bundle_url"
+printf '%s  %s\n' "$enrollment_https_ca_bundle_sha256" \
+  "$work_directory/enrollment-https-ca-bundle.pem" | sha256sum --check --status || {
+    echo "Enrollment HTTPS CA bundle checksum verification failed" >&2
+    exit 65
+  }
+chmod 0600 "$work_directory/enrollment-https-ca-bundle.pem"
+
 enrollment_token="$(cat "$enrollment_token_file")"
 case "$enrollment_token" in
   *[!A-Za-z0-9._~-]*|'') echo "enrollment token format is invalid" >&2; exit 65 ;;
@@ -291,6 +308,7 @@ report_progress() {
   progress="$1"
   curl --fail --show-error --silent --proto '=https' \
     --connect-timeout 10 --max-time 30 \
+    --cacert "$work_directory/enrollment-https-ca-bundle.pem" \
     -H 'Content-Type: application/json' -H "@$header_file" \
     --data "{\"status\":\"$progress\"}" \
     "${controller_url%/}/api/v1/agents/enrollment-progress" >/dev/null
@@ -301,6 +319,7 @@ report_failure() {
   was_rolled_back="$2"
   curl --fail --show-error --silent --proto '=https' \
     --connect-timeout 10 --max-time 30 \
+    --cacert "$work_directory/enrollment-https-ca-bundle.pem" \
     -H 'Content-Type: application/json' -H "@$header_file" \
     --data "{\"status\":\"failed\",\"error_code\":\"installer_failed\",\"error_summary\":\"Agent installation failed during $failed_step\",\"rolled_back\":$was_rolled_back}" \
     "${controller_url%/}/api/v1/agents/enrollment-progress" >/dev/null
@@ -328,14 +347,7 @@ chmod 0755 "$work_directory/agent"
 }
 report_progress agent_verified
 
-failure_step="Controller trust download"
-curl --fail --show-error --silent --location --proto '=https' \
-  --connect-timeout 10 --max-time 60 -o "$work_directory/controller-ca.crt" "$server_ca_url"
-printf '%s  %s\n' "$server_ca_sha256" "$work_directory/controller-ca.crt" | \
-  sha256sum --check --status || {
-    echo "Controller CA checksum verification failed" >&2
-    exit 65
-  }
+failure_step="Controller signing trust download"
 curl --fail --show-error --silent --location --proto '=https' \
   --connect-timeout 10 --max-time 60 \
   -o "$work_directory/controller-public-key.txt" "$controller_public_key_url"
@@ -351,7 +363,7 @@ failure_step="local identity bootstrap"
   --controller-url "$controller_url" \
   --host-id "$host_id" \
   --token-file "$enrollment_token_file" \
-  --server-ca-file "$work_directory/controller-ca.crt" \
+  --enrollment-https-ca-bundle-file "$work_directory/enrollment-https-ca-bundle.pem" \
   --output-dir "$identity_directory" \
   --agent-version "${release_version#v}" \
   --timeout 45s
@@ -453,16 +465,18 @@ install -o vps-guardian-agent -g vps-guardian-agent -m 0600 \
 install -o root -g vps-guardian-agent -m 0640 \
   "$identity_directory/agent.crt" "$generation/agent.crt"
 install -o root -g vps-guardian-agent -m 0640 \
-  "$identity_directory/agent-ca.crt" /etc/vps-guardian/agent/trust/agent-ca.crt
+  "$identity_directory/agent-mtls-ca-bundle.pem" \
+  /etc/vps-guardian/agent/trust/agent-mtls-ca-bundle.pem
 install -o root -g vps-guardian-agent -m 0640 \
-  "$work_directory/controller-ca.crt" /etc/vps-guardian/agent/trust/controller-ca.crt
+  "$work_directory/enrollment-https-ca-bundle.pem" \
+  /etc/vps-guardian/agent/trust/enrollment-https-ca-bundle.pem
 rm -f /etc/vps-guardian/agent/identities/.current-install
 ln -s generation-1 /etc/vps-guardian/agent/identities/.current-install
 mv -f /etc/vps-guardian/agent/identities/.current-install \
   /etc/vps-guardian/agent/identities/current
 
 cat > /etc/vps-guardian/agent/config.json <<EOF
-{"controller_url":"$gateway_url","agent_id":"$agent_id","host_id":"$host_id","certificate_file":"/etc/vps-guardian/agent/identities/current/agent.crt","private_key_file":"/etc/vps-guardian/agent/identities/current/agent.key","ca_file":"/etc/vps-guardian/agent/trust/controller-ca.crt","agent_ca_file":"/etc/vps-guardian/agent/trust/agent-ca.crt","signing_key_file":"/etc/vps-guardian/agent/identities/current/signing-ed25519.pem","controller_public_key":"$controller_public_key","certificate_fingerprint":"","queue_file":"/var/lib/vps-guardian/agent/events.jsonl","state_file":"/var/lib/vps-guardian/agent/action-state.json","heartbeat_interval":"30s","certificate_renew_before":"168h","command_timeout":"20s","max_queue_bytes":5242880,"disk_path":"/","systemd_allowlist":[],"container_allowlist":[],"config_allowlist":[],"cache_allowlist":[],"cache_retention":"24h","caddy_container":"","caddy_container_config":"","snapshot_directory":"/var/lib/vps-guardian/agent/snapshots","action_backup_directory":"/var/lib/vps-guardian/agent/action-backups","port_traffic_enabled":false,"net_helper_socket":"","local_health_urls":[],"probe_targets":[],"restic_repository_file":"","restic_password_file":"","restic_paths_allowlist":[]}
+{"controller_url":"$gateway_url","agent_id":"$agent_id","host_id":"$host_id","certificate_file":"/etc/vps-guardian/agent/identities/current/agent.crt","private_key_file":"/etc/vps-guardian/agent/identities/current/agent.key","enrollment_https_ca_bundle_file":"/etc/vps-guardian/agent/trust/enrollment-https-ca-bundle.pem","agent_mtls_ca_bundle_file":"/etc/vps-guardian/agent/trust/agent-mtls-ca-bundle.pem","signing_key_file":"/etc/vps-guardian/agent/identities/current/signing-ed25519.pem","controller_public_key":"$controller_public_key","certificate_fingerprint":"","queue_file":"/var/lib/vps-guardian/agent/events.jsonl","state_file":"/var/lib/vps-guardian/agent/action-state.json","heartbeat_interval":"30s","certificate_renew_before":"168h","command_timeout":"20s","max_queue_bytes":5242880,"disk_path":"/","systemd_allowlist":[],"container_allowlist":[],"config_allowlist":[],"cache_allowlist":[],"cache_retention":"24h","caddy_container":"","caddy_container_config":"","snapshot_directory":"/var/lib/vps-guardian/agent/snapshots","action_backup_directory":"/var/lib/vps-guardian/agent/action-backups","port_traffic_enabled":false,"net_helper_socket":"","local_health_urls":[],"probe_targets":[],"restic_repository_file":"","restic_password_file":"","restic_paths_allowlist":[]}
 EOF
 chown root:vps-guardian-agent /etc/vps-guardian/agent/config.json
 chmod 0640 /etc/vps-guardian/agent/config.json

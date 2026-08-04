@@ -62,8 +62,8 @@ def test_generated_command_uses_token_file_and_complete_installer_contract() -> 
         "--agent-sha256-amd64",
         "--agent-url-arm64",
         "--agent-sha256-arm64",
-        "--server-ca-url",
-        "--server-ca-sha256",
+        "--enrollment-https-ca-bundle-url",
+        "--enrollment-https-ca-bundle-sha256",
         "--controller-public-key-url",
         "--controller-public-key-sha256",
         "--release-manifest-url",
@@ -86,6 +86,36 @@ def test_installer_refuses_redirects_when_sending_short_lived_credentials() -> N
     ]
     assert credential_request_blocks
     assert all("--location" not in block for block in credential_request_blocks)
+    assert all(
+        '--cacert "$work_directory/enrollment-https-ca-bundle.pem"' in block
+        for block in credential_request_blocks
+    )
+
+
+def test_installer_keeps_https_and_mtls_ca_material_isolated_and_ephemeral() -> None:
+    installer = Path("scripts/install-agent.sh").read_text(encoding="utf-8")
+    assert 'chmod 0600 "$work_directory/enrollment-https-ca-bundle.pem"' in installer
+    assert 'rm -rf -- "$work_directory"' in installer
+    assert "trap rollback EXIT" in installer
+    assert "trap 'exit 129' HUP" in installer
+    assert "trap 'exit 130' INT" in installer
+    assert "trap 'exit 143' TERM" in installer
+    assert "/trust/enrollment-https-ca-bundle.pem" in installer
+    assert "/trust/agent-mtls-ca-bundle.pem" in installer
+    assert "controller-ca.crt" not in installer
+    assert "curl -k" not in installer
+    assert "--insecure" not in installer
+
+
+def test_generated_secrets_use_a_distinct_enrollment_https_ca() -> None:
+    generator = Path("scripts/generate-controller-secrets.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "enrollment-https-ca-bundle.pem" in generator
+    assert "VPS Guardian Enrollment HTTPS CA" in generator
+    assert '-CA "$target/enrollment-https-pki/enrollment-https-ca-bundle.pem"' in generator
+    assert '-CA "$target/pki/agent-ca.crt"' not in generator
+    assert "extendedKeyUsage=serverAuth" in generator
 
 
 def test_gateway_allows_only_bounded_unauthenticated_enrollment_paths() -> None:

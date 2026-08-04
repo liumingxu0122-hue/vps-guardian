@@ -24,39 +24,41 @@ type ProbeTarget struct {
 }
 
 type Config struct {
-	ControllerURL          string        `json:"controller_url"`
-	AgentID                string        `json:"agent_id"`
-	HostID                 string        `json:"host_id"`
-	CertificateFile        string        `json:"certificate_file"`
-	PrivateKeyFile         string        `json:"private_key_file"`
-	CAFile                 string        `json:"ca_file"`
-	AgentCAFile            string        `json:"agent_ca_file"`
-	SigningKeyFile         string        `json:"signing_key_file"`
-	ControllerPublicKey    string        `json:"controller_public_key"`
-	CertificateFP          string        `json:"certificate_fingerprint"`
-	QueueFile              string        `json:"queue_file"`
-	StateFile              string        `json:"state_file"`
-	HeartbeatInterval      Duration      `json:"heartbeat_interval"`
-	CertificateRenewBefore Duration      `json:"certificate_renew_before"`
-	CommandTimeout         Duration      `json:"command_timeout"`
-	MaxQueueBytes          int64         `json:"max_queue_bytes"`
-	DiskPath               string        `json:"disk_path"`
-	SystemdAllowlist       []string      `json:"systemd_allowlist"`
-	ContainerAllowlist     []string      `json:"container_allowlist"`
-	ConfigAllowlist        []string      `json:"config_allowlist"`
-	CacheAllowlist         []string      `json:"cache_allowlist"`
-	CacheRetention         Duration      `json:"cache_retention"`
-	CaddyContainer         string        `json:"caddy_container"`
-	CaddyContainerConfig   string        `json:"caddy_container_config"`
-	SnapshotDirectory      string        `json:"snapshot_directory"`
-	ActionBackupDirectory  string        `json:"action_backup_directory"`
-	LocalHealthURLs        []string      `json:"local_health_urls"`
-	ProbeTargets           []ProbeTarget `json:"probe_targets"`
-	ResticRepositoryFile   string        `json:"restic_repository_file"`
-	ResticPasswordFile     string        `json:"restic_password_file"`
-	ResticPathsAllowlist   []string      `json:"restic_paths_allowlist"`
-	PortTrafficEnabled     bool          `json:"port_traffic_enabled"`
-	NetHelperSocket        string        `json:"net_helper_socket"`
+	ControllerURL               string        `json:"controller_url"`
+	AgentID                     string        `json:"agent_id"`
+	HostID                      string        `json:"host_id"`
+	CertificateFile             string        `json:"certificate_file"`
+	PrivateKeyFile              string        `json:"private_key_file"`
+	EnrollmentHTTPSCABundleFile string        `json:"enrollment_https_ca_bundle_file"`
+	AgentMTLSCABundleFile       string        `json:"agent_mtls_ca_bundle_file"`
+	LegacyControllerCAFile      string        `json:"ca_file,omitempty"`
+	LegacyAgentCAFile           string        `json:"agent_ca_file,omitempty"`
+	SigningKeyFile              string        `json:"signing_key_file"`
+	ControllerPublicKey         string        `json:"controller_public_key"`
+	CertificateFP               string        `json:"certificate_fingerprint"`
+	QueueFile                   string        `json:"queue_file"`
+	StateFile                   string        `json:"state_file"`
+	HeartbeatInterval           Duration      `json:"heartbeat_interval"`
+	CertificateRenewBefore      Duration      `json:"certificate_renew_before"`
+	CommandTimeout              Duration      `json:"command_timeout"`
+	MaxQueueBytes               int64         `json:"max_queue_bytes"`
+	DiskPath                    string        `json:"disk_path"`
+	SystemdAllowlist            []string      `json:"systemd_allowlist"`
+	ContainerAllowlist          []string      `json:"container_allowlist"`
+	ConfigAllowlist             []string      `json:"config_allowlist"`
+	CacheAllowlist              []string      `json:"cache_allowlist"`
+	CacheRetention              Duration      `json:"cache_retention"`
+	CaddyContainer              string        `json:"caddy_container"`
+	CaddyContainerConfig        string        `json:"caddy_container_config"`
+	SnapshotDirectory           string        `json:"snapshot_directory"`
+	ActionBackupDirectory       string        `json:"action_backup_directory"`
+	LocalHealthURLs             []string      `json:"local_health_urls"`
+	ProbeTargets                []ProbeTarget `json:"probe_targets"`
+	ResticRepositoryFile        string        `json:"restic_repository_file"`
+	ResticPasswordFile          string        `json:"restic_password_file"`
+	ResticPathsAllowlist        []string      `json:"restic_paths_allowlist"`
+	PortTrafficEnabled          bool          `json:"port_traffic_enabled"`
+	NetHelperSocket             string        `json:"net_helper_socket"`
 }
 
 type Duration time.Duration
@@ -88,11 +90,31 @@ func loadConfig(path string) (Config, error) {
 	if config.ControllerURL == "" || config.AgentID == "" {
 		return Config{}, errors.New("controller_url and agent_id are required")
 	}
-	if config.AgentCAFile == "" {
-		config.AgentCAFile = filepath.Join(filepath.Dir(config.CertificateFile), "agent-ca.crt")
+	if config.EnrollmentHTTPSCABundleFile != "" && config.LegacyControllerCAFile != "" &&
+		config.EnrollmentHTTPSCABundleFile != config.LegacyControllerCAFile {
+		return Config{}, errors.New("legacy and explicit Enrollment HTTPS CA paths conflict")
+	}
+	if config.AgentMTLSCABundleFile != "" && config.LegacyAgentCAFile != "" &&
+		config.AgentMTLSCABundleFile != config.LegacyAgentCAFile {
+		return Config{}, errors.New("legacy and explicit Agent mTLS CA paths conflict")
+	}
+	if config.EnrollmentHTTPSCABundleFile == "" {
+		config.EnrollmentHTTPSCABundleFile = config.LegacyControllerCAFile
+	}
+	if config.AgentMTLSCABundleFile == "" {
+		config.AgentMTLSCABundleFile = config.LegacyAgentCAFile
+	}
+	if config.AgentMTLSCABundleFile == "" {
+		config.AgentMTLSCABundleFile = filepath.Join(
+			filepath.Dir(config.CertificateFile),
+			"agent-mtls-ca-bundle.pem",
+		)
 	}
 	for _, keyPath := range []string{
-		config.CertificateFile, config.PrivateKeyFile, config.CAFile, config.AgentCAFile,
+		config.CertificateFile,
+		config.PrivateKeyFile,
+		config.EnrollmentHTTPSCABundleFile,
+		config.AgentMTLSCABundleFile,
 		config.SigningKeyFile,
 	} {
 		if !filepath.IsAbs(keyPath) {

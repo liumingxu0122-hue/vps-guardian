@@ -28,7 +28,7 @@ class AgentCertificateError(ValueError):
 @dataclass(frozen=True, slots=True)
 class IssuedAgentCertificate:
     certificate_pem: str
-    ca_bundle_pem: str
+    agent_mtls_ca_bundle_pem: str
     fingerprint: str
     serial: str
     expires_at: datetime
@@ -206,10 +206,12 @@ def issue_agent_certificate(
     else:
         certificate = builder.sign(private_key=ca_private_key, algorithm=hashes.SHA256())
     certificate_pem = certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
-    ca_bundle_pem = ca_certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
+    agent_mtls_ca_bundle_pem = ca_certificate.public_bytes(
+        serialization.Encoding.PEM
+    ).decode("ascii")
     return IssuedAgentCertificate(
         certificate_pem=certificate_pem,
-        ca_bundle_pem=ca_bundle_pem,
+        agent_mtls_ca_bundle_pem=agent_mtls_ca_bundle_pem,
         fingerprint=certificate.fingerprint(hashes.SHA256()).hex().upper(),
         serial=normalize_certificate_serial(format(certificate.serial_number, "X")),
         expires_at=certificate.not_valid_after_utc,

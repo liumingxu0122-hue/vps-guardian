@@ -88,7 +88,7 @@ func bootstrapTestResponse(
 		AgentID:                 bootstrapTestAgentID,
 		HostID:                  request.HostID,
 		CertificatePEM:          string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})),
-		CABundlePEM:             string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})),
+		AgentMTLSCABundlePEM:    string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})),
 		CertificateExpiresAt:    leafTemplate.NotAfter,
 		AgentGatewayEndpoint:    "https://agents.example.test",
 		EnrollmentProgressToken: "test-progress-token-value-that-is-long-enough",
@@ -165,7 +165,7 @@ func TestValidateAndWriteBootstrapIdentityAtomically(t *testing.T) {
 	for _, name := range []string{
 		"agent.key",
 		"agent.crt",
-		"agent-ca.crt",
+		"agent-mtls-ca-bundle.pem",
 		"signing-ed25519.pem",
 		"bootstrap.json",
 		"enrollment-progress-token",
@@ -204,10 +204,10 @@ func TestBootstrapClientRefusesRedirects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	caPath := filepath.Join(t.TempDir(), "controller-ca.pem")
+	caPath := filepath.Join(t.TempDir(), "enrollment-https-ca-bundle.pem")
 	if err := os.WriteFile(
 		caPath,
-		[]byte(bootstrapTestResponse(t, request).CABundlePEM),
+		[]byte(bootstrapTestResponse(t, request).AgentMTLSCABundlePEM),
 		0o600,
 	); err != nil {
 		t.Fatal(err)

@@ -84,8 +84,10 @@ class Settings(BaseSettings):
         "https://downloads.example.com/release-signing-ed25519.pem"
     )
     agent_release_signing_public_key_sha256: str = Field(default="", max_length=64)
-    agent_controller_ca_url: str = "https://downloads.example.com/controller-ca.crt"
-    agent_controller_ca_sha256: str = Field(default="", max_length=64)
+    agent_enrollment_https_ca_bundle_url: str = (
+        "https://downloads.example.com/enrollment-https-ca-bundle.pem"
+    )
+    agent_enrollment_https_ca_bundle_sha256: str = Field(default="", max_length=64)
     agent_controller_public_key_url: str = (
         "https://downloads.example.com/controller-public-key.txt"
     )
@@ -133,7 +135,7 @@ class Settings(BaseSettings):
         if self.one_command_install_enabled:
             urls = (
                 self.agent_install_assets_base_url,
-                self.agent_controller_ca_url,
+                self.agent_enrollment_https_ca_bundle_url,
                 self.agent_controller_public_key_url,
                 self.agent_release_manifest_url,
                 self.agent_release_manifest_signature_url,
@@ -157,7 +159,7 @@ class Settings(BaseSettings):
                 self.agent_maintenance_script_sha256,
                 self.agent_binary_amd64_sha256,
                 self.agent_binary_arm64_sha256,
-                self.agent_controller_ca_sha256,
+                self.agent_enrollment_https_ca_bundle_sha256,
                 self.agent_controller_public_key_sha256,
                 self.agent_release_signing_public_key_sha256,
             )

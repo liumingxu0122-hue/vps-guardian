@@ -87,10 +87,10 @@ func testRenewalMaterial(t *testing.T, root string, agentID string, generation i
 			CertificateFingerprint: certificateFingerprint(leaf),
 		},
 		CertificatePEM:       string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})),
-		CABundlePEM:          string(caPEM),
+		AgentMTLSCABundlePEM: string(caPEM),
 		CertificateExpiresAt: leaf.NotAfter,
 	}
-	return Config{AgentID: agentID, AgentCAFile: caPath}, response,
+	return Config{AgentID: agentID, AgentMTLSCABundleFile: caPath}, response,
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: signingDER})
 }

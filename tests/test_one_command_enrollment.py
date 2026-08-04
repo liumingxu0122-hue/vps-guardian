@@ -66,7 +66,7 @@ def test_one_command_configuration_fails_closed() -> None:
             agent_installer_sha256="0" * 64,
             agent_binary_amd64_sha256="2" * 64,
             agent_binary_arm64_sha256="3" * 64,
-            agent_controller_ca_sha256="4" * 64,
+            agent_enrollment_https_ca_bundle_sha256="4" * 64,
             agent_controller_public_key_sha256="5" * 64,
         )
 

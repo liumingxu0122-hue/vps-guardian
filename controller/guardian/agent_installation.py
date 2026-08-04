@@ -44,8 +44,9 @@ def build_one_command_install(
         "agent_arm64_sha": _sha256(
             settings.agent_binary_arm64_sha256, "arm64 Agent"
         ),
-        "controller_ca_sha": _sha256(
-            settings.agent_controller_ca_sha256, "Controller CA"
+        "enrollment_https_ca_bundle_sha": _sha256(
+            settings.agent_enrollment_https_ca_bundle_sha256,
+            "Enrollment HTTPS CA bundle",
         ),
         "controller_key_sha": _sha256(
             settings.agent_controller_public_key_sha256,
@@ -105,10 +106,10 @@ def build_one_command_install(
             q(agent_arm64_url),
             "--agent-sha256-arm64",
             quoted["agent_arm64_sha"],
-            "--server-ca-url",
-            q(settings.agent_controller_ca_url),
-            "--server-ca-sha256",
-            quoted["controller_ca_sha"],
+            "--enrollment-https-ca-bundle-url",
+            q(settings.agent_enrollment_https_ca_bundle_url),
+            "--enrollment-https-ca-bundle-sha256",
+            quoted["enrollment_https_ca_bundle_sha"],
             "--controller-public-key-url",
             q(settings.agent_controller_public_key_url),
             "--controller-public-key-sha256",

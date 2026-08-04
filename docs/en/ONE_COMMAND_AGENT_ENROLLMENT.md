@@ -27,7 +27,14 @@ An Admin or Owner creates a Host. An Operator, Admin, or Owner can create its 10
 
 The command contains one short-lived enrollment credential and is displayed once by the browser. The Controller stores only SHA-256 digests. The credential is sent in a request header, never a URL. After the Controller accepts a valid, host-bound CSR, the credential cannot be used again. A separately scoped continuation credential reports only `service_installed`, `service_started`, or a safe failure; it is hash-only, expires with the session, cannot bootstrap an identity, and is deleted after installation.
 
-The Agent creates a P-256 TLS private key, CSR, and Ed25519 request-signing key locally. The Controller returns only a signed client certificate, Agent CA chain, gateway endpoint, and bounded progress credential. The Agent verifies the certificate against its local private key, CA, client-auth usage, SPIFFE Agent ID, Host binding, expiry, and a credential-free HTTPS gateway before writing a new identity directory atomically.
+The Agent creates a P-256 TLS private key, CSR, and Ed25519 request-signing key locally. The Controller returns only a signed client certificate, Agent mTLS CA bundle, gateway endpoint, and bounded progress credential. The Agent verifies the certificate against its local private key, Agent mTLS CA, client-auth usage, SPIFFE Agent ID, Host binding, expiry, and a credential-free HTTPS gateway before writing a new identity directory atomically.
+
+Enrollment uses two deliberately independent trust bundles:
+
+- `enrollment_https_ca_bundle` authenticates the HTTPS Gateway transport, including hostname/SAN, validity, `serverAuth`, and the complete leaf/intermediate chain. Its public PEM is downloaded before any credential-bearing request and accepted only after the SHA-256 pinned in the authenticated one-command response matches.
+- `agent_mtls_ca_bundle` authenticates Agent client identities after CSR issuance. It is returned inside the already authenticated Enrollment response, verified against the new client certificate, and stored separately. It never replaces the Enrollment HTTPS trust bundle.
+
+The Gateway sends the leaf and required intermediates, but not the root. Private Staging roots may differ, and a rotation bundle may temporarily contain two approved roots. No Enrollment request uses `--insecure`, disables hostname verification, or follows redirects while carrying a token.
 
 The installer:
 
@@ -48,7 +55,8 @@ The installer:
 | Command copied to the wrong host | Host binding, 10-minute expiry, optional source CIDR, immediate revoke/regenerate | A copied command can be used first from an allowed source |
 | Token leak through URLs or logs | Header-only transport, hash-only storage, safe errors, no token audit fields | The one-line command can remain in local shell history |
 | Artifact substitution | Credential-free HTTPS, fixed version, independently pinned Ed25519 manifest signature, then exact SHA-256 | Formal release authority remains blocked until the offline release key is provisioned |
-| Controller impersonation | Pinned Controller CA and TLS 1.3 | CA compromise remains a trust-root event |
+| Enrollment Gateway impersonation | Independently pinned Enrollment HTTPS CA bundle, hostname verification, and TLS 1.3 | HTTPS transport CA compromise remains a trust-root event |
+| Agent identity CA confusion | Separate Agent mTLS CA DTO, filename, verification path, and rotation rules | Agent mTLS CA compromise remains an identity trust-root event |
 | Private-key exfiltration | Keys generated locally, atomic mode-0600 files, non-root service | Root on the Agent host can read keys |
 | Partial installation | Pre-change backup, checksum manifest, service-state capture, failure trap, scoped rollback | Host power loss can interrupt rollback; retain the backup directory |
 | Cross-tenant enrollment | Host creation is Admin/Owner-only; enrollment issuance is Operator+, revocation is Admin+, and optional `group:<group>:enroll` narrows Admin scope | Correct group assignment remains an operator responsibility |

@@ -34,8 +34,8 @@ if [ -L /etc/os-release ]; then
     --agent-sha256-amd64 "$zeros" \
     --agent-url-arm64 https://downloads.example.test/agent-arm64 \
     --agent-sha256-arm64 "$zeros" \
-    --server-ca-url https://downloads.example.test/controller-ca.crt \
-    --server-ca-sha256 "$zeros" \
+    --enrollment-https-ca-bundle-url https://downloads.example.test/enrollment-https-ca-bundle.pem \
+    --enrollment-https-ca-bundle-sha256 "$zeros" \
     --controller-public-key-url https://downloads.example.test/controller-key.txt \
     --controller-public-key-sha256 "$zeros" \
     --release-manifest-url https://downloads.example.test/install-manifest.txt \

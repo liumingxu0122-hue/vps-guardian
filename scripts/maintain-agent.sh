@@ -64,13 +64,14 @@ chmod 0700 "$backup_directory"
 identity_root=/etc/vps-guardian/agent/identities/current
 trust_root=/etc/vps-guardian/agent/trust
 if [ ! -f "$identity_root/agent.crt" ] || [ ! -f "$identity_root/agent.key" ] ||
-  [ ! -f "$trust_root/controller-ca.crt" ]; then
+  [ ! -f "$trust_root/enrollment-https-ca-bundle.pem" ]; then
   echo "current Agent mTLS identity is unavailable" >&2
   exit 65
 fi
 cp "$identity_root/agent.crt" "$work_directory/agent.crt"
 cp "$identity_root/agent.key" "$work_directory/agent.key"
-cp "$trust_root/controller-ca.crt" "$work_directory/controller-ca.crt"
+cp "$trust_root/enrollment-https-ca-bundle.pem" \
+  "$work_directory/enrollment-https-ca-bundle.pem"
 chmod 0600 "$work_directory/agent.key"
 progress_token=''
 service_was_active=false
@@ -92,7 +93,7 @@ report() {
     "$mode" "$status_value" "$error_code" "$error_summary" "$rolled_back")"
   curl --fail --show-error --proto '=https' --connect-timeout 10 --max-time 30 \
     --cert "$work_directory/agent.crt" --key "$work_directory/agent.key" \
-    --cacert "$work_directory/controller-ca.crt" \
+    --cacert "$work_directory/enrollment-https-ca-bundle.pem" \
     -H "Content-Type: application/json" -H "X-Maintenance-Progress: $progress_token" \
     --data "$payload" "$controller_url/api/v1/agents/maintenance/progress" >/dev/null
 }
@@ -150,7 +151,7 @@ start_payload="$(printf '{"kind":"%s"}' "$mode")"
 start_response="$work_directory/start.json"
 curl --fail --show-error --proto '=https' --connect-timeout 10 --max-time 30 \
   --cert "$work_directory/agent.crt" --key "$work_directory/agent.key" \
-  --cacert "$work_directory/controller-ca.crt" \
+  --cacert "$work_directory/enrollment-https-ca-bundle.pem" \
   -H "Content-Type: application/json" -H "X-Maintenance-Token: $maintenance_token" \
   --data "$start_payload" -o "$start_response" \
   "$controller_url/api/v1/agents/maintenance/start"

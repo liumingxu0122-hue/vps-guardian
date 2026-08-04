@@ -39,7 +39,7 @@ type bootstrapResponse struct {
 	AgentID                 string    `json:"agent_id"`
 	HostID                  string    `json:"host_id"`
 	CertificatePEM          string    `json:"certificate_pem"`
-	CABundlePEM             string    `json:"ca_bundle_pem"`
+	AgentMTLSCABundlePEM    string    `json:"agent_mtls_ca_bundle_pem"`
 	CertificateSerial       string    `json:"certificate_serial"`
 	CertificateExpiresAt    time.Time `json:"certificate_expires_at"`
 	AgentGatewayEndpoint    string    `json:"agent_gateway_endpoint"`
@@ -126,20 +126,20 @@ func readBootstrapToken(path string) (string, error) {
 	return value, nil
 }
 
-func bootstrapHTTPClient(serverCAFile string, timeout time.Duration) (*http.Client, error) {
-	if !filepath.IsAbs(serverCAFile) {
-		return nil, errors.New("Controller CA path must be absolute")
+func bootstrapHTTPClient(enrollmentHTTPSCABundleFile string, timeout time.Duration) (*http.Client, error) {
+	if !filepath.IsAbs(enrollmentHTTPSCABundleFile) {
+		return nil, errors.New("Enrollment HTTPS CA bundle path must be absolute")
 	}
 	if timeout <= 0 || timeout > 5*time.Minute {
 		return nil, errors.New("Controller request timeout is invalid")
 	}
-	caData, err := os.ReadFile(serverCAFile)
+	caData, err := os.ReadFile(enrollmentHTTPSCABundleFile)
 	if err != nil {
-		return nil, errors.New("Controller CA is unreadable")
+		return nil, errors.New("Enrollment HTTPS CA bundle is unreadable")
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(caData) {
-		return nil, errors.New("Controller CA is invalid")
+		return nil, errors.New("Enrollment HTTPS CA bundle is invalid")
 	}
 	return &http.Client{
 		Timeout: timeout,
@@ -185,8 +185,8 @@ func validateBootstrapResponse(
 		return errors.New("bootstrap certificate is invalid")
 	}
 	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM([]byte(response.CABundlePEM)) {
-		return errors.New("bootstrap Agent CA is invalid")
+	if !roots.AppendCertsFromPEM([]byte(response.AgentMTLSCABundlePEM)) {
+		return errors.New("bootstrap Agent mTLS CA bundle is invalid")
 	}
 	if _, err := certificate.Verify(x509.VerifyOptions{
 		Roots: roots,
@@ -194,7 +194,7 @@ func validateBootstrapResponse(
 			x509.ExtKeyUsageClientAuth,
 		},
 	}); err != nil {
-		return errors.New("bootstrap certificate is not signed by the returned Agent CA")
+		return errors.New("bootstrap certificate is not signed by the returned Agent mTLS CA")
 	}
 	expectedURI := "spiffe://vps-guardian/agents/" + response.AgentID
 	for _, uri := range certificate.URIs {
@@ -243,7 +243,7 @@ func writeBootstrapIdentity(
 	}{
 		{"agent.key", privateKeyPEM, 0o600},
 		{"agent.crt", []byte(response.CertificatePEM), 0o644},
-		{"agent-ca.crt", []byte(response.CABundlePEM), 0o644},
+		{"agent-mtls-ca-bundle.pem", []byte(response.AgentMTLSCABundlePEM), 0o644},
 		{"signing-ed25519.pem", signingKeyPEM, 0o600},
 		{"bootstrap.json", append(metadata, '\n'), 0o600},
 		{"enrollment-progress-token", []byte(response.EnrollmentProgressToken), 0o600},
@@ -265,7 +265,7 @@ func writeBootstrapIdentity(
 
 func runBootstrap(
 	ctx context.Context,
-	controllerURL, hostID, tokenFile, serverCAFile, outputDirectory, version string,
+	controllerURL, hostID, tokenFile, enrollmentHTTPSCABundleFile, outputDirectory, version string,
 	timeout time.Duration,
 ) error {
 	parsed, err := url.Parse(controllerURL)
@@ -285,7 +285,7 @@ func runBootstrap(
 	if err != nil {
 		return err
 	}
-	client, err := bootstrapHTTPClient(serverCAFile, timeout)
+	client, err := bootstrapHTTPClient(enrollmentHTTPSCABundleFile, timeout)
 	if err != nil {
 		return err
 	}
@@ -324,7 +324,11 @@ func executeBootstrapCLI(arguments []string, stdout, stderr io.Writer) int {
 	controllerURL := flags.String("controller-url", "", "Controller HTTPS origin")
 	hostID := flags.String("host-id", "", "pre-created Host UUID")
 	tokenFile := flags.String("token-file", "", "one-time enrollment token file")
-	serverCAFile := flags.String("server-ca-file", "", "Controller TLS CA file")
+	enrollmentHTTPSCABundleFile := flags.String(
+		"enrollment-https-ca-bundle-file",
+		"",
+		"CA bundle used only for Enrollment HTTPS transport",
+	)
 	outputDirectory := flags.String("output-dir", "", "new identity output directory")
 	version := flags.String("agent-version", "", "immutable Agent version")
 	timeout := flags.Duration("timeout", 45*time.Second, "bootstrap request timeout")
@@ -336,7 +340,7 @@ func executeBootstrapCLI(arguments []string, stdout, stderr io.Writer) int {
 		*controllerURL,
 		*hostID,
 		*tokenFile,
-		*serverCAFile,
+		*enrollmentHTTPSCABundleFile,
 		*outputDirectory,
 		*version,
 		*timeout,

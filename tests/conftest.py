@@ -17,10 +17,10 @@ os.environ["GUARDIAN_AGENT_INSTALLER_SHA256"] = "1" * 64
 os.environ["GUARDIAN_AGENT_MAINTENANCE_SCRIPT_SHA256"] = "6" * 64
 os.environ["GUARDIAN_AGENT_BINARY_AMD64_SHA256"] = "2" * 64
 os.environ["GUARDIAN_AGENT_BINARY_ARM64_SHA256"] = "3" * 64
-os.environ["GUARDIAN_AGENT_CONTROLLER_CA_URL"] = (
-    "https://controller.example.test/assets/controller-ca.crt"
+os.environ["GUARDIAN_AGENT_ENROLLMENT_HTTPS_CA_BUNDLE_URL"] = (
+    "https://controller.example.test/assets/enrollment-https-ca-bundle.pem"
 )
-os.environ["GUARDIAN_AGENT_CONTROLLER_CA_SHA256"] = "4" * 64
+os.environ["GUARDIAN_AGENT_ENROLLMENT_HTTPS_CA_BUNDLE_SHA256"] = "4" * 64
 os.environ["GUARDIAN_AGENT_CONTROLLER_PUBLIC_KEY_URL"] = (
     "https://controller.example.test/assets/controller-ed25519.pub"
 )

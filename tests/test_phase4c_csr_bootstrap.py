@@ -229,7 +229,7 @@ def test_pki_issues_client_only_certificate_with_bound_identity(
     eku = certificate.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
     assert list(eku) == [ExtendedKeyUsageOID.CLIENT_AUTH]
     assert "PRIVATE KEY" not in issued.certificate_pem
-    assert "PRIVATE KEY" not in issued.ca_bundle_pem
+    assert "PRIVATE KEY" not in issued.agent_mtls_ca_bundle_pem
 
 
 def test_crl_generation_is_signed_monotonic_and_preserves_revocations(

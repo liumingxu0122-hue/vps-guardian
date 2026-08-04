@@ -3129,7 +3129,7 @@ def bootstrap_agent(
         agent_id=agent.id,
         host_id=host.id,
         certificate_pem=issued.certificate_pem,
-        ca_bundle_pem=issued.ca_bundle_pem,
+        agent_mtls_ca_bundle_pem=issued.agent_mtls_ca_bundle_pem,
         certificate_serial=issued.serial,
         certificate_expires_at=issued.expires_at,
         agent_gateway_endpoint=gateway_endpoint,
@@ -5267,7 +5267,7 @@ async def renew_agent_certificate(
     return AgentRenewResponse(
         identity=identity,
         certificate_pem=issued.certificate_pem,
-        ca_bundle_pem=issued.ca_bundle_pem,
+        agent_mtls_ca_bundle_pem=issued.agent_mtls_ca_bundle_pem,
         certificate_expires_at=issued.expires_at,
     )
 

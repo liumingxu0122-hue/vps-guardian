@@ -45,13 +45,13 @@ func NewControllerClient(config Config) (*ControllerClient, error) {
 		return nil, fmt.Errorf("parse Agent certificate: %w", err)
 	}
 	config.CertificateFP = certificateFingerprint(leaf)
-	caData, err := os.ReadFile(config.CAFile)
+	caData, err := os.ReadFile(config.EnrollmentHTTPSCABundleFile)
 	if err != nil {
 		return nil, err
 	}
 	caPool := x509.NewCertPool()
 	if !caPool.AppendCertsFromPEM(caData) {
-		return nil, errors.New("CA file did not contain a certificate")
+		return nil, errors.New("Enrollment HTTPS CA bundle did not contain a certificate")
 	}
 	signingKey, err := loadEd25519PrivateKey(config.SigningKeyFile)
 	if err != nil {

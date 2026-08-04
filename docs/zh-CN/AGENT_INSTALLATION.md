@@ -1,5 +1,11 @@
 # Agent 安装
 
+## HTTPS 与 Agent 身份 CA
+
+`enrollment_https_ca_bundle_file` 只用于验证 Enrollment HTTPS Gateway；`agent_mtls_ca_bundle_file` 只用于验证 Agent 客户端证书与身份轮换。两者必须使用不同字段和文件，不能互相覆盖。
+
+临时 HTTPS CA 文件权限必须为 `0600`，并在成功、失败或信号中断后删除。Gateway 必须提供 leaf 和必要 intermediate，但不能发送 root。禁止关闭 TLS 或主机名校验。
+
 [English](../en/AGENT_INSTALLATION.md) | [简体中文](AGENT_INSTALLATION.md)
 
 Staging 首选流程为 [Agent 一条命令注册](ONE_COMMAND_AGENT_ENROLLMENT.md)。以下步骤继续作为受保护的手工兜底方案。
