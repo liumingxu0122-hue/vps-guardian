@@ -74,7 +74,12 @@ if openssl pkeyutl -verify -pubin -inkey "$temporary/wrong-public.pem" -rawin \
   exit 1
 fi
 cp "$temporary/manifest.sig" "$temporary/bad.sig"
-printf x | dd of="$temporary/bad.sig" bs=1 seek=0 conv=notrunc 2>/dev/null
+first_signature_byte="$(od -An -tu1 -N1 "$temporary/bad.sig" | tr -d ' ')"
+if [ "$first_signature_byte" -eq 0 ]; then
+  printf '\001'
+else
+  printf '\000'
+fi | dd of="$temporary/bad.sig" bs=1 seek=0 conv=notrunc 2>/dev/null
 if openssl pkeyutl -verify -pubin -inkey "$temporary/public.pem" -rawin \
   -in "$temporary/manifest" -sigfile "$temporary/bad.sig" >/dev/null 2>&1; then
   echo "wrong detached signature was accepted" >&2
