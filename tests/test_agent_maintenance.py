@@ -374,6 +374,16 @@ def test_maintenance_scripts_fail_closed_and_destroy_plaintext() -> None:
     assert "trap rollback EXIT" in maintainer
     assert "trap 'exit 130' INT" in maintainer
     assert 'rm -f -- "$token_file"' in maintainer
+    assert "su -s /bin/sh vps-guardian-agent -c" in maintainer
+    assert "guardian-identity-readability" in maintainer
+    assert 'identity_activated=true' in maintainer
+    assert 'if [ "$status_code" -ne 0 ] && [ "$identity_activated" = true ]' in maintainer
+    assert "new identity retained" in maintainer
+    post_activation = maintainer.split(
+        'if [ "$status_code" -ne 0 ] && [ "$identity_activated" = true ]', 1
+    )[1].split("elif", 1)[0]
+    assert 'cp -a "$backup_directory/config"' not in post_activation
+    assert "rolled_back" not in post_activation
     assert "--maintenance-token-file" in command_builder
     assert 'curl --config' in command_builder
     assert "embedded_https_ca_bundle" in command_builder

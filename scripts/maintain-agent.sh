@@ -40,6 +40,13 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$mode" in repair|reinstall|rotate_identity|decommission) ;; *) exit 64 ;; esac
+case "$expected_identity_version" in ''|*[!0-9]*)
+  if [ "$mode" = reinstall ] || [ "$mode" = rotate_identity ]; then
+    echo "invalid expected identity version" >&2
+    exit 64
+  fi
+  ;;
+esac
 [ "$(id -u)" -eq 0 ] || { echo "Agent maintenance must run as root" >&2; exit 77; }
 if [ ! -f "$token_file" ] || [ -L "$token_file" ]; then
   echo "unsafe maintenance token file" >&2
@@ -76,6 +83,7 @@ chmod 0600 "$work_directory/agent.key"
 progress_token=''
 service_was_active=false
 changes_started=false
+identity_activated=false
 
 cleanup() {
   rm -rf -- "$work_directory"
@@ -125,7 +133,14 @@ service_start() {
 
 rollback() {
   status_code="$?"
-  if [ "$status_code" -ne 0 ] && [ "$changes_started" = true ] && [ "$mode" != decommission ]; then
+  if [ "$status_code" -ne 0 ] && [ "$identity_activated" = true ]; then
+    # The Controller has already activated the new generation. Restoring the
+    # old local identity would create a split-brain state, so retain the new
+    # generation and fail closed for operator recovery.
+    service_start >/dev/null 2>&1 || true
+    report failed post_rotation_failure \
+      "maintenance failed after identity activation; new identity retained" false || true
+  elif [ "$status_code" -ne 0 ] && [ "$changes_started" = true ] && [ "$mode" != decommission ]; then
     [ ! -f "$backup_directory/agent" ] ||
       install -o root -g root -m 0755 "$backup_directory/agent" /usr/local/sbin/vps-guardian-agent
     if [ -d "$backup_directory/config" ]; then
@@ -223,9 +238,18 @@ changes_started=true
 report service_stopped
 install -o root -g root -m 0755 "$work_directory/agent" /usr/local/sbin/vps-guardian-agent
 if [ "$mode" = reinstall ] || [ "$mode" = rotate_identity ]; then
-  /usr/local/sbin/vps-guardian-agent rotate-identity \
-    --config /etc/vps-guardian/agent/config.json \
-    --expected-version "$expected_identity_version"
+  # Run rotation as the same non-root account as the daemon. This preserves
+  # the 0700/0600 identity ownership contract even though maintenance itself
+  # is orchestrated by root.
+  su -s /bin/sh vps-guardian-agent -c \
+    'exec /usr/local/sbin/vps-guardian-agent rotate-identity --config "$1" --expected-version "$2"' \
+    guardian-rotate /etc/vps-guardian/agent/config.json "$expected_identity_version"
+  identity_activated=true
+  su -s /bin/sh vps-guardian-agent -c \
+    'test -r "$1" && test -r "$2" && test -r "$3"' \
+    guardian-identity-readability \
+    "$identity_root/agent.crt" "$identity_root/agent.key" \
+    "$identity_root/signing-ed25519.pem"
   report identity_rotated
 fi
 service_start
