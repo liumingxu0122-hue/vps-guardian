@@ -379,6 +379,8 @@ def test_maintenance_scripts_fail_closed_and_destroy_plaintext() -> None:
     assert 'identity_activated=true' in maintainer
     assert 'if [ "$status_code" -ne 0 ] && [ "$identity_activated" = true ]' in maintainer
     assert "new identity retained" in maintainer
+    assert 'failure_step=maintainer_integrity' in maintainer
+    assert '"maintenance failed during $failure_step"' in maintainer
     post_activation = maintainer.split(
         'if [ "$status_code" -ne 0 ] && [ "$identity_activated" = true ]', 1
     )[1].split("elif", 1)[0]

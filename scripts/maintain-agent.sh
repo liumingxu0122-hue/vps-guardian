@@ -84,6 +84,7 @@ progress_token=''
 service_was_active=false
 changes_started=false
 identity_activated=false
+failure_step=preflight
 
 cleanup() {
   rm -rf -- "$work_directory"
@@ -150,7 +151,7 @@ rollback() {
     [ "$service_was_active" = false ] || service_start >/dev/null 2>&1 || true
     report rolled_back maintenance_failed "maintenance failed; prior binary, config, and identity link restored" true || true
   elif [ "$status_code" -ne 0 ]; then
-    report failed maintenance_failed "maintenance failed closed" false || true
+    report failed maintenance_failed "maintenance failed during $failure_step" false || true
   fi
   cleanup
   [ "$status_code" -eq 0 ] || exit "$status_code"
@@ -170,6 +171,7 @@ curl --fail --show-error --proto '=https' --connect-timeout 10 --max-time 30 \
   -H "Content-Type: application/json" -H "X-Maintenance-Token: $maintenance_token" \
   --data "$start_payload" -o "$start_response" \
   "$controller_url/api/v1/agents/maintenance/start"
+failure_step=start_response
 unset maintenance_token
 progress_token="$(sed -n 's/.*"progress_token":"\([^"]*\)".*/\1/p' "$start_response")"
 response_host_id="$(sed -n 's/.*"host_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$start_response")"
@@ -179,6 +181,7 @@ response_host_id="$(sed -n 's/.*"host_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/
   exit 65
 }
 
+failure_step=manifest_download
 curl --fail --show-error --location --proto '=https' \
   --cacert "$work_directory/enrollment-https-ca-bundle.pem" \
   -o "$work_directory/manifest" "$manifest_url"
@@ -188,14 +191,19 @@ curl --fail --show-error --location --proto '=https' \
 curl --fail --show-error --location --proto '=https' \
   --cacert "$work_directory/enrollment-https-ca-bundle.pem" \
   -o "$work_directory/release-key.pem" "$signing_key_url"
+failure_step=release_key_checksum
 printf '%s  %s\n' "$signing_key_sha256" "$work_directory/release-key.pem" |
   sha256sum --check --status || exit 65
+failure_step=manifest_signature
 openssl pkeyutl -verify -pubin -inkey "$work_directory/release-key.pem" -rawin \
   -in "$work_directory/manifest" -sigfile "$work_directory/manifest.sig" >/dev/null 2>&1 || exit 65
+failure_step=manifest_version
 [ "$(sed -n 's/^version=//p' "$work_directory/manifest")" = "$release_version" ] || exit 65
+failure_step=maintainer_integrity
 [ -f "$0" ] && [ ! -L "$0" ] || exit 65
 [ "$(sed -n 's/^sha256_maintain_agent=//p' "$work_directory/manifest")" = \
   "$(sha256sum "$0" | sed 's/ .*//')" ] || exit 65
+failure_step=artifact_report
 report artifact_verified
 
 case "$(uname -m)" in
@@ -203,6 +211,7 @@ case "$(uname -m)" in
   aarch64|arm64) agent_url="$agent_url_arm64"; agent_sha256="$agent_sha256_arm64"; manifest_key=sha256_linux_arm64 ;;
   *) exit 69 ;;
 esac
+failure_step=agent_manifest_checksum
 [ "$(sed -n "s/^$manifest_key=//p" "$work_directory/manifest")" = "$agent_sha256" ] || exit 65
 
 if [ "$mode" = decommission ]; then
@@ -222,11 +231,14 @@ if [ "$mode" = decommission ]; then
   exit 0
 fi
 
+failure_step=agent_download
 curl --fail --show-error --location --proto '=https' --connect-timeout 10 --max-time 180 \
   --cacert "$work_directory/enrollment-https-ca-bundle.pem" \
   -o "$work_directory/agent" "$agent_url"
+failure_step=agent_checksum
 printf '%s  %s\n' "$agent_sha256" "$work_directory/agent" | sha256sum --check --status
 chmod 0755 "$work_directory/agent"
+failure_step=agent_version
 "$work_directory/agent" version | grep -F "version=${release_version#v}" >/dev/null
 
 [ ! -f /usr/local/sbin/vps-guardian-agent ] ||
