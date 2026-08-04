@@ -21,6 +21,8 @@ def test_agent_release_metadata_records_artifact_hashes_and_sbom(tmp_path: Path)
             str(output.resolve()),
             "--sbom-output",
             str(sbom.resolve()),
+            "--sbom-reference",
+            "vps-guardian-agent-sbom-v0.4.0-alpha.1.cdx.json",
             "--version",
             "0.4.0-phase4-rc2",
             "--git-sha",
@@ -53,7 +55,10 @@ def test_agent_release_metadata_records_artifact_hashes_and_sbom(tmp_path: Path)
     assert manifest["dirty"] is False
     assert [item["arch"] for item in manifest["artifacts"]] == ["amd64", "arm64"]
     assert all(len(item["sha256"]) == 64 for item in manifest["artifacts"])
-    assert all(item["sbom"] == "sbom/agent.cdx.json" for item in manifest["artifacts"])
+    assert all(
+        item["sbom"] == "vps-guardian-agent-sbom-v0.4.0-alpha.1.cdx.json"
+        for item in manifest["artifacts"]
+    )
     document = json.loads(sbom.read_text(encoding="utf-8"))
     assert document["bomFormat"] == "CycloneDX"
     assert document["specVersion"] == "1.6"

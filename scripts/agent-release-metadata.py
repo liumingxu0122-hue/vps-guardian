@@ -62,6 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
     parser.add_argument("--sbom-output", required=True)
+    parser.add_argument("--sbom-reference", default="sbom/agent.cdx.json")
     parser.add_argument("--version", required=True)
     parser.add_argument("--git-sha", required=True)
     parser.add_argument("--build-time", required=True)
@@ -85,6 +86,15 @@ def build_documents(arguments: argparse.Namespace) -> tuple[dict[str, Any], dict
         raise MetadataError("Agent Git SHA must contain 40 lowercase hexadecimal characters")
     build_time = parse_time(arguments.build_time)
     dirty = arguments.dirty == "true"
+    sbom_reference = arguments.sbom_reference
+    if (
+        not sbom_reference
+        or len(sbom_reference) > 128
+        or sbom_reference.startswith(("/", "."))
+        or "\\" in sbom_reference
+        or ".." in sbom_reference.split("/")
+    ):
+        raise MetadataError("Agent SBOM reference is invalid")
     artifacts: list[dict[str, Any]] = []
     components: list[dict[str, Any]] = []
     for target_os, target_arch, path_value in arguments.artifact:
@@ -104,7 +114,7 @@ def build_documents(arguments: argparse.Namespace) -> tuple[dict[str, Any], dict
                 "arch": target_arch,
                 "git_sha": arguments.git_sha,
                 "build_id": build_id,
-                "sbom": "sbom/agent.cdx.json",
+                "sbom": sbom_reference,
             }
         )
         package_url = (

@@ -27,5 +27,6 @@ tools/
 !tests/tools/sign-port-task.go
 artifacts/
 *.pem
+!release/keys/v0.4-alpha-release-ed25519.pem
 *.key
 *.p12

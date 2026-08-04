@@ -54,7 +54,7 @@ The installer:
 | --- | --- | --- |
 | Command copied to the wrong host | Host binding, 10-minute expiry, optional source CIDR, immediate revoke/regenerate | A copied command can be used first from an allowed source |
 | Token leak through URLs or logs | Header-only transport, hash-only storage, safe errors, no token audit fields | The one-line command can remain in local shell history |
-| Artifact substitution | Credential-free HTTPS, fixed version, independently pinned Ed25519 manifest signature, then exact SHA-256 | Formal release authority remains blocked until the offline release key is provisioned |
+| Artifact substitution | Credential-free HTTPS, fixed version, independently pinned Ed25519 manifest signature, then exact SHA-256 | The reviewed Alpha key is not an offline Production signing key |
 | Enrollment Gateway impersonation | Independently pinned Enrollment HTTPS CA bundle, hostname verification, and TLS 1.3 | HTTPS transport CA compromise remains a trust-root event |
 | Agent identity CA confusion | Separate Agent mTLS CA DTO, filename, verification path, and rotation rules | Agent mTLS CA compromise remains an identity trust-root event |
 | Private-key exfiltration | Keys generated locally, atomic mode-0600 files, non-root service | Root on the Agent host can read keys |
@@ -64,7 +64,7 @@ The installer:
 
 ## Operator workflow
 
-1. Publish immutable installer and Agent assets for the exact release. Sign the version-bound manifest with the offline release key, publish the detached signature, and record the signing-public-key and artifact SHA-256 values through the controlled release process.
+1. Publish immutable installer and Agent assets for the exact release. Sign the version-bound manifest with the reviewed release key held outside Git, publish the detached signature, and record the Key ID, signing-public-key SHA-256, and artifact SHA-256 values through the controlled release process. The Alpha key is not a Production key.
 2. Configure the `GUARDIAN_AGENT_INSTALL_*` and Controller trust asset settings. Leave `GUARDIAN_ONE_COMMAND_INSTALL_ENABLED=false` until validation is complete.
 3. Back up the Controller database/configuration and record the current schema and images.
 4. Apply migration `0014_agent_enrollment`; verify migration upgrade/downgrade in isolation.

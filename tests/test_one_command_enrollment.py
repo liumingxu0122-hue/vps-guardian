@@ -61,6 +61,9 @@ def test_one_command_is_fixed_verified_and_contains_token_once() -> None:
     assert "?token=" not in command
     assert "curl | sh" not in command and "curl|sh" not in command
     assert settings.agent_install_release_version in command
+    assert f"vps-guardian-install-agent-{settings.agent_install_release_version}.sh" in command
+    assert f"vps-guardian-agent-{settings.agent_install_release_version}-linux-amd64" in command
+    assert settings.agent_release_signing_key_id in command
     assert settings.agent_enrollment_https_ca_bundle_url not in command
 
 

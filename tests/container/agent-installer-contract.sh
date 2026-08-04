@@ -42,6 +42,7 @@ if [ -L /etc/os-release ]; then
     --release-manifest-signature-url https://downloads.example.test/install-manifest.txt.sig \
     --release-signing-public-key-url https://downloads.example.test/release-key.pem \
     --release-signing-public-key-sha256 "$zeros" \
+    --release-signing-key-id "ed25519-sha256:$zeros" \
     >"$os_release_output" 2>&1; then
     echo "installer unexpectedly accepted a missing enrollment token" >&2
     exit 1
@@ -57,8 +58,8 @@ grep -F 'rm -rf /var/lib/vps-guardian-agent' scripts/maintain-agent.sh >/dev/nul
 
 temporary="$(mktemp -d)"
 trap 'rm -rf -- "$temporary"' EXIT HUP INT TERM
-printf 'version=v0.4.0-test\nsha256_linux_amd64=%064d\nsha256_linux_arm64=%064d\n' \
-  1 2 > "$temporary/manifest"
+printf 'version=v0.4.0-test\nkey_id=ed25519-sha256:%064d\nsha256_linux_amd64=%064d\nsha256_linux_arm64=%064d\n' \
+  0 1 2 > "$temporary/manifest"
 openssl genpkey -algorithm ED25519 -out "$temporary/private.pem"
 openssl pkey -in "$temporary/private.pem" -pubout -out "$temporary/public.pem"
 openssl pkeyutl -sign -inkey "$temporary/private.pem" -rawin \

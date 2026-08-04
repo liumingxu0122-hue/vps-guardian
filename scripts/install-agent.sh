@@ -18,6 +18,7 @@ release_manifest_url=''
 release_manifest_signature_url=''
 release_signing_public_key_url=''
 release_signing_public_key_sha256=''
+release_signing_key_id=''
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -38,6 +39,7 @@ while [ "$#" -gt 0 ]; do
     --release-manifest-signature-url) release_manifest_signature_url="$2"; shift 2 ;;
     --release-signing-public-key-url) release_signing_public_key_url="$2"; shift 2 ;;
     --release-signing-public-key-sha256) release_signing_public_key_sha256="$2"; shift 2 ;;
+    --release-signing-key-id) release_signing_key_id="$2"; shift 2 ;;
     *) echo "unknown option" >&2; exit 64 ;;
   esac
 done
@@ -48,7 +50,7 @@ for value in "$controller_url" "$host_id" "$enrollment_token_file" "$release_ver
   "$controller_public_key_url" \
   "$controller_public_key_sha256" "$release_manifest_url" \
   "$release_manifest_signature_url" "$release_signing_public_key_url" \
-  "$release_signing_public_key_sha256"; do
+  "$release_signing_public_key_sha256" "$release_signing_key_id"; do
   [ -n "$value" ] || { echo "required installation option is missing" >&2; exit 64; }
 done
 
@@ -287,6 +289,11 @@ openssl pkeyutl -verify -pubin -inkey "$work_directory/release-signing-public-ke
 manifest_version="$(sed -n 's/^version=//p' "$work_directory/release-manifest")"
 [ "$manifest_version" = "$release_version" ] || {
   echo "signed release manifest version mismatch or replay detected" >&2
+  exit 65
+}
+manifest_key_id="$(sed -n 's/^key_id=//p' "$work_directory/release-manifest")"
+[ "$manifest_key_id" = "$release_signing_key_id" ] || {
+  echo "signed release manifest Key ID mismatch" >&2
   exit 65
 }
 manifest_amd64="$(sed -n 's/^sha256_linux_amd64=//p' "$work_directory/release-manifest")"

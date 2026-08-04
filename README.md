@@ -108,7 +108,7 @@ The UI generates the complete command; this non-runnable shape intentionally use
 ```sh
 umask 077; guardian_tmp="$(mktemp -d)" && \
   curl --fail --show-error --location --proto '=https' \
-  https://downloads.example.invalid/v0.4.0/install-agent.sh
+  https://github.com/liumingxu0122-hue/vps-guardian/releases/download/v0.4.0-alpha.1/vps-guardian-install-agent-v0.4.0-alpha.1.sh
 ```
 
 The real UI command also verifies the exact SHA-256 before execution and supplies a short-lived `<ONE_TIME_ENROLLMENT_TOKEN>` through a root-only temporary file.
@@ -135,7 +135,7 @@ or deploy an online environment.
 - Extend the completed two-host CSR, renewal, and CRL staging gate into longer fleet endurance testing
 - Complete isolated Nezha runtime benchmarks; unmeasured values remain `Pending`
 - Add cross-cloud recovery workflows and production deployment guidance
-- Stabilize the `v0.3.0-alpha.1` certificate lifecycle, service checks, and approval workflow before beta
+- Stabilize the `v0.4.0-alpha.1` Agent lifecycle and complete pending human acceptance before beta
 
 See the [Nezha 2.3.0 comparison](docs/comparison/nezha-2.3.0.md), [observation plan](docs/phase4/observation-run.md), and [production gate](docs/phase4/production-gate.md). Unmeasured values remain `Pending`; production is `NO-GO`.
 

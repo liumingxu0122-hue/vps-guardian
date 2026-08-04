@@ -30,9 +30,10 @@ signature, manifest, version, architecture checksum, or artifact fails closed.
 There is no skip flag.
 
 CI creates a short-lived test signing key outside the uploaded artifact directory,
-verifies positive and tampered cases, and destroys the private key. That proves the
-mechanism, not release authority. Until an offline formal release private key and
-public-key ceremony exist, **Formal artifact signing is BLOCKED**.
+verifies positive and tampered cases, and destroys the private key. Public Alpha
+releases use the reviewed key and Key ID documented in `release/keys/`; its private
+key remains outside Git under custodian-only access. This Alpha key is not an
+offline Production signing key and does not authorize Production.
 
 ## Repair and reinstall state machine
 

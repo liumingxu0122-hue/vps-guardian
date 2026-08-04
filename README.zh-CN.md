@@ -100,7 +100,7 @@ Admin 或 Owner 可在 **主机 → 添加服务器** 中创建与 Host 绑定�
 ```sh
 umask 077; guardian_tmp="$(mktemp -d)" && \
   curl --fail --show-error --location --proto '=https' \
-  https://downloads.example.invalid/v0.4.0/install-agent.sh
+  https://github.com/liumingxu0122-hue/vps-guardian/releases/download/v0.4.0-alpha.1/vps-guardian-install-agent-v0.4.0-alpha.1.sh
 ```
 
 页面生成的真实命令还会在执行前校验精确 SHA-256，并通过 root-only 临时文件传入短期 `<ONE_TIME_ENROLLMENT_TOKEN>`。
@@ -126,7 +126,7 @@ TLS 1.3 mTLS、签名任务、防重放、RBAC、TOTP、CSRF 防护、限流、�
 - 将已完成的双主机 CSR、续签和 CRL staging 门禁扩展为更长周期的集群耐久性验证
 - 完成隔离的哪吒运行时基准；未测量值保持 `Pending`
 - 增加跨云恢复流程和生产部署指南
-- 在进入 Beta 前稳定 `v0.3.0-alpha.1` 的证书生命周期、服务检查和审批流程
+- 在进入 Beta 前稳定 `v0.4.0-alpha.1` Agent 生命周期并完成待人工验收项目
 
 参见[哪吒 2.3.0 对比](docs/comparison/nezha-2.3.0.md)、[观察计划](docs/phase4/observation-run.md)和[生产门禁](docs/phase4/production-gate.md)。未测量值保持 `Pending`；生产结论为 `NO-GO`。
 

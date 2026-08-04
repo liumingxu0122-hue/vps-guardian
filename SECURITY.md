@@ -19,8 +19,9 @@ Do not open a public issue containing exploit details, credentials, private infr
   checksum-verified in isolated Linux Staging. Never grant the Agent `CAP_NET_ADMIN`;
   use only the fixed socket-activated helper. Preserve non-Guardian nftables tables
   and qdiscs, and require independent approval for enforcement, reset, or shaping.
-- Keep the formal Agent release-signing private key offline and outside Git, CI
-  artifacts, images, logs, and Controller hosts. CI test keys are never release keys.
+- Keep every Agent release-signing private key outside Git, CI artifacts, images,
+  logs, and Controller hosts. The v0.4 Alpha key is custodian-only but is not an
+  offline Production key; CI test keys are never release keys.
 - Never reuse enrollment credentials for repair or decommission. Complete
   certificate removal only after matching CRL publication is independently verified.
 
