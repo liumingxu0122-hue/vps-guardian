@@ -241,10 +241,12 @@ if [ "$mode" = reinstall ] || [ "$mode" = rotate_identity ]; then
   # Run rotation as the same non-root account as the daemon. This preserves
   # the 0700/0600 identity ownership contract even though maintenance itself
   # is orchestrated by root.
+  # shellcheck disable=SC2016 # positional parameters expand in the child shell
   su -s /bin/sh vps-guardian-agent -c \
     'exec /usr/local/sbin/vps-guardian-agent rotate-identity --config "$1" --expected-version "$2"' \
     guardian-rotate /etc/vps-guardian/agent/config.json "$expected_identity_version"
   identity_activated=true
+  # shellcheck disable=SC2016 # positional parameters expand in the child shell
   su -s /bin/sh vps-guardian-agent -c \
     'test -r "$1" && test -r "$2" && test -r "$3"' \
     guardian-identity-readability \
